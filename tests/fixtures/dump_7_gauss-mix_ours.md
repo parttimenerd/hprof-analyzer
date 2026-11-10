@@ -64,20 +64,20 @@ _Automated signals pointing to where memory concentrates and what to investigate
 - **One Leak or Many:** the single biggest object, `java.util.zip.ZipFile$Source`, retains 8.1% and the top 10 retain 43.5% of the heap; 15 objects each hold ≥1%. See [Top Consumers](#top-consumers).
 - **Off-Heap (DirectByteBuffer):** 134.4 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. If RSS grows beyond heap + DirectByteBuffer total, native heap fragmentation may be the cause: repeatedly allocating and freeing differently-sized buffers leaves gaps the allocator cannot reuse for larger requests. Diagnose with `jcmd <pid> VM.native_memory detail`, or use jemalloc heap profiling (`MALLOC_CONF=prof:true`) or async-profiler's malloc mode. See [Off-Heap NIO](#off-heap-nio).
 - **GC Waste:** 11.6% of the heap is unreachable (4.3 MB) — largest garbage cluster rooted at `int[]` (512.0 KB); the GC has not yet collected it. Trigger a full GC (`jcmd <pid> GC.run`) and re-dump — if the count drops sharply, the dump was taken mid-collection. See [Unreachable Objects](#unreachable-objects).
-- **Empty-Collection Cemetery:** 6,686 of 9,466 tracked collections (70.6%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
+- **Hash-Map Collision Hotspot:** 8 of 2,450 tracked maps (0.3%) have a load factor > 90% — over-packed hash tables cause long collision chains and degrade lookup performance. Increase initial capacity or lower the load factor (pass `initialCapacity` and `loadFactor` to the constructor, default is 0.75). See [Collections](#collections).
+- **Empty-Collection Cemetery:** 6,889 of 10,053 tracked collections (68.5%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
 - **Component Retention Imbalance:** Component `<boot>` retains 79.7% of heap (95.2 MB) while the next largest component (`java/net/URLClassLoader`) retains only 17.9%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `<boot>` is accumulating without a release path. See [Top Components](#top-components).
-- **Shutdown Hook Accumulation:** 270 `java.lang.Thread` instances with `ApplicationShutdownHooks` present — likely `Runtime.addShutdownHook()` called per request without a matching `removeShutdownHook()`. Each call leaks a `Thread` in the JVM-wide hook registry. Register shutdown hooks once at startup (or use a framework lifecycle callback instead). See [Threads](#threads).
 - **Thread Pool Saturation:** 245 of 262 threads (94%) are WAITING or BLOCKED — the thread pool appears saturated. Possible causes: slow downstream calls monopolising all pool threads (thread starvation), monitor deadlock, or executor self-submit deadlock. Check the Threads section for the common frame shared by stuck threads and look for a blocked-on resource (semaphore, DB call, HTTP request, synchronized method). See [Threads](#threads).
 - **Collection Waste Not Analyzed:** Collection waste not analyzed — re-run with `--collections` to check for wasted capacity.
 
 ## Waste Summary
 
-**3.8 MB** estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
+**3.9 MB** estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
 
 | Source                                     | Reclaimable |
 | ------------------------------------------ | ----------: |
 | [Under-filled Object Arrays](#collections) |      3.0 MB |
-| [Under-filled Collections](#collections)   |    851.3 KB |
+| [Under-filled Collections](#collections)   |    938.8 KB |
 
 ## System Overview
 
@@ -238,7 +238,7 @@ _Every loaded class with its instance count, shallow heap (own bytes), and retai
 | 18 | `int[]`                                                          |     9,056 |   2.0 MB | 229.8 KB |   2.0 MB |   6.0% |
 | 19 | `java.lang.ref.SoftReference`                                    |     1,653 |  64.6 KB |     40 B |   1.5 MB |   4.6% |
 | 20 | `double[]`                                                       |    16,101 |   1.5 MB |  11.7 KB |   1.5 MB |   4.4% |
-| 21 | `java.util.jar.JarFile`                                          |       181 |  11.3 KB |     64 B |   1.4 MB |   4.2% |
+| 21 | `java.util.jar.JarFile`                                          |       181 |   9.9 KB |     56 B |   1.4 MB |   4.2% |
 | 22 | `java.util.jar.Manifest`                                         |        63 |   1.5 KB |     24 B |   1.3 MB |   4.0% |
 | 23 | `java.util.LinkedHashMap$Entry`                                  |     2,792 | 109.1 KB |     40 B |   1.3 MB |   4.0% |
 | 24 | `io.netty.buffer.PoolSubpage[]`                                  |       202 |  34.7 KB |    176 B | 957.9 KB |   2.8% |
@@ -254,17 +254,17 @@ _Every loaded class with its instance count, shallow heap (own bytes), and retai
 | 34 | `breeze.linalg.DenseVector$mcD$sp`                               |    15,006 | 586.2 KB |     40 B | 586.8 KB |   1.7% |
 | 35 | `org.sparkproject.jetty.util.ArrayTernaryTrie`                   |       256 |   8.0 KB |     32 B | 556.5 KB |   1.6% |
 | 36 | `org.sparkproject.jetty.http.pathmap.PathMappings`               |        84 |   2.6 KB |     32 B | 546.7 KB |   1.6% |
-| 37 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |         1 |     64 B |     64 B | 477.1 KB |   1.4% |
-| 38 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         |        28 |   2.8 KB |    104 B | 463.2 KB |   1.4% |
+| 37 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |         1 |     64 B |     64 B | 476.9 KB |   1.4% |
+| 38 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         |        28 |   2.6 KB |     96 B | 463.0 KB |   1.4% |
 | 39 | `java.lang.invoke.MemberName`                                    |     5,801 | 226.6 KB |     40 B | 460.6 KB |   1.4% |
 | 40 | `org.sparkproject.jetty.util.IncludeExclude`                     |       112 |   3.5 KB |     32 B | 446.7 KB |   1.3% |
 | 41 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                |         1 |     96 B |     96 B | 432.1 KB |   1.3% |
-| 42 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |         1 |     96 B |     96 B | 402.4 KB |   1.2% |
+| 42 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |         1 |     96 B |     96 B | 402.3 KB |   1.2% |
 | 43 | `java.lang.String[]`                                             |     1,528 | 208.6 KB |  18.5 KB | 393.4 KB |   1.2% |
 | 44 | `java.util.concurrent.locks.ReentrantLock`                       |     8,514 | 133.0 KB |     16 B | 386.8 KB |   1.1% |
 | 45 | `java.lang.invoke.DirectMethodHandle`                            |     2,436 |  95.2 KB |     40 B | 375.2 KB |   1.1% |
 | 46 | `org.sparkproject.jetty.http.pathmap.PathSpecSet`                |        56 |    896 B |     16 B | 364.4 KB |   1.1% |
-| 47 | `org.sparkproject.jetty.servlet.ServletContextHandler`           |        29 |   6.3 KB |    224 B | 307.1 KB |   0.9% |
+| 47 | `org.sparkproject.jetty.servlet.ServletContextHandler`           |        29 |   6.3 KB |    224 B | 306.9 KB |   0.9% |
 | 48 | `org.apache.spark.status.ElementTrackingStore`                   |         1 |     40 B |     40 B | 303.3 KB |   0.9% |
 | 49 | `jdk.internal.util.ReferencedKeyMap`                             |         1 |     24 B |     24 B | 302.6 KB |   0.9% |
 | 50 | `jdk.internal.util.ReferencedKeySet`                             |         1 |     16 B |     16 B | 302.5 KB |   0.9% |
@@ -278,7 +278,7 @@ _Classes grouped into JDK/framework/other (or your own `[[category]]`/`--categor
 | ----------- | ------: | --------: | -------: | -----: | -------: |
 | `other`     |   7,430 |   134,305 |  20.4 MB |  61.6% |  35.7 MB |
 | `jdk`       |   5,122 |   417,154 |  12.0 MB |  36.2% |  79.6 MB |
-| `framework` |     384 |    10,926 | 745.5 KB |   2.2% |   4.2 MB |
+| `framework` |     384 |    10,926 | 745.5 KB |   2.2% |   4.1 MB |
 
 ### Biggest Non-JDK Classes
 
@@ -300,22 +300,22 @@ _The same class histogram, filtered to exclude built-in JDK/platform classes —
 | 12 | `breeze.linalg.DenseVector$mcD$sp`                               | `other`     |    15,006 | 586.2 KB | 586.8 KB |   1.7% |
 | 13 | `org.sparkproject.jetty.util.ArrayTernaryTrie`                   | `other`     |       256 |   8.0 KB | 556.5 KB |   1.6% |
 | 14 | `org.sparkproject.jetty.http.pathmap.PathMappings`               | `other`     |        84 |   2.6 KB | 546.7 KB |   1.6% |
-| 15 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` | `other`     |         1 |     64 B | 477.1 KB |   1.4% |
-| 16 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         | `other`     |        28 |   2.8 KB | 463.2 KB |   1.4% |
+| 15 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` | `other`     |         1 |     64 B | 476.9 KB |   1.4% |
+| 16 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         | `other`     |        28 |   2.6 KB | 463.0 KB |   1.4% |
 | 17 | `org.sparkproject.jetty.util.IncludeExclude`                     | `other`     |       112 |   3.5 KB | 446.7 KB |   1.3% |
 | 18 | `org.sparkproject.jetty.http.pathmap.PathSpecSet`                | `other`     |        56 |    896 B | 364.4 KB |   1.1% |
-| 19 | `org.sparkproject.jetty.servlet.ServletContextHandler`           | `other`     |        29 |   6.3 KB | 307.1 KB |   0.9% |
+| 19 | `org.sparkproject.jetty.servlet.ServletContextHandler`           | `other`     |        29 |   6.3 KB | 306.9 KB |   0.9% |
 | 20 | `org.apache.spark.status.ElementTrackingStore`                   | `other`     |         1 |     40 B | 303.3 KB |   0.9% |
 | 21 | `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`      | `other`     |         1 |     16 B | 301.3 KB |   0.9% |
 | 22 | `org.apache.spark.util.kvstore.InMemoryStore`                    | `other`     |         1 |     24 B | 301.1 KB |   0.9% |
 | 23 | `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`       | `other`     |        12 |    480 B | 297.5 KB |   0.9% |
 | 24 | `org.apache.spark.mllib.linalg.Vector[]`                         | `other`     |         2 |  58.6 KB | 293.0 KB |   0.9% |
-| 25 | `org.sparkproject.jetty.servlet.ServletHandler`                  | `other`     |        29 |   4.1 KB | 251.9 KB |   0.7% |
-| 26 | `io.netty.channel.nio.NioEventLoop`                              | `framework` |        18 |   2.7 KB | 245.8 KB |   0.7% |
+| 25 | `org.sparkproject.jetty.servlet.ServletHandler`                  | `other`     |        29 |   3.9 KB | 251.7 KB |   0.7% |
+| 26 | `io.netty.channel.nio.NioEventLoop`                              | `framework` |        18 |   2.7 KB | 245.7 KB |   0.7% |
 | 27 | `com.codahale.metrics.Timer`                                     | `other`     |         7 |    168 B | 243.8 KB |   0.7% |
 | 28 | `com.codahale.metrics.Histogram`                                 | `other`     |        11 |    264 B | 242.4 KB |   0.7% |
 | 29 | `com.codahale.metrics.ExponentiallyDecayingReservoir`            | `other`     |        11 |    616 B | 241.9 KB |   0.7% |
-| 30 | `org.sparkproject.jetty.util.ArrayTrie`                          | `other`     |         9 |    360 B | 238.4 KB |   0.7% |
+| 30 | `org.sparkproject.jetty.util.ArrayTrie`                          | `other`     |         9 |    288 B | 238.3 KB |   0.7% |
 
 ### Class Loaders
 
@@ -611,12 +611,12 @@ _All top-level dominators ranked by retained heap — every object directly held
 |  6 | `java.lang.Thread`                                               |   104 B | 787.2 KB |   2.3% |
 |  7 | `java.util.zip.ZipFile$Source`                                   |    80 B | 602.0 KB |   1.8% |
 |  8 | `java.util.zip.ZipFile$Source`                                   |    80 B | 588.3 KB |   1.7% |
-|  9 | `java.util.jar.JarFile`                                          |    64 B | 584.6 KB |   1.7% |
-| 10 | `java.util.jar.JarFile`                                          |    64 B | 584.5 KB |   1.7% |
+|  9 | `java.util.jar.JarFile`                                          |    56 B | 584.6 KB |   1.7% |
+| 10 | `java.util.jar.JarFile`                                          |    56 B | 584.5 KB |   1.7% |
 | 11 | `java.util.zip.ZipFile$Source`                                   |    80 B | 533.4 KB |   1.6% |
-| 12 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |    64 B | 477.1 KB |   1.4% |
+| 12 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |    64 B | 476.9 KB |   1.4% |
 | 13 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                |    96 B | 432.0 KB |   1.3% |
-| 14 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |    96 B | 402.4 KB |   1.2% |
+| 14 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |    96 B | 402.3 KB |   1.2% |
 | 15 | `java.util.zip.ZipFile$Source`                                   |    80 B | 374.5 KB |   1.1% |
 | 16 | `java.lang.invoke.MethodType`                                    |    48 B | 302.8 KB |   0.9% |
 | 17 | `org.apache.spark.status.ElementTrackingStore`                   |    40 B | 301.7 KB |   0.9% |
@@ -628,68 +628,28 @@ _All top-level dominators ranked by retained heap — every object directly held
 
 _Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis._
 
-|  # | Class                                                            | Instances | Retained |
-| -: | ---------------------------------------------------------------- | --------: | -------: |
-|  1 | `byte[]`                                                         |    58,366 |  14.7 MB |
-|  2 | `java.util.zip.ZipFile$Source`                                   |       181 |  12.3 MB |
-|  3 | `java.lang.Class`                                                |    12,493 |   7.0 MB |
-|  4 | `java.lang.Object[]`                                             |    11,059 |   6.3 MB |
-|  5 | `java.lang.String`                                               |    56,540 |   4.4 MB |
-|  6 | `java.util.concurrent.ConcurrentHashMap`                         |     1,128 |   3.2 MB |
-|  7 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  |       444 |   3.1 MB |
-|  8 | `java.util.LinkedHashMap`                                        |     6,104 |   3.1 MB |
-|  9 | `java.net.URLClassLoader`                                        |         2 |   2.7 MB |
-| 10 | `java.util.concurrent.ConcurrentHashMap$Node`                    |    42,785 |   2.6 MB |
-| 11 | `java.lang.Object`                                               |   154,653 |   2.4 MB |
-| 12 | `org.apache.spark.storage.memory.MemoryStore`                    |         1 |   2.3 MB |
-| 13 | `java.util.HashMap`                                              |     1,089 |   2.2 MB |
-| 14 | `java.util.HashMap$Node[]`                                       |     1,053 |   2.2 MB |
-| 15 | `java.util.ArrayList`                                            |       716 |   2.1 MB |
-| 16 | `java.util.HashMap$Node`                                         |    16,017 |   2.0 MB |
-| 17 | `int[]`                                                          |     9,056 |   2.0 MB |
-| 18 | `java.lang.ref.SoftReference`                                    |     1,653 |   1.5 MB |
-| 19 | `double[]`                                                       |    16,101 |   1.5 MB |
-| 20 | `java.util.jar.JarFile`                                          |       181 |   1.4 MB |
-| 21 | `java.util.jar.Manifest`                                         |        63 |   1.3 MB |
-| 22 | `java.util.LinkedHashMap$Entry`                                  |     2,792 |   1.3 MB |
-| 23 | `io.netty.buffer.PoolSubpage[]`                                  |       202 | 957.9 KB |
-| 24 | `org.apache.spark.storage.memory.DeserializedMemoryEntry`        |         7 | 937.9 KB |
-| 25 | `io.netty.buffer.PoolSubpage`                                    |     7,878 | 923.2 KB |
-| 26 | `java.lang.Thread`                                               |       270 | 913.1 KB |
-| 27 | `io.netty.buffer.PoolArena$HeapArena`                            |       101 | 695.2 KB |
-| 28 | `io.netty.buffer.PoolArena$DirectArena`                          |       101 | 695.2 KB |
-| 29 | `java.util.jar.Attributes`                                       |     5,841 | 652.9 KB |
-| 30 | `breeze.linalg.Vector[]`                                         |         2 | 644.6 KB |
-| 31 | `char[]`                                                         |       733 | 636.3 KB |
-| 32 | `breeze.linalg.DenseVector$mcD$sp`                               |    15,006 | 586.7 KB |
-| 33 | `java.lang.invoke.MethodType`                                    |     4,164 | 582.6 KB |
-| 34 | `org.sparkproject.jetty.util.ArrayTernaryTrie`                   |       256 | 556.3 KB |
-| 35 | `org.sparkproject.jetty.http.pathmap.PathMappings`               |        84 | 546.4 KB |
-| 36 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |         1 | 477.1 KB |
-| 37 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         |        28 | 462.2 KB |
-| 38 | `java.lang.invoke.MemberName`                                    |     5,801 | 460.4 KB |
-| 39 | `org.sparkproject.jetty.util.IncludeExclude`                     |       112 | 446.7 KB |
-| 40 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                |         1 | 432.0 KB |
-| 41 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |         1 | 402.4 KB |
-| 42 | `java.lang.String[]`                                             |     1,528 | 393.4 KB |
-| 43 | `java.util.concurrent.locks.ReentrantLock`                       |     8,514 | 386.8 KB |
-| 44 | `java.lang.invoke.DirectMethodHandle`                            |     2,436 | 371.6 KB |
-| 45 | `org.sparkproject.jetty.http.pathmap.PathSpecSet`                |        56 | 364.4 KB |
-| 46 | `org.sparkproject.jetty.servlet.ServletContextHandler`           |        29 | 307.1 KB |
-| 47 | `jdk.internal.util.ReferencedKeySet`                             |         1 | 302.5 KB |
-| 48 | `jdk.internal.util.ReferencedKeyMap`                             |         1 | 302.5 KB |
-| 49 | `org.apache.spark.status.ElementTrackingStore`                   |         1 | 301.7 KB |
-| 50 | `org.apache.spark.util.kvstore.InMemoryStore`                    |         1 | 301.1 KB |
-| 51 | `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`      |         1 | 301.1 KB |
-| 52 | `java.util.concurrent.locks.ReentrantLock$NonfairSync`           |     9,583 | 300.2 KB |
-| 53 | `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`       |        12 | 297.3 KB |
-| 54 | `org.apache.spark.mllib.linalg.Vector[]`                         |         2 | 293.0 KB |
-| 55 | `java.lang.invoke.LambdaForm`                                    |       618 | 260.5 KB |
-| 56 | `org.sparkproject.jetty.servlet.ServletHandler`                  |        29 | 251.2 KB |
-| 57 | `io.netty.channel.nio.NioEventLoop`                              |        18 | 245.2 KB |
-| 58 | `com.codahale.metrics.Timer`                                     |         7 | 243.8 KB |
-| 59 | `com.codahale.metrics.Histogram`                                 |        11 | 242.4 KB |
-| 60 | `com.codahale.metrics.ExponentiallyDecayingReservoir`            |        11 | 241.8 KB |
+|  # | Class                                           | Instances | Retained |
+| -: | ----------------------------------------------- | --------: | -------: |
+|  1 | `byte[]`                                        |    58,366 |  14.7 MB |
+|  2 | `java.util.zip.ZipFile$Source`                  |       181 |  12.3 MB |
+|  3 | `java.lang.Class`                               |    12,493 |   7.0 MB |
+|  4 | `java.lang.Object[]`                            |    11,059 |   6.3 MB |
+|  5 | `java.lang.String`                              |    56,540 |   4.4 MB |
+|  6 | `java.util.concurrent.ConcurrentHashMap`        |     1,128 |   3.2 MB |
+|  7 | `java.util.concurrent.ConcurrentHashMap$Node[]` |       444 |   3.1 MB |
+|  8 | `java.util.LinkedHashMap`                       |     6,104 |   3.1 MB |
+|  9 | `java.net.URLClassLoader`                       |         2 |   2.7 MB |
+| 10 | `java.util.concurrent.ConcurrentHashMap$Node`   |    42,785 |   2.6 MB |
+| 11 | `java.lang.Object`                              |   154,653 |   2.4 MB |
+| 12 | `org.apache.spark.storage.memory.MemoryStore`   |         1 |   2.3 MB |
+| 13 | `java.util.HashMap`                             |     1,089 |   2.2 MB |
+| 14 | `java.util.HashMap$Node[]`                      |     1,053 |   2.2 MB |
+| 15 | `java.util.ArrayList`                           |       716 |   2.1 MB |
+| 16 | `java.util.HashMap$Node`                        |    16,017 |   2.0 MB |
+| 17 | `int[]`                                         |     9,056 |   2.0 MB |
+| 18 | `java.lang.ref.SoftReference`                   |     1,653 |   1.5 MB |
+| 19 | `double[]`                                      |    16,101 |   1.5 MB |
+| 20 | `java.util.jar.JarFile`                         |       181 |   1.4 MB |
 
 #### Who Holds Each Class?
 
@@ -845,9 +805,9 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | `java.util.concurrent.ConcurrentHashMap$Node[]`             | 34,753 |   2.9 MB |
 | `java.lang.Object[]`                                        |  5,151 |   1.5 MB |
 | `java.util.jar.JarFile`                                     |     63 |   1.3 MB |
-| `java.net.URLClassLoader`                                   |      9 | 633.3 KB |
+| `java.net.URLClassLoader`                                   |      9 | 632.9 KB |
 | `jdk.internal.loader.ClassLoaders$AppClassLoader`           |      7 | 417.3 KB |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`      |      7 | 391.2 KB |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`      |      7 | 391.1 KB |
 | `jdk.internal.util.ReferencedKeySet`                        |      1 | 302.5 KB |
 | `jdk.internal.util.ReferencedKeyMap`                        |      1 | 302.4 KB |
 |   ↳ `jdk.internal.util.ReferencedKeySet`                    |      1 | 302.5 KB |
@@ -860,9 +820,9 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | Holder Class                                                    | Count | Retained |
 | --------------------------------------------------------------- | ----: | -------: |
 | `java.util.concurrent.ConcurrentHashMap`                        |   408 |   3.4 MB |
-|   ↳ `java.net.URLClassLoader`                                   |     9 | 633.3 KB |
+|   ↳ `java.net.URLClassLoader`                                   |     9 | 632.9 KB |
 |   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`           |     7 | 417.3 KB |
-|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`      |     7 | 391.2 KB |
+|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`      |     7 | 391.1 KB |
 |   ↳ `jdk.internal.util.ReferencedKeyMap`                        |     1 | 302.4 KB |
 |   ↳ `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists` |     1 | 301.0 KB |
 |   ↳ `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`  |    24 | 228.1 KB |
@@ -870,9 +830,9 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `sun.util.locale.BaseLocale$Cache`                          |     1 | 154.9 KB |
 |   ↳ `java.util.Properties`                                      |    27 | 139.1 KB |
 |   ↳ `java.time.zone.TzdbZoneRulesProvider`                      |     1 | 115.7 KB |
-| `java.net.URLClassLoader`                                       |     9 | 633.3 KB |
+| `java.net.URLClassLoader`                                       |     9 | 632.9 KB |
 | `jdk.internal.loader.ClassLoaders$AppClassLoader`               |     7 | 417.3 KB |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`          |     7 | 391.2 KB |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`          |     7 | 391.1 KB |
 | `jdk.internal.util.ReferencedKeyMap`                            |     1 | 302.4 KB |
 | `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`     |     1 | 301.0 KB |
 | `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`      |    24 | 228.1 KB |
@@ -926,9 +886,9 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `java.util.concurrent.ConcurrentHashMap`                  |    408 |   3.4 MB |
 |   ↳ `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys` |     35 |   4.9 KB |
 |   ↳ `com.fasterxml.jackson.core.util.InternCache`             |      1 |   1.1 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node`                 |  8,033 | 626.6 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node`                 |  8,033 | 626.5 KB |
 |   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`           | 34,752 |   2.9 MB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`             |  8,033 | 626.6 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`             |  8,033 | 626.5 KB |
 | `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys`     |     35 |   4.9 KB |
 | `com.fasterxml.jackson.core.util.InternCache`                 |      1 |   1.1 KB |
 
@@ -951,7 +911,7 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                           |       1 |  32.0 KB |
 | `java.util.concurrent.ConcurrentHashMap$Node`                                  |  21,815 | 340.9 KB |
 |   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                            |  34,752 |   2.9 MB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                              |   8,033 | 626.6 KB |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                              |   8,033 | 626.5 KB |
 | `java.util.ImmutableCollections$SetN`                                          |     165 | 148.6 KB |
 | `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`     |      36 | 144.8 KB |
 | `org.sparkproject.jetty.util.ArrayTernaryTrie`                                 |     256 | 140.0 KB |
@@ -1151,520 +1111,6 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | ------------ | ----: | -------: |
 | `(GC Root)`  |   181 |   1.4 MB |
 
-**`java.util.jar.Manifest`**
-
-| Holder Class                                               | Count | Retained |
-| ---------------------------------------------------------- | ----: | -------: |
-| `java.util.jar.JarFile`                                    |    63 |   1.3 MB |
-| `java.lang.ref.SoftReference`                              |    63 |   1.3 MB |
-|   ↳ `java.util.jar.JarFile`                                |    63 |   1.3 MB |
-|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`           |     4 |  66.0 KB |
-|   ↳ `java.lang.ref.SoftReference[]`                        |   535 |  60.7 KB |
-|   ↳ `sun.util.locale.BaseLocale$Key`                       | 1,044 |  40.8 KB |
-|   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`     |     1 |  10.3 KB |
-|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |     1 |  10.3 KB |
-|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |  10.3 KB |
-|   ↳ `sun.security.util.CryptoAlgorithmConstraints`         |     1 |    664 B |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`          |     1 |    224 B |
-|   ↳ `org.apache.spark.broadcast.TorrentBroadcast`          |     2 |     80 B |
-| `java.lang.ThreadLocal$ThreadLocalMap$Entry`               |     4 |  66.0 KB |
-| `java.lang.ref.SoftReference[]`                            |   535 |  60.7 KB |
-| `sun.util.locale.BaseLocale$Key`                           | 1,044 |  40.8 KB |
-| `jdk.internal.loader.ClassLoaders$AppClassLoader`          |     1 |  10.3 KB |
-| `jdk.internal.loader.ClassLoaders$BootClassLoader`         |     1 |  10.3 KB |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`     |     1 |  10.3 KB |
-| `sun.security.util.CryptoAlgorithmConstraints`             |     1 |    664 B |
-| `java.util.concurrent.ConcurrentHashMap$Node`              |     1 |    224 B |
-
-**`java.util.LinkedHashMap$Entry`**
-
-| Holder Class                                                          | Count | Retained |
-| --------------------------------------------------------------------- | ----: | -------: |
-| `org.apache.spark.storage.memory.MemoryStore`                         |     1 |   2.3 MB |
-| `java.util.LinkedHashMap`                                             | 2,718 |   1.3 MB |
-|   ↳ `org.apache.spark.storage.memory.MemoryStore`                     |     1 |   2.3 MB |
-|   ↳ `java.util.jar.Attributes`                                        | 5,841 | 561.6 KB |
-|   ↳ `java.util.LinkedHashSet`                                         |    67 | 147.5 KB |
-|   ↳ `sun.reflect.annotation.AnnotationInvocationHandler`              |   102 |  23.8 KB |
-|   ↳ `java.lang.reflect.Method`                                        |    71 |  18.1 KB |
-|   ↳ `org.apache.logging.log4j.core.pattern.PatternParser`             |     1 |   8.0 KB |
-|   ↳ `org.apache.logging.log4j.core.config.plugins.util.PluginManager` |     1 |   6.2 KB |
-|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedMethodMap`    |     2 |   3.8 KB |
-|   ↳ `java.lang.reflect.Field`                                         |     3 |   1.1 KB |
-|   ↳ `java.util.Collections$SingletonMap`                              |     2 |   1.1 KB |
-| `java.util.jar.Attributes`                                            | 5,841 | 561.6 KB |
-| `java.util.LinkedHashSet`                                             |    67 | 147.5 KB |
-| `sun.reflect.annotation.AnnotationInvocationHandler`                  |   102 |  23.8 KB |
-| `java.lang.reflect.Method`                                            |    71 |  18.1 KB |
-| `org.apache.logging.log4j.core.pattern.PatternParser`                 |     1 |   8.0 KB |
-| `org.apache.hadoop.metrics2.lib.Interns$Info$1`                       |     1 |   7.7 KB |
-| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`             |    32 |   7.6 KB |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$Info$1`                   |     1 |   7.7 KB |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$Tags$1`                   |     1 |    384 B |
-| `java.util.LinkedHashMap$Entry`                                       |    32 |   6.4 KB |
-
-**`io.netty.buffer.PoolSubpage[]`**
-
-| Holder Class                            | Count | Retained |
-| --------------------------------------- | ----: | -------: |
-| `io.netty.buffer.PoolArena$DirectArena` |   101 | 479.0 KB |
-| `io.netty.buffer.PoolArena$HeapArena`   |   101 | 479.0 KB |
-
-**`org.apache.spark.storage.memory.DeserializedMemoryEntry`**
-
-| Holder Class                                                  | Count | Retained |
-| ------------------------------------------------------------- | ----: | -------: |
-| `java.util.LinkedHashMap`                                     | 2,718 |   1.3 MB |
-| `java.util.LinkedHashMap$Entry`                               |     7 | 937.9 KB |
-|   ↳ `java.util.LinkedHashMap`                                 | 2,718 |   1.3 MB |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1` |    32 |   7.6 KB |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2` |    33 |   1.6 KB |
-|   ↳ `java.util.LinkedHashMap$LinkedKeyIterator`               |     7 |    280 B |
-|   ↳ `java.util.Map$Entry[]`                                   |     2 |     80 B |
-| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`     |    32 |   7.6 KB |
-| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2`     |    33 |   1.6 KB |
-| `java.util.LinkedHashMap$LinkedKeyIterator`                   |     7 |    280 B |
-| `java.util.Map$Entry[]`                                       |     2 |     80 B |
-
-**`io.netty.buffer.PoolSubpage`**
-
-| Holder Class                                | Count | Retained |
-| ------------------------------------------- | ----: | -------: |
-| `io.netty.buffer.PoolSubpage[]`             | 7,878 | 923.2 KB |
-|   ↳ `io.netty.buffer.PoolArena$HeapArena`   |   101 | 479.0 KB |
-|   ↳ `io.netty.buffer.PoolArena$DirectArena` |   101 | 479.0 KB |
-| `io.netty.buffer.PoolArena$DirectArena`     |   101 | 479.0 KB |
-| `io.netty.buffer.PoolArena$HeapArena`       |   101 | 479.0 KB |
-
-**`java.lang.Thread`**
-
-| Holder Class                                                               | Count | Retained |
-| -------------------------------------------------------------------------- | ----: | -------: |
-| `java.lang.Class`                                                          | 6,044 |   3.9 MB |
-| `java.util.ArrayList`                                                      |   547 |   2.1 MB |
-| `(GC Root)`                                                                |   268 | 912.6 KB |
-| `java.util.ImmutableCollections$SetN`                                      |   165 | 148.6 KB |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |    36 | 144.8 KB |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |   256 | 140.0 KB |
-| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |     1 |  75.3 KB |
-| `java.lang.invoke.LambdaForm$Name`                                         | 1,665 |  48.1 KB |
-| `java.util.concurrent.atomic.AtomicReferenceArray`                         |    60 |  42.6 KB |
-| `org.sparkproject.jetty.util.BlockingArrayQueue`                           |     1 |  32.0 KB |
-
-**`io.netty.buffer.PoolArena$HeapArena`**
-
-| Holder Class | Count | Retained |
-| ------------ | ----: | -------: |
-| `(GC Root)`  |   101 | 695.2 KB |
-
-**`io.netty.buffer.PoolArena$DirectArena`**
-
-| Holder Class | Count | Retained |
-| ------------ | ----: | -------: |
-| `(GC Root)`  |   101 | 695.2 KB |
-
-**`java.util.jar.Attributes`**
-
-| Holder Class                      |  Count | Retained |
-| --------------------------------- | -----: | -------: |
-| `java.util.HashMap$Node[]`        | 12,159 |   2.0 MB |
-| `java.lang.ref.SoftReference`     |     63 |   1.3 MB |
-| `java.util.HashMap$Node`          |  5,778 | 451.4 KB |
-|   ↳ `java.util.HashMap$Node[]`    | 12,159 |   2.0 MB |
-|   ↳ `java.util.HashMap$Node`      |  3,830 | 659.2 KB |
-|   ↳ `java.lang.Object[]`          |     28 |   2.8 KB |
-| `java.util.jar.Manifest`          |     63 | 201.4 KB |
-|   ↳ `java.lang.ref.SoftReference` |     63 |   1.3 MB |
-| `java.lang.Object[]`              |     28 |   2.8 KB |
-
-**`breeze.linalg.Vector[]`**
-
-| Holder Class                                              | Count | Retained |
-| --------------------------------------------------------- | ----: | -------: |
-| `java.util.LinkedHashMap$Entry`                           |     7 | 937.9 KB |
-| `org.apache.spark.storage.memory.DeserializedMemoryEntry` |     2 | 644.6 KB |
-|   ↳ `java.util.LinkedHashMap$Entry`                       |     7 | 937.9 KB |
-
-**`char[]`**
-
-| Holder Class                                                                 | Count | Retained |
-| ---------------------------------------------------------------------------- | ----: | -------: |
-| `java.util.ArrayList`                                                        |   547 |   2.1 MB |
-| `org.sparkproject.jetty.http.pathmap.PathMappings`                           |   252 | 529.6 KB |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                               |   256 | 267.9 KB |
-|   ↳ `org.sparkproject.jetty.http.pathmap.PathMappings`                       |   252 | 529.6 KB |
-|   ↳ `java.lang.Class`                                                        |     3 |  14.3 KB |
-|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping` |     1 |  12.4 KB |
-| `org.sparkproject.jetty.util.ArrayTrie`                                      |     9 | 160.3 KB |
-|   ↳ `java.lang.Class`                                                        |     9 | 237.7 KB |
-| `java.util.ImmutableCollections$SetN`                                        |   165 | 148.6 KB |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`   |    36 | 144.8 KB |
-| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`              |     1 |  75.3 KB |
-| `char[][]`                                                                   |   381 |  51.3 KB |
-|   ↳ `org.sparkproject.jetty.util.ArrayTrie`                                  |     6 |  55.1 KB |
-|   ↳ `char[][][]`                                                             |   103 |   7.2 KB |
-| `java.lang.ref.SoftReference`                                                |     3 |  49.6 KB |
-| `java.lang.invoke.LambdaForm$Name`                                           | 1,665 |  48.1 KB |
-
-**`breeze.linalg.DenseVector$mcD$sp`**
-
-| Holder Class                                                  |  Count | Retained |
-| ------------------------------------------------------------- | -----: | -------: |
-| `org.apache.spark.storage.memory.DeserializedMemoryEntry`     |      2 | 644.6 KB |
-| `breeze.linalg.Vector[]`                                      | 15,000 | 585.9 KB |
-|   ↳ `org.apache.spark.storage.memory.DeserializedMemoryEntry` |      2 | 644.6 KB |
-| `org.apache.spark.mllib.clustering.ExpectationSum`            |      1 |    856 B |
-| `breeze.linalg.DenseVector[]`                                 |      6 |    816 B |
-|   ↳ `org.apache.spark.mllib.clustering.ExpectationSum`        |      1 |    856 B |
-
-**`java.lang.invoke.MethodType`**
-
-| Holder Class                                      | Count | Retained |
-| ------------------------------------------------- | ----: | -------: |
-| `(GC Root)`                                       | 3,989 | 582.6 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node`     | 4,164 | 140.2 KB |
-| `jdk.internal.util.WeakReferenceKey`              |   175 |  10.0 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node` | 4,164 | 140.2 KB |
-
-**`org.sparkproject.jetty.util.ArrayTernaryTrie`**
-
-| Holder Class                                                                                     | Count | Retained |
-| ------------------------------------------------------------------------------------------------ | ----: | -------: |
-| `java.lang.Object[]`                                                                             | 5,148 |   1.5 MB |
-| `org.sparkproject.jetty.http.pathmap.PathMappings`                                               |   252 | 529.6 KB |
-|   ↳ `org.sparkproject.jetty.http.pathmap.PathSpecSet`                                            |    56 | 363.6 KB |
-|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                              |    28 | 182.8 KB |
-| `org.sparkproject.jetty.http.pathmap.PathSpecSet`                                                |    56 | 363.6 KB |
-| `org.sparkproject.jetty.servlet.ServletHandler`                                                  |    28 | 182.8 KB |
-| `java.lang.invoke.DirectMethodHandle$Constructor`                                                |   847 |  45.3 KB |
-| `java.lang.Class`                                                                                |     3 |  14.3 KB |
-|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB |
-|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB |
-|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB |
-|   ↳ `java.lang.Class`                                                                            |    24 |    488 B |
-|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B |
-|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B |
-|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B |
-| `java.util.concurrent.atomic.AtomicReference`                                                    |     1 |  13.8 KB |
-| `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping`                         |     1 |  12.4 KB |
-|   ↳ `java.util.concurrent.atomic.AtomicReference`                                                |     1 |  13.8 KB |
-| `java.net.URLClassLoader`                                                                        |    10 |   9.4 KB |
-| `java.lang.invoke.MemberName`                                                                    |   472 |   8.9 KB |
-
-**`org.sparkproject.jetty.http.pathmap.PathMappings`**
-
-| Holder Class                                               | Count | Retained |
-| ---------------------------------------------------------- | ----: | -------: |
-| `org.sparkproject.jetty.util.IncludeExclude`               |    56 | 364.4 KB |
-| `org.sparkproject.jetty.http.pathmap.PathSpecSet`          |    56 | 363.6 KB |
-|   ↳ `org.sparkproject.jetty.util.IncludeExclude`           |    56 | 364.4 KB |
-| `org.sparkproject.jetty.servlet.ServletContextHandler`     |    29 | 251.2 KB |
-| `org.sparkproject.jetty.servlet.ServletHandler`            |    28 | 182.8 KB |
-|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler` |    29 | 251.2 KB |
-
-**`org.sparkproject.jetty.server.handler.ContextHandlerCollection`**
-
-| Holder Class | Count | Retained |
-| ------------ | ----: | -------: |
-| `(GC Root)`  |     1 | 477.1 KB |
-
-**`org.sparkproject.jetty.server.handler.gzip.GzipHandler`**
-
-| Holder Class                                                     | Count | Retained |
-| ---------------------------------------------------------------- | ----: | -------: |
-| `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |    28 | 462.2 KB |
-
-**`java.lang.invoke.MemberName`**
-
-| Holder Class                                                               |  Count | Retained |
-| -------------------------------------------------------------------------- | -----: | -------: |
-| `java.lang.Class`                                                          |  6,051 |   3.9 MB |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`                            | 34,752 |   2.9 MB |
-| `java.util.ArrayList`                                                      |    547 |   2.1 MB |
-| `java.lang.invoke.DirectMethodHandle`                                      |  2,334 | 275.4 KB |
-|   ↳ `java.lang.Object[]`                                                   |  1,973 | 321.1 KB |
-|   ↳ `java.lang.invoke.MethodHandleImpl$AsVarargsCollector`                 |    292 |  39.3 KB |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`                        |     16 |   1.5 KB |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLL`                       |      7 |    672 B |
-|   ↳ `java.lang.Class`                                                      |      3 |    656 B |
-|   ↳ `java.lang.invoke.MethodType`                                          |     10 |    400 B |
-|   ↳ `java.util.ImmutableCollections$List12`                                |      4 |    384 B |
-|   ↳ `java.lang.invoke.MethodHandleImpl$IntrinsicMethodHandle`              |      3 |    224 B |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LI`                        |      1 |    152 B |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLLL`                      |      1 |    128 B |
-| `java.util.ImmutableCollections$SetN`                                      |    165 | 148.6 KB |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |     36 | 144.8 KB |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |    256 | 140.0 KB |
-| `java.lang.invoke.LambdaFormEditor$Transform`                              |     80 |  93.3 KB |
-| `java.lang.invoke.DirectMethodHandle$Constructor`                          |  2,137 |  83.5 KB |
-|   ↳ `java.lang.Object[]`                                                   |    995 | 184.8 KB |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`                        |     41 |   5.8 KB |
-|   ↳ `java.util.HashMap$Node`                                               |     11 |   3.2 KB |
-|   ↳ `jdk.internal.reflect.DirectConstructorHandleAccessor`                 |     18 |   2.5 KB |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLL`                       |      1 |    144 B |
-| `java.lang.invoke.LambdaForm$Name`                                         |  2,193 |  78.3 KB |
-
-**`org.sparkproject.jetty.util.IncludeExclude`**
-
-| Holder Class                                                         | Count | Retained |
-| -------------------------------------------------------------------- | ----: | -------: |
-| `org.sparkproject.jetty.server.handler.ContextHandlerCollection`     |    28 | 462.2 KB |
-| `org.sparkproject.jetty.server.handler.gzip.GzipHandler`             |   112 | 446.7 KB |
-|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |    28 | 462.2 KB |
-
-**`jdk.internal.loader.ClassLoaders$AppClassLoader`**
-
-| Holder Class | Count | Retained |
-| ------------ | ----: | -------: |
-| `(GC Root)`  |     1 | 432.0 KB |
-
-**`jdk.internal.loader.ClassLoaders$PlatformClassLoader`**
-
-| Holder Class | Count | Retained |
-| ------------ | ----: | -------: |
-| `(GC Root)`  |     1 | 402.4 KB |
-
-**`java.lang.String[]`**
-
-| Holder Class                                                                 | Count | Retained |
-| ---------------------------------------------------------------------------- | ----: | -------: |
-| `java.util.concurrent.ConcurrentHashMap`                                     |   408 |   3.4 MB |
-| `java.util.HashMap`                                                          |   716 |   2.2 MB |
-| `java.util.ArrayList`                                                        |   547 |   2.1 MB |
-| `java.util.LinkedHashMap`                                                    | 3,021 |   1.3 MB |
-| `org.sparkproject.jetty.http.pathmap.PathMappings`                           |   252 | 529.6 KB |
-| `org.apache.xbean.asm9.ClassReader`                                          |     1 | 181.0 KB |
-|   ↳ `java.lang.Thread`                                                       |     1 | 200.4 KB |
-| `java.util.ImmutableCollections$SetN`                                        |   165 | 148.6 KB |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`   |    36 | 144.8 KB |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                               |   256 | 140.4 KB |
-|   ↳ `org.sparkproject.jetty.http.pathmap.PathMappings`                       |   252 | 529.6 KB |
-|   ↳ `java.lang.Class`                                                        |     3 |  14.3 KB |
-|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping` |     1 |  12.4 KB |
-| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`              |     1 |  75.3 KB |
-
-**`java.util.concurrent.locks.ReentrantLock`**
-
-| Holder Class                                          | Count | Retained |
-| ----------------------------------------------------- | ----: | -------: |
-| `java.lang.Object[]`                                  | 5,149 |   1.5 MB |
-| `io.netty.buffer.PoolSubpage[]`                       | 7,878 | 923.2 KB |
-| `io.netty.buffer.PoolSubpage`                         | 7,878 | 369.3 KB |
-|   ↳ `io.netty.buffer.PoolSubpage[]`                   | 7,878 | 923.2 KB |
-| `java.lang.invoke.DirectMethodHandle$Constructor`     |   847 |  45.3 KB |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool` |     1 |  32.4 KB |
-| `java.util.WeakHashMap`                               |   239 |  24.3 KB |
-| `com.fasterxml.jackson.databind.util.LRUMap`          |    13 |  15.1 KB |
-| `java.net.URLClassLoader`                             |    10 |   9.4 KB |
-| `java.lang.invoke.MemberName`                         |   472 |   8.9 KB |
-| `io.netty.buffer.PoolArena$DirectArena`               |   101 |   4.7 KB |
-
-**`java.lang.invoke.DirectMethodHandle`**
-
-| Holder Class                                                                   | Count | Retained |
-| ------------------------------------------------------------------------------ | ----: | -------: |
-| `java.util.ArrayList`                                                          |   547 |   2.1 MB |
-| `java.lang.Object[]`                                                           | 1,973 | 321.1 KB |
-|   ↳ `java.lang.Class`                                                          | 6,044 |   3.9 MB |
-|   ↳ `java.util.ArrayList`                                                      |   547 |   2.1 MB |
-|   ↳ `java.util.ImmutableCollections$SetN`                                      |   165 | 148.6 KB |
-|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |    36 | 144.8 KB |
-|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |   256 | 140.0 KB |
-|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |     1 |  75.3 KB |
-|   ↳ `java.lang.Object[]`                                                       |   446 |  62.4 KB |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                         | 1,665 |  48.1 KB |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                         |    60 |  42.6 KB |
-|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                           |     1 |  32.0 KB |
-| `java.util.ImmutableCollections$SetN`                                          |   165 | 148.6 KB |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`     |    36 | 144.8 KB |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                                 |   256 | 140.0 KB |
-| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                |     1 |  75.3 KB |
-| `java.lang.invoke.LambdaForm$Name`                                             | 1,665 |  48.1 KB |
-| `java.lang.invoke.DirectMethodHandle$Constructor`                              |   858 |  46.4 KB |
-| `java.util.concurrent.atomic.AtomicReferenceArray`                             |    60 |  42.6 KB |
-| `java.lang.invoke.MethodHandleImpl$AsVarargsCollector`                         |   292 |  39.3 KB |
-|   ↳ `java.lang.Object[]`                                                       |   292 |  53.6 KB |
-
-**`org.sparkproject.jetty.http.pathmap.PathSpecSet`**
-
-| Holder Class                                                 | Count | Retained |
-| ------------------------------------------------------------ | ----: | -------: |
-| `org.sparkproject.jetty.server.handler.gzip.GzipHandler`     |   112 | 446.7 KB |
-| `org.sparkproject.jetty.util.IncludeExclude`                 |    56 | 364.4 KB |
-|   ↳ `org.sparkproject.jetty.server.handler.gzip.GzipHandler` |   112 | 446.7 KB |
-
-**`org.sparkproject.jetty.servlet.ServletContextHandler`**
-
-| Holder Class                  | Count | Retained |
-| ----------------------------- | ----: | -------: |
-| `(GC Root)`                   |    28 | 303.0 KB |
-| `org.apache.spark.ui.SparkUI` |     1 |   4.0 KB |
-
-**`jdk.internal.util.ReferencedKeySet`**
-
-| Holder Class                                                                                     | Count | Retained |
-| ------------------------------------------------------------------------------------------------ | ----: | -------: |
-| `java.lang.Object[]`                                                                             | 5,148 |   1.5 MB |
-| `java.lang.Class`                                                                                |     1 | 302.5 KB |
-|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB |
-|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB |
-|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB |
-|   ↳ `java.lang.Class`                                                                            |    24 |    488 B |
-|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B |
-|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B |
-|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B |
-| `java.lang.invoke.DirectMethodHandle$Constructor`                                                |   847 |  45.3 KB |
-| `java.net.URLClassLoader`                                                                        |    10 |   9.4 KB |
-| `java.lang.invoke.MemberName`                                                                    |   472 |   8.9 KB |
-| `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                               |     1 |    200 B |
-| `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                       |     1 |    192 B |
-| `breeze.generic.MMRegistry2$$Lambda+0x00007b0ac0991000`                                          |     1 |     48 B |
-| `breeze.linalg.diag$$anon$2$$Lambda+0x00007b0ac099b738`                                          |     1 |     48 B |
-| `breeze.linalg.support.TensorValues$$$Lambda+0x00007b0ac09d5000`                                 |     1 |     48 B |
-
-**`jdk.internal.util.ReferencedKeyMap`**
-
-| Holder Class                         | Count | Retained |
-| ------------------------------------ | ----: | -------: |
-| `java.lang.Class`                    |     1 | 302.5 KB |
-| `jdk.internal.util.ReferencedKeySet` |     1 | 302.5 KB |
-|   ↳ `java.lang.Class`                |     1 | 302.5 KB |
-
-**`org.apache.spark.status.ElementTrackingStore`**
-
-| Holder Class | Count | Retained |
-| ------------ | ----: | -------: |
-| `(GC Root)`  |     1 | 301.7 KB |
-
-**`org.apache.spark.util.kvstore.InMemoryStore`**
-
-| Holder Class                                   | Count | Retained |
-| ---------------------------------------------- | ----: | -------: |
-| `org.apache.spark.status.ElementTrackingStore` |     1 | 301.1 KB |
-
-**`org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`**
-
-| Holder Class                                       | Count | Retained |
-| -------------------------------------------------- | ----: | -------: |
-| `org.apache.spark.status.ElementTrackingStore`     |     1 | 301.1 KB |
-| `org.apache.spark.util.kvstore.InMemoryStore`      |     1 | 301.1 KB |
-|   ↳ `org.apache.spark.status.ElementTrackingStore` |     1 | 301.1 KB |
-
-**`java.util.concurrent.locks.ReentrantLock$NonfairSync`**
-
-| Holder Class                                                                  | Count | Retained |
-| ----------------------------------------------------------------------------- | ----: | -------: |
-| `io.netty.buffer.PoolSubpage`                                                 | 7,878 | 369.3 KB |
-| `java.util.concurrent.locks.ReentrantLock`                                    | 8,119 | 253.8 KB |
-|   ↳ `io.netty.buffer.PoolSubpage`                                             | 7,878 | 369.3 KB |
-|   ↳ `io.netty.buffer.PoolArena$HeapArena`                                     |   101 |   4.7 KB |
-|   ↳ `io.netty.buffer.PoolArena$DirectArena`                                   |   101 |   4.7 KB |
-|   ↳ `java.lang.ref.ReferenceQueue`                                            |   285 |   4.5 KB |
-|   ↳ `com.fasterxml.jackson.databind.util.internal.PrivateMaxEntriesMap`       |    13 |    624 B |
-|   ↳ `jdk.internal.misc.InternalLock`                                          |    12 |    576 B |
-|   ↳ `java.util.concurrent.LinkedBlockingQueue`                                |    36 |    576 B |
-|   ↳ `org.apache.logging.log4j.core.config.AwaitCompletionReliabilityStrategy` |    19 |    304 B |
-|   ↳ `java.util.concurrent.ThreadPoolExecutor`                                 |    17 |    272 B |
-|   ↳ `java.lang.Class`                                                         |     4 |    192 B |
-| `java.lang.Object[]`                                                          | 1,014 |  71.3 KB |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                         |     1 |  32.4 KB |
-| `org.sparkproject.guava.util.concurrent.Striped$PaddedLock`                   | 1,014 |  31.7 KB |
-|   ↳ `java.lang.Object[]`                                                      | 1,014 |  71.3 KB |
-|   ↳ `org.apache.spark.storage.BlockInfoManager`                               |    10 |    400 B |
-| `org.sparkproject.guava.collect.MapMakerInternalMap$Segment[]`                |    12 |  24.8 KB |
-| `java.util.WeakHashMap`                                                       |   239 |  24.3 KB |
-| `java.lang.ref.ReferenceQueue`                                                |   281 |   8.8 KB |
-|   ↳ `java.util.WeakHashMap`                                                   |   239 |  24.3 KB |
-|   ↳ `org.sparkproject.guava.collect.MapMakerInternalMap$Segment`              |    12 |   1.2 KB |
-|   ↳ `org.sparkproject.guava.cache.LocalCache$Segment`                         |     4 |    416 B |
-|   ↳ `java.lang.Class`                                                         |     3 |    312 B |
-|   ↳ `java.lang.WeakPairMap`                                                   |     3 |    312 B |
-|   ↳ `sun.util.locale.provider.LocaleResources`                                |     2 |    208 B |
-|   ↳ `com.sun.jmx.mbeanserver.MBeanIntrospector$MBeanInfoMap`                  |     2 |    208 B |
-|   ↳ `com.sun.jmx.mbeanserver.WeakIdentityHashMap`                             |     2 |    208 B |
-|   ↳ `com.sun.jmx.mbeanserver.MBeanIntrospector$PerInterfaceMap`               |     2 |    208 B |
-|   ↳ `java.lang.ClassValue$ClassValueMap`                                      |     1 |    104 B |
-| `org.sparkproject.guava.cache.LocalCache$Segment[]`                           |    21 |   6.2 KB |
-| `io.netty.buffer.PoolArena$DirectArena`                                       |   101 |   4.7 KB |
-
-**`org.apache.spark.util.kvstore.InMemoryStore$InstanceList`**
-
-| Holder Class                                        |  Count | Retained |
-| --------------------------------------------------- | -----: | -------: |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`     | 34,752 |   2.9 MB |
-| `java.util.concurrent.ConcurrentHashMap$Node`       |     12 | 297.3 KB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]` | 34,752 |   2.9 MB |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   |  8,033 | 626.6 KB |
-
-**`org.apache.spark.mllib.linalg.Vector[]`**
-
-| Holder Class                                              | Count | Retained |
-| --------------------------------------------------------- | ----: | -------: |
-| `java.util.LinkedHashMap$Entry`                           |     7 | 937.9 KB |
-| `org.apache.spark.storage.memory.DeserializedMemoryEntry` |     2 | 293.0 KB |
-|   ↳ `java.util.LinkedHashMap$Entry`                       |     7 | 937.9 KB |
-
-**`java.lang.invoke.LambdaForm`**
-
-| Holder Class                                        | Count | Retained |
-| --------------------------------------------------- | ----: | -------: |
-| `java.lang.Object[]`                                | 7,143 |   1.9 MB |
-| `java.util.jar.JarFile`                             |    63 |   1.3 MB |
-| `(GC Root)`                                         |   417 | 214.1 KB |
-| `java.lang.invoke.LambdaFormEditor$Transform`       |    80 |  93.3 KB |
-|   ↳ `java.lang.invoke.LambdaForm`                   |    88 |  54.7 KB |
-|   ↳ `java.lang.invoke.LambdaFormEditor$Transform[]` |    43 |  44.8 KB |
-| `java.lang.ThreadLocal$ThreadLocalMap$Entry`        |     4 |  66.0 KB |
-| `java.lang.ref.SoftReference[]`                     |   535 |  60.7 KB |
-| `java.lang.invoke.LambdaForm`                       |    88 |  54.7 KB |
-| `java.lang.invoke.DirectMethodHandle$Constructor`   |   858 |  46.4 KB |
-| `java.lang.invoke.LambdaFormEditor$Transform[]`     |    43 |  44.8 KB |
-| `sun.util.locale.BaseLocale$Key`                    | 1,044 |  40.8 KB |
-
-**`org.sparkproject.jetty.servlet.ServletHandler`**
-
-| Holder Class                                           | Count | Retained |
-| ------------------------------------------------------ | ----: | -------: |
-| `org.sparkproject.jetty.servlet.ServletContextHandler` |    29 | 251.2 KB |
-|   ↳ `org.apache.spark.ui.SparkUI`                      |     1 |   4.0 KB |
-| `org.apache.spark.ui.SparkUI`                          |     1 |   4.0 KB |
-
-**`io.netty.channel.nio.NioEventLoop`**
-
-| Holder Class                                                 | Count | Retained |
-| ------------------------------------------------------------ | ----: | -------: |
-| `io.netty.channel.nio.NioEventLoopGroup`                     |    16 | 225.9 KB |
-|   ↳ `org.apache.spark.network.client.TransportClientFactory` |     2 | 114.1 KB |
-| `org.apache.spark.network.client.TransportClientFactory`     |     2 | 114.1 KB |
-| `(GC Root)`                                                  |     2 |  19.4 KB |
-
-**`com.codahale.metrics.Timer`**
-
-| Holder Class | Count | Retained |
-| ------------ | ----: | -------: |
-| `(GC Root)`  |     7 | 243.8 KB |
-
-**`com.codahale.metrics.Histogram`**
-
-| Holder Class                 | Count | Retained |
-| ---------------------------- | ----: | -------: |
-| `com.codahale.metrics.Timer` |     7 | 241.1 KB |
-| `(GC Root)`                  |     4 |   1.3 KB |
-
-**`com.codahale.metrics.ExponentiallyDecayingReservoir`**
-
-| Holder Class                     | Count | Retained |
-| -------------------------------- | ----: | -------: |
-| `com.codahale.metrics.Histogram` |    11 | 241.8 KB |
-|   ↳ `com.codahale.metrics.Timer` |     7 | 241.1 KB |
-| `com.codahale.metrics.Timer`     |     7 | 241.1 KB |
-
 ### Retained Size Distribution
 
 _Retained heap distributed across all 39,316 top-level dominators. The shape reveals whether a handful of large objects dominate the heap or memory is scattered across many small ones._
@@ -1680,15 +1126,15 @@ _Retained heap distributed across all 39,316 top-level dominators. The shape rev
 |      8 B |    242 |            0.6% |
 |     16 B |    636 |            1.6% |
 |     32 B |  4,429 |           11.3% |
-|     64 B | 12,514 |           31.8% |
-|    128 B | 13,801 |           35.1% |
-|    256 B |  3,279 |            8.3% |
-|    512 B |  1,541 |            3.9% |
+|     64 B | 12,517 |           31.8% |
+|    128 B | 13,798 |           35.1% |
+|    256 B |  3,280 |            8.3% |
+|    512 B |  1,540 |            3.9% |
 |   1.0 KB |    601 |            1.5% |
 |   2.0 KB |    219 |            0.6% |
 |   4.0 KB |    159 |            0.4% |
-|   8.0 KB |    293 |            0.7% |
-|  16.0 KB |     98 |            0.2% |
+|   8.0 KB |    294 |            0.7% |
+|  16.0 KB |     97 |            0.2% |
 |  32.0 KB |     39 |            0.1% |
 |  64.0 KB |     45 |            0.1% |
 | 128.0 KB |     28 |            0.1% |
@@ -1704,12 +1150,12 @@ _Retained heap aggregated by package prefix — only packages retaining ≥1% of
 
 | Package                                 | # Objects |  Shallow | Retained |
 | --------------------------------------- | --------: | -------: | -------: |
-| `java`                                  |    31,861 | 937.1 KB |  21.3 MB |
-| `java.util`                             |     2,570 |  88.9 KB |  14.2 MB |
+| `java`                                  |    31,861 | 935.6 KB |  21.3 MB |
+| `java.util`                             |     2,570 |  87.5 KB |  14.2 MB |
 | `java.util.zip`                         |       970 |  41.5 KB |  12.5 MB |
-| `java.util.jar`                         |       208 |  11.9 KB |   1.4 MB |
+| `java.util.jar`                         |       208 |  10.5 KB |   1.4 MB |
 | `java.lang`                             |    27,966 | 804.0 KB |   4.1 MB |
-| `java.lang.invoke`                      |     5,663 | 214.1 KB |   1.3 MB |
+| `java.lang.invoke`                      |     5,663 | 214.0 KB |   1.3 MB |
 | `java.net`                              |       163 |   7.8 KB |   2.7 MB |
 | `org`                                   |     2,606 |  59.7 KB |   5.1 MB |
 | `org.apache`                            |     1,991 |  39.6 KB |   4.0 MB |
@@ -1720,19 +1166,19 @@ _Retained heap aggregated by package prefix — only packages retaining ≥1% of
 | `org.apache.hadoop`                     |       211 |   4.0 KB | 359.2 KB |
 | `org.sparkproject`                      |       523 |  19.1 KB |   1.1 MB |
 | `org.sparkproject.jetty`                |       432 |  18.3 KB |   1.1 MB |
-| `org.sparkproject.jetty.server`         |        48 |   1.0 KB | 504.5 KB |
-| `org.sparkproject.jetty.server.handler` |        21 |    416 B | 480.6 KB |
+| `org.sparkproject.jetty.server`         |        48 |   1.0 KB | 504.2 KB |
+| `org.sparkproject.jetty.server.handler` |        21 |    416 B | 480.3 KB |
 | `scala`                                 |       469 |   5.6 KB |   2.5 MB |
 | `scala.runtime`                         |        37 |    232 B |   2.5 MB |
 | `io`                                    |       368 |  32.8 KB |   1.5 MB |
 | `io.netty`                              |       368 |  32.8 KB |   1.5 MB |
 | `io.netty.buffer`                       |       222 |  30.4 KB |   1.4 MB |
 | `jdk`                                   |       963 |  31.7 KB |   1.1 MB |
-| `jdk.internal`                          |       817 |  29.3 KB | 936.4 KB |
-| `jdk.internal.loader`                   |        45 |    664 B | 856.0 KB |
-| `sun`                                   |     1,567 |  45.0 KB | 713.8 KB |
+| `jdk.internal`                          |       817 |  29.2 KB | 936.2 KB |
+| `jdk.internal.loader`                   |        45 |    664 B | 855.9 KB |
+| `sun`                                   |     1,567 |  44.7 KB | 713.6 KB |
 | `sun.util`                              |     1,153 |  34.6 KB | 484.8 KB |
-| `com`                                   |       779 |  13.6 KB | 642.6 KB |
+| `com`                                   |       779 |  13.6 KB | 642.5 KB |
 
 ## Dominator Analysis
 
@@ -1749,13 +1195,13 @@ _Objects retaining far more than their largest single child — memory held dire
 | `java.util.LinkedHashMap`                                        | 270448 |      2.3 MB | `java.util.LinkedHashMap$Entry`                          |       322.4 KB |      2.0 MB |
 | `java.lang.Object[]`                                             | 540945 |      2.0 MB | `java.lang.Class`                                        |       178.9 KB |      1.8 MB |
 | `byte[]`                                                         |  64172 |      1.0 MB | —                                                        |            0 B |      1.0 MB |
-| `java.net.URLClassLoader`                                        | 214390 |      2.6 MB | `java.util.ArrayList`                                    |         2.0 MB |    693.4 KB |
+| `java.net.URLClassLoader`                                        | 214390 |      2.6 MB | `java.util.ArrayList`                                    |         2.0 MB |    693.0 KB |
 | `java.lang.Thread`                                               |  64180 |    787.2 KB | `org.apache.xbean.asm9.ClassReader`                      |       200.4 KB |    586.8 KB |
 | `java.util.HashMap$Node[]`                                       |     ×2 |    577.2 KB | `java.util.HashMap$Node`                                 |         1000 B |    576.2 KB |
 | `byte[]`                                                         |  64170 |    530.7 KB | —                                                        |            0 B |    530.7 KB |
 | `byte[]`                                                         |  64174 |    513.3 KB | —                                                        |            0 B |    513.3 KB |
 | `byte[]`                                                         | 222178 |    474.9 KB | —                                                        |            0 B |    474.9 KB |
-| `org.sparkproject.jetty.server.handler.ContextHandlerCollection` | 267106 |    477.1 KB | `org.sparkproject.jetty.server.handler.gzip.GzipHandler` |        16.5 KB |    460.6 KB |
+| `org.sparkproject.jetty.server.handler.ContextHandlerCollection` | 267106 |    476.9 KB | `org.sparkproject.jetty.server.handler.gzip.GzipHandler` |        16.5 KB |    460.4 KB |
 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  | 447723 |    436.8 KB | `java.util.concurrent.ConcurrentHashMap$Node`            |          352 B |    436.5 KB |
 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  | 378130 |    409.2 KB | `java.util.concurrent.ConcurrentHashMap$Node`            |          256 B |    409.0 KB |
 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  | 535672 |    385.7 KB | `java.util.concurrent.ConcurrentHashMap$Node`            |          240 B |    385.4 KB |
@@ -1766,7 +1212,7 @@ _Objects retaining far more than their largest single child — memory held dire
 | `java.util.zip.ZipFile$Source`                                   | 220003 |    533.4 KB | `byte[]`                                                 |       474.9 KB |     58.6 KB |
 | `java.util.zip.ZipFile$Source`                                   | 221680 |    374.5 KB | `byte[]`                                                 |       334.2 KB |     40.3 KB |
 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                | 621651 |    432.0 KB | `java.util.concurrent.ConcurrentHashMap`                 |       409.3 KB |     22.8 KB |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           | 621610 |    402.4 KB | `java.util.concurrent.ConcurrentHashMap`                 |       385.7 KB |     16.6 KB |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           | 621610 |    402.3 KB | `java.util.concurrent.ConcurrentHashMap`                 |       385.7 KB |     16.6 KB |
 | `java.util.jar.Manifest`                                         | 185189 |    584.2 KB | `java.util.HashMap`                                      |       577.2 KB |      6.9 KB |
 | **Total**                                                        |        | **25.2 MB** |                                                          |     **9.3 MB** | **15.9 MB** |
 
@@ -1781,7 +1227,7 @@ _Each row shows one dominator class: how many other objects it immediately domin
 | `java.lang.Object[]`                                                       |        1,558 |     152,842 |          748.8 KB |            2.6 MB |
 | `java.lang.Class`                                                          |        8,886 |      19,244 |          131.4 KB |            1.6 MB |
 | `java.util.LinkedHashMap`                                                  |          302 |      18,039 |           18.9 KB |            1.5 MB |
-| `(GC Root)`                                                                |            0 |      39,316 |               0 B |            1.2 MB |
+| `(GC Root)`                                                                |            0 |      39,316 |               0 B |            1.1 MB |
 | `java.util.concurrent.ConcurrentHashMap$Node[]`                            |          431 |      35,015 |          411.5 KB |            1.1 MB |
 | `java.util.concurrent.ConcurrentHashMap$Node`                              |       33,138 |      41,685 |            1.0 MB |            1.0 MB |
 | `breeze.linalg.Vector[]`                                                   |            2 |      15,000 |           58.6 KB |          585.9 KB |
@@ -1797,7 +1243,7 @@ _Each row shows one dominator class: how many other objects it immediately domin
 | `io.netty.buffer.PoolArena$HeapArena`                                      |          101 |       1,717 |           15.0 KB |          209.1 KB |
 | `io.netty.buffer.PoolArena$DirectArena`                                    |          101 |       1,717 |           15.0 KB |          209.1 KB |
 | `java.util.concurrent.ConcurrentSkipListMap$Node`                          |        2,685 |       7,363 |           62.9 KB |          193.4 KB |
-| `org.sparkproject.jetty.util.ArrayTrie`                                    |            9 |          33 |             360 B |          189.3 KB |
+| `org.sparkproject.jetty.util.ArrayTrie`                                    |            9 |          33 |             288 B |          189.3 KB |
 | `java.util.HashMap`                                                        |          720 |         823 |           33.8 KB |          148.9 KB |
 | `java.lang.invoke.MethodType`                                              |        3,466 |       5,348 |          135.4 KB |          145.5 KB |
 | `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |           36 |          36 |           20.2 KB |          144.8 KB |
@@ -1806,7 +1252,7 @@ _Each row shows one dominator class: how many other objects it immediately domin
 | `org.apache.spark.storage.memory.DeserializedMemoryEntry`                  |            7 |           7 |             224 B |          117.3 KB |
 | `java.lang.invoke.MemberName`                                              |        3,477 |       6,301 |          135.8 KB |          115.9 KB |
 | `java.lang.invoke.DirectMethodHandle$Constructor`                          |        1,071 |       4,064 |           50.2 KB |          106.8 KB |
-| **Total**                                                                  |  **146,766** | **489,038** |        **5.5 MB** |       **30.2 MB** |
+| **Total**                                                                  |  **146,766** | **489,038** |        **5.5 MB** |       **30.1 MB** |
 
 ## Threads
 
@@ -1820,9 +1266,9 @@ _Name, shallow/retained heap, max single-local retained, TL root count, context 
 | ---------------------------------------------------------------------------------------------------------- | ------: | -------: | -----------------: | -------: | -------------------------------------------------------------- | ------ | -------: | ------------------------------------------------------ |
 | [main](#thread-1)                                                                                          |   104 B | 787.2 KB |             2.6 MB |      207 | `java/net/URLClassLoader @ 0x80f000a0`                         | No     |        5 | [alive, runnable]                                      |
 | [Reference Handler](#thread-2)                                                                             |   104 B |    200 B |                0 B |        — | `—`                                                            | Yes    |       10 | [alive, runnable]                                      |
-| [Finalizer](#thread-3)                                                                                     |   112 B |    208 B |               40 B |        7 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] |
-| [Common-Cleaner](#thread-6)                                                                                |   112 B |    168 B |              128 B |       12 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         |
-| [process reaper](#thread-7)                                                                                |   112 B |    168 B |              368 B |       16 | `—`                                                            | Yes    |       10 | [alive, waiting, waiting with timeout, parked]         |
+| [Finalizer](#thread-3)                                                                                     |   104 B |    200 B |               40 B |        7 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] |
+| [Common-Cleaner](#thread-6)                                                                                |   104 B |    160 B |              128 B |       12 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         |
+| [process reaper](#thread-7)                                                                                |   104 B |    160 B |              368 B |       16 | `—`                                                            | Yes    |       10 | [alive, waiting, waiting with timeout, parked]         |
 | [rpc-boss-3-1](#thread-8)                                                                                  |   112 B |   1.9 KB |             9.7 KB |       15 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      |
 | [dispatcher-event-loop-0](#thread-9)                                                                       |   104 B |    600 B |              896 B |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
 | [dispatcher-event-loop-1](#thread-10)                                                                      |   104 B |    568 B |              896 B |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         |
@@ -2160,7 +1606,7 @@ _Local roots: 7._
 | `java.lang.ref.NativeReferenceQueue$Lock` |    ×3 |    16 B |     16 B |
 | `java.lang.System$2`                      |     1 |    16 B |     16 B |
 
-_Frame percentages are of this thread's 208 B retained heap._
+_Frame percentages are of this thread's 200 B retained heap._
 
 - `java.lang.Object.wait (Object.java:366)`
   - `java.lang.ref.NativeReferenceQueue$Lock` retains 16 B (<0.1% of thread retained)
@@ -2193,7 +1639,7 @@ _Local roots: 12._
 | `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject` |    ×2 |    24 B |     24 B |
 | `jdk.internal.ref.CleanerImpl`                                          |    ×3 |    24 B |     24 B |
 
-_Frame percentages are of this thread's 168 B retained heap._
+_Frame percentages are of this thread's 160 B retained heap._
 
 - `java.util.concurrent.locks.LockSupport.parkNanos (LockSupport.java:269)`
   - `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject` retains 24 B (<0.1% of thread retained)
@@ -2234,7 +1680,7 @@ _Local roots: 16._
 | `java.util.concurrent.SynchronousQueue`             |    ×2 |    32 B |     32 B |
 | `java.util.concurrent.SynchronousQueue$Transferer`  |    ×3 |    24 B |     24 B |
 
-_Frame percentages are of this thread's 168 B retained heap._
+_Frame percentages are of this thread's 160 B retained heap._
 
 - `java.util.concurrent.LinkedTransferQueue$DualNode.await (LinkedTransferQueue.java:452)`
   - `java.util.concurrent.LinkedTransferQueue$DualNode` retains 32 B (<0.1% of thread retained)
@@ -2274,7 +1720,7 @@ _Local roots: 15._
 | ------------------------------------------------------ | ----: | ------: | -------: |
 | `io.netty.channel.nio.NioEventLoop`                    |    ×2 |   152 B |   9.7 KB |
 | `io.netty.channel.nio.SelectedSelectionKeySet`         |     1 |    24 B |   4.0 KB |
-| `sun.nio.ch.EPollSelectorImpl`                         |    ×4 |    88 B |    752 B |
+| `sun.nio.ch.EPollSelectorImpl`                         |    ×4 |    80 B |    744 B |
 | `java.lang.Class`                                      |    ×2 |    32 B |    128 B |
 | `io.netty.channel.nio.SelectedSelectionKeySetSelector` |     1 |    24 B |     24 B |
 | `io.netty.util.internal.ThreadExecutorMap$2`           |     1 |    24 B |     24 B |
@@ -2284,13 +1730,13 @@ _Local roots: 15._
 _Frame percentages are of this thread's 1.9 KB retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
   - `io.netty.channel.nio.SelectedSelectionKeySet` retains 4.0 KB (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `io.netty.channel.nio.SelectedSelectionKeySetSelector.select (SelectedSelectionKeySetSelector.java:68)`
   - `io.netty.channel.nio.SelectedSelectionKeySetSelector` retains 24 B (<0.1% of thread retained)
 - `io.netty.channel.nio.NioEventLoop.select (NioEventLoop.java:879)`
@@ -3061,9 +2507,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3073,21 +2519,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3119,9 +2565,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3131,21 +2577,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3177,9 +2623,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3189,21 +2635,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3235,9 +2681,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3247,21 +2693,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3293,9 +2739,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3305,21 +2751,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3351,9 +2797,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3363,21 +2809,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3409,9 +2855,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3421,21 +2867,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3467,9 +2913,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3479,21 +2925,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3525,9 +2971,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3537,21 +2983,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3583,9 +3029,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3595,21 +3041,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3641,9 +3087,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3653,21 +3099,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3699,9 +3145,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3711,21 +3157,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3757,9 +3203,9 @@ _Showing top 20 of 22 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                | Count | Shallow | Retained |
 | --------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   120 B |  33.5 KB |
-| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.1 KB |
-| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    96 B |    424 B |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   112 B |  33.5 KB |
+| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.0 KB |
+| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    88 B |    416 B |
 | `java.lang.Class`                                                     |     1 |    32 B |    128 B |
 | `java.lang.String`                                                    |     1 |    24 B |     56 B |
 | `java.io.FileDescriptor`                                              |     1 |    40 B |     40 B |
@@ -3782,12 +3228,12 @@ _Frame percentages are of this thread's 480 B retained heap._
 - `java.util.concurrent.locks.AbstractQueuedSynchronizer.acquire (AbstractQueuedSynchronizer.java:1024)`
   - `java.util.concurrent.locks.ReentrantLock$NonfairSync` retains 32 B (<0.1% of thread retained)
 - `sun.nio.ch.ServerSocketChannelImpl.accept (ServerSocketChannelImpl.java:393)`
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.net.SocketAddress[]` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.ServerConnector.accept (ServerConnector.java:388)`
-  - `org.sparkproject.jetty.server.ServerConnector` retains 20.1 KB (0.1% of thread retained)
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `org.sparkproject.jetty.server.ServerConnector` retains 20.0 KB (0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.AbstractConnector$Acceptor.run (AbstractConnector.java:704)`
   - `java.lang.String` retains 56 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.server.AbstractConnector$Acceptor` retains 24 B (<0.1% of thread retained)
@@ -3814,9 +3260,9 @@ _Showing top 20 of 21 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                       | Count | Shallow | Retained |
 | ------------------------------------------------------------ | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`        |     1 |   120 B |  33.5 KB |
-| `org.sparkproject.jetty.server.ServerConnector`              |     1 |   168 B |  20.1 KB |
-| `sun.nio.ch.ServerSocketChannelImpl`                         |    ×3 |    96 B |    424 B |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`        |     1 |   112 B |  33.5 KB |
+| `org.sparkproject.jetty.server.ServerConnector`              |     1 |   168 B |  20.0 KB |
+| `sun.nio.ch.ServerSocketChannelImpl`                         |    ×3 |    88 B |    416 B |
 | `java.lang.Class`                                            |     1 |    32 B |    128 B |
 | `java.lang.String`                                           |     1 |    24 B |     56 B |
 | `java.io.FileDescriptor`                                     |    ×3 |    40 B |     40 B |
@@ -3829,18 +3275,18 @@ _Showing top 20 of 21 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 504 B retained heap._
 
 - `sun.nio.ch.ServerSocketChannelImpl.implAccept (ServerSocketChannelImpl.java:433)`
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.net.InetSocketAddress[]` retains 24 B (<0.1% of thread retained)
   - `java.net.SocketAddress[]` retains 24 B (<0.1% of thread retained)
 - `sun.nio.ch.ServerSocketChannelImpl.accept (ServerSocketChannelImpl.java:399)`
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.net.SocketAddress[]` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.ServerConnector.accept (ServerConnector.java:388)`
-  - `org.sparkproject.jetty.server.ServerConnector` retains 20.1 KB (0.1% of thread retained)
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `org.sparkproject.jetty.server.ServerConnector` retains 20.0 KB (0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.AbstractConnector$Acceptor.run (AbstractConnector.java:704)`
   - `java.lang.String` retains 56 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.server.AbstractConnector$Acceptor` retains 24 B (<0.1% of thread retained)
@@ -3869,9 +3315,9 @@ _Showing top 20 of 22 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                | Count | Shallow | Retained |
 | --------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   120 B |  33.5 KB |
-| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.1 KB |
-| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    96 B |    424 B |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   112 B |  33.5 KB |
+| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.0 KB |
+| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    88 B |    416 B |
 | `java.lang.Class`                                                     |     1 |    32 B |    128 B |
 | `java.lang.String`                                                    |     1 |    24 B |     56 B |
 | `java.io.FileDescriptor`                                              |     1 |    40 B |     40 B |
@@ -3894,12 +3340,12 @@ _Frame percentages are of this thread's 480 B retained heap._
 - `java.util.concurrent.locks.AbstractQueuedSynchronizer.acquire (AbstractQueuedSynchronizer.java:1024)`
   - `java.util.concurrent.locks.ReentrantLock$NonfairSync` retains 32 B (<0.1% of thread retained)
 - `sun.nio.ch.ServerSocketChannelImpl.accept (ServerSocketChannelImpl.java:393)`
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.net.SocketAddress[]` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.ServerConnector.accept (ServerConnector.java:388)`
-  - `org.sparkproject.jetty.server.ServerConnector` retains 20.1 KB (0.1% of thread retained)
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `org.sparkproject.jetty.server.ServerConnector` retains 20.0 KB (0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.AbstractConnector$Acceptor.run (AbstractConnector.java:704)`
   - `java.lang.String` retains 56 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.server.AbstractConnector$Acceptor` retains 24 B (<0.1% of thread retained)
@@ -3926,9 +3372,9 @@ _Showing top 20 of 22 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                | Count | Shallow | Retained |
 | --------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   120 B |  33.5 KB |
-| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.1 KB |
-| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    96 B |    424 B |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   112 B |  33.5 KB |
+| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.0 KB |
+| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    88 B |    416 B |
 | `java.lang.Class`                                                     |     1 |    32 B |    128 B |
 | `java.lang.String`                                                    |     1 |    24 B |     56 B |
 | `java.io.FileDescriptor`                                              |     1 |    40 B |     40 B |
@@ -3951,12 +3397,12 @@ _Frame percentages are of this thread's 480 B retained heap._
 - `java.util.concurrent.locks.AbstractQueuedSynchronizer.acquire (AbstractQueuedSynchronizer.java:1024)`
   - `java.util.concurrent.locks.ReentrantLock$NonfairSync` retains 32 B (<0.1% of thread retained)
 - `sun.nio.ch.ServerSocketChannelImpl.accept (ServerSocketChannelImpl.java:393)`
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.net.SocketAddress[]` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.ServerConnector.accept (ServerConnector.java:388)`
-  - `org.sparkproject.jetty.server.ServerConnector` retains 20.1 KB (0.1% of thread retained)
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `org.sparkproject.jetty.server.ServerConnector` retains 20.0 KB (0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.AbstractConnector$Acceptor.run (AbstractConnector.java:704)`
   - `java.lang.String` retains 56 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.server.AbstractConnector$Acceptor` retains 24 B (<0.1% of thread retained)
@@ -4326,7 +3772,7 @@ _Local roots: 15._
 | ------------------------------------------------------ | ----: | ------: | -------: |
 | `io.netty.channel.nio.NioEventLoop`                    |    ×2 |   152 B |   9.7 KB |
 | `io.netty.channel.nio.SelectedSelectionKeySet`         |     1 |    24 B |   4.0 KB |
-| `sun.nio.ch.EPollSelectorImpl`                         |    ×4 |    88 B |    752 B |
+| `sun.nio.ch.EPollSelectorImpl`                         |    ×4 |    80 B |    744 B |
 | `java.lang.Class`                                      |    ×2 |    32 B |    128 B |
 | `io.netty.channel.nio.SelectedSelectionKeySetSelector` |     1 |    24 B |     24 B |
 | `io.netty.util.internal.ThreadExecutorMap$2`           |     1 |    24 B |     24 B |
@@ -4336,13 +3782,13 @@ _Local roots: 15._
 _Frame percentages are of this thread's 1.9 KB retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
   - `io.netty.channel.nio.SelectedSelectionKeySet` retains 4.0 KB (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `io.netty.channel.nio.SelectedSelectionKeySetSelector.select (SelectedSelectionKeySetSelector.java:68)`
   - `io.netty.channel.nio.SelectedSelectionKeySetSelector` retains 24 B (<0.1% of thread retained)
 - `io.netty.channel.nio.NioEventLoop.select (NioEventLoop.java:879)`
@@ -13706,6 +13152,44 @@ _Frameworks detected: ThreadPoolExecutor. Framework-specific objects and their h
 | ------------------ | --------: | -------: |
 | ThreadPoolExecutor |        17 |  19.2 KB |
 
+## Pool State
+
+_Decoded field values for detected pool instances. A single snapshot cannot prove exhaustion — check trends across dumps if queue depth is concerning._
+
+### ThreadPoolExecutor (`java.util.concurrent.ThreadPoolExecutor`)
+
+17 instance(s), 19.2 KB total retained.
+
+|     Obj | Core size |   Max size |
+| ------: | --------: | ---------: |
+| @251621 |         0 | 2147483647 |
+| @252206 |         0 | 2147483647 |
+| @252987 |         1 |          1 |
+| @253035 |         1 |          1 |
+| @270403 |       128 |        128 |
+| @282643 |         8 |          8 |
+| @303263 |         4 |          4 |
+| @306904 |         1 |          1 |
+| @373601 |       100 |        100 |
+| @373650 |         1 |          1 |
+| @374084 |       100 |        100 |
+| @374267 |         1 |          1 |
+| @469784 |         1 |          1 |
+| @473638 |         0 | 2147483647 |
+| @480551 |         4 |          4 |
+| @480562 |         8 |          8 |
+| @499663 |        64 |         64 |
+
+## Finalizer Referents
+
+_204 live `java.lang.ref.Finalizer` instance(s) registered. This shows which classes have `finalize()` methods active — not that the queue is backed up. Prefer explicit `close()` or `java.lang.ref.Cleaner` over `finalize()`._
+
+| Referent class                                         | Count | Retained |
+| ------------------------------------------------------ | ----: | -------: |
+| `io.netty.buffer.PoolArena$DirectArena`                |   101 | 544.1 KB |
+| `io.netty.buffer.PoolArena$HeapArena`                  |   101 | 256.8 KB |
+| `org.sparkproject.jetty.util.resource.JarFileResource` |     2 |  15.9 KB |
+
 ## Top Components
 
 _Retained heap grouped by class loader (component). `% Heap` is the share of total reachable heap. Totals can exceed 100% because retained sets overlap — an object held by multiple components is counted in each._
@@ -13714,7 +13198,7 @@ _Retained heap grouped by class loader (component). `% Heap` is the share of tot
 | ------------------------------------------------------ | -------: | -----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `<boot>`                                               |  95.2 MB |  79.7% | `byte[]` (14.7 MB), `java.util.zip.ZipFile$Source` (12.3 MB), `java.lang.Class` (7.0 MB), `java.lang.Object[]` (6.3 MB), `java.lang.String` (4.4 MB)                                                                                                                                                      |
 | `java/net/URLClassLoader`                              |  21.3 MB |  17.9% | `org.apache.spark.storage.memory.MemoryStore` (2.3 MB), `io.netty.buffer.PoolSubpage[]` (957.9 KB), `org.apache.spark.storage.memory.DeserializedMemoryEntry` (937.9 KB), `io.netty.buffer.PoolSubpage` (923.8 KB), `io.netty.buffer.PoolArena$DirectArena` (695.2 KB)                                    |
-| `java/net/URLClassLoader`                              |   2.6 MB |   2.2% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scopt.ORunner$` (8.1 KB), `scala.math.BigInt[]` (8.0 KB)                                                                                                                    |
+| `java/net/URLClassLoader`                              |   2.6 MB |   2.2% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scala.math.BigInt[]` (8.0 KB), `scopt.ORunner$` (7.9 KB)                                                                                                                    |
 | `jdk/internal/loader/ClassLoaders$AppClassLoader`      | 244.1 KB |   0.2% | `org.renaissance.core.ModuleLoader` (149.8 KB), `org.renaissance.core.BenchmarkSuite` (77.0 KB), `org.renaissance.core.BenchmarkDescriptor` (2.3 KB), `org.renaissance.core.Launcher` (1.6 KB), `org.renaissance.License` (1.2 KB)                                                                        |
 | `jdk/internal/loader/ClassLoaders$PlatformClassLoader` |  11.6 KB |  <0.1% | `sun.util.resources.cldr.provider.CLDRLocaleDataMetaInfo` (7.4 KB), `com.sun.security.auth.UnixNumericGroupPrincipal` (840 B), `com.sun.security.auth.module.LdapLoginModule` (680 B), `com.sun.security.auth.module.UnixLoginModule` (584 B), `com.sun.security.auth.module.KeyStoreLoginModule` (448 B) |
 | `sun/reflect/misc/MethodUtil`                          |   1.5 KB |  <0.1% | `sun.reflect.misc.Trampoline` (1.5 KB)                                                                                                                                                                                                                                                                    |
@@ -13786,52 +13270,55 @@ _Collection fill ratios, map load factors, and constant-value primitive array gr
 
 ### Collections by Kind
 
-| Kind      |     Count | Total Elements | Max Elements | Total Shallow |
-| --------- | --------: | -------------: | -----------: | ------------: |
-| list      |       995 |         10,231 |        6,641 |       23.4 KB |
-| map       |     8,355 |         21,131 |        2,889 |      486.3 KB |
-| tree      |       116 |            228 |           18 |        5.4 KB |
-| **Total** | **9,466** |     **31,590** |              |  **515.2 KB** |
+| Kind      |      Count | Total Elements | Max Elements | Total Shallow |
+| --------- | ---------: | -------------: | -----------: | ------------: |
+| list      |        995 |         10,231 |        6,641 |       23.4 KB |
+| map       |      8,776 |         21,651 |        2,889 |      508.0 KB |
+| set       |        165 |          3,866 |        1,063 |        3.9 KB |
+| queue     |          1 |              4 |            4 |          32 B |
+| tree      |        116 |            228 |           18 |        5.4 KB |
+| **Total** | **10,053** |     **35,980** |              |  **540.8 KB** |
 
 ### Collection Fill Ratio
 
-_Fraction of each collection's capacity in use — low fill wastes backing-array memory. 9,466 collections analyzed (3,113 non-empty tracked)._
+_Fraction of each collection's capacity in use — low fill wastes backing-array memory. 10,053 collections analyzed (4,008 non-empty tracked)._
 
 |      Fill % | Collections |      Shallow |       Wasted |
 | ----------: | ----------: | -----------: | -----------: |
-|       0–10% |       1,456 |      66.4 KB |     179.1 KB |
-|      10–20% |         568 |      23.5 KB |      46.5 KB |
-|      20–30% |         115 |       5.4 KB |      62.4 KB |
-|      30–40% |         124 |       6.7 KB |     417.2 KB |
-|      40–50% |         280 |      14.9 KB |      69.6 KB |
-|      50–60% |          43 |       2.2 KB |      15.6 KB |
+|       0–10% |       1,762 |      81.4 KB |     220.6 KB |
+|      10–20% |         660 |      29.2 KB |      56.5 KB |
+|      20–30% |         119 |       5.6 KB |      62.5 KB |
+|      30–40% |         130 |       7.0 KB |     417.9 KB |
+|      40–50% |         455 |      19.2 KB |     104.7 KB |
+|      50–60% |          44 |       2.3 KB |      15.7 KB |
 |      60–70% |         120 |       6.8 KB |      14.5 KB |
 |      70–80% |         122 |       6.9 KB |      45.5 KB |
 |      80–90% |           7 |        216 B |        848 B |
 |     90–100% |           1 |         24 B |         16 B |
-| 100% (full) |         277 |       6.5 KB |          0 B |
-|   **Total** |   **3,113** | **139.6 KB** | **851.3 KB** |
+| 100% (full) |         588 |      13.9 KB |          0 B |
+|   **Total** |   **4,008** | **172.4 KB** | **938.8 KB** |
 
 ### Collections by Size
 
-_Element-count distribution of collections, bucketed by size — 9,466 tracked; 6,686 empty._
+_Element-count distribution of collections, bucketed by size — 10,053 tracked; 6,889 empty._
 
 |    Size ≤ | Collections |      Shallow |
 | --------: | ----------: | -----------: |
-|       ≤ 1 |       1,276 |      53.8 KB |
-|       ≤ 2 |         447 |      18.9 KB |
-|       ≤ 4 |         339 |      15.0 KB |
-|       ≤ 8 |         458 |      16.5 KB |
-|      ≤ 16 |         123 |       5.8 KB |
-|      ≤ 32 |          55 |       2.8 KB |
-|      ≤ 64 |          43 |       2.0 KB |
-|     ≤ 128 |          12 |        576 B |
-|     ≤ 256 |          16 |        776 B |
+|       ≤ 1 |       1,377 |      59.2 KB |
+|       ≤ 2 |         535 |      24.3 KB |
+|       ≤ 4 |         443 |      17.8 KB |
+|       ≤ 8 |         503 |      17.8 KB |
+|      ≤ 16 |         144 |       6.3 KB |
+|      ≤ 32 |          67 |       3.1 KB |
+|      ≤ 64 |          50 |       2.2 KB |
+|     ≤ 128 |          15 |        648 B |
+|     ≤ 256 |          17 |        800 B |
 |     ≤ 512 |           4 |        168 B |
 |   ≤ 1,024 |           4 |        192 B |
+|   ≤ 2,048 |           2 |         48 B |
 |   ≤ 4,096 |           2 |         96 B |
 |   ≤ 8,192 |           1 |         24 B |
-| **Total** |   **2,780** | **116.6 KB** |
+| **Total** |   **3,164** | **132.7 KB** |
 
 ### Array Fill Ratio
 
@@ -13854,22 +13341,22 @@ _Non-null element fraction of object arrays — low fill leaves most slots empty
 
 ### Map Load Factor
 
-_Load factor (occupied slots ÷ capacity) for 2,023 of 8,355 maps; high values (≥ 90%) signal dense packing and longer bucket chains per lookup._
+_Load factor (occupied slots ÷ capacity) for 2,450 of 8,776 maps; high values (≥ 90%) signal dense packing and longer bucket chains per lookup._
 
 |      Load % |      Maps |      Shallow |
 | ----------: | --------: | -----------: |
-|       0–10% |       977 |      55.4 KB |
-|      10–20% |       321 |      17.9 KB |
-|      20–30% |       103 |       5.8 KB |
-|      30–40% |       176 |       9.7 KB |
-|      40–50% |       317 |      18.0 KB |
+|       0–10% |     1,279 |      70.3 KB |
+|      10–20% |       416 |      23.6 KB |
+|      20–30% |       109 |       6.0 KB |
+|      30–40% |       184 |      10.0 KB |
+|      40–50% |       325 |      18.3 KB |
 |      50–60% |        58 |       3.0 KB |
 |      60–70% |        67 |       4.1 KB |
 |      70–80% |         4 |        208 B |
 |      80–90% |         0 |          0 B |
 |     90–100% |         0 |          0 B |
-| 100% (full) |         0 |          0 B |
-|   **Total** | **2,023** | **114.0 KB** |
+| 100% (full) |         8 |        320 B |
+|   **Total** | **2,450** | **135.9 KB** |
 
 ### Constant Primitive Arrays
 
@@ -14035,23 +13522,23 @@ _Combined ranking of `Class#field` references and stack-frame locals by retained
 | org.apache.spark.util.ClosureCleaner$#clean()                                      | Stack Frame |   2.6 MB |
 | java.util.concurrent.ThreadPoolExecutor#runWorker()                                | Stack Frame | 955.5 KB |
 | java.util.concurrent.ThreadPoolExecutor#getTask()                                  | Stack Frame | 930.7 KB |
-| org.sparkproject.jetty.util.thread.QueuedThreadPool#runJob()                       | Stack Frame | 536.4 KB |
+| org.sparkproject.jetty.util.thread.QueuedThreadPool#runJob()                       | Stack Frame | 536.3 KB |
 | org.apache.xbean.asm9.ClassReader#readCode()                                       | Stack Frame | 415.4 KB |
 | org.apache.xbean.asm9.ClassReader#accept()                                         | Stack Frame | 401.1 KB |
-| org.sparkproject.jetty.server.ServerConnector#accept()                             | Stack Frame |  81.9 KB |
+| org.sparkproject.jetty.server.ServerConnector#accept()                             | Stack Frame |  81.6 KB |
 | java.util.concurrent.LinkedBlockingQueue#poll()                                    | Stack Frame |  44.0 KB |
 | java.lang.Thread#runWith()                                                         | Stack Frame |  40.5 KB |
 | java.lang.Thread#run()                                                             | Stack Frame |  39.9 KB |
-| sun.nio.ch.SelectorImpl#lockAndDoSelect()                                          | Stack Frame |  23.2 KB |
+| sun.nio.ch.SelectorImpl#lockAndDoSelect()                                          | Stack Frame |  23.0 KB |
 | io.netty.channel.nio.NioEventLoop#run()                                            | Stack Frame |  19.4 KB |
 | io.netty.channel.nio.NioEventLoop#select()                                         | Stack Frame |  19.4 KB |
-| org.sparkproject.jetty.io.ManagedSelector#nioSelect()                              | Stack Frame |  14.1 KB |
-| org.sparkproject.jetty.io.ManagedSelector#select()                                 | Stack Frame |  14.1 KB |
+| org.sparkproject.jetty.io.ManagedSelector#nioSelect()                              | Stack Frame |  14.0 KB |
+| org.sparkproject.jetty.io.ManagedSelector#select()                                 | Stack Frame |  14.0 KB |
 | java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject#awaitNanos() | Stack Frame |  11.3 KB |
 | java.util.concurrent.ThreadPoolExecutor$Worker#run()                               | Stack Frame |  10.7 KB |
-| sun.nio.ch.EPollSelectorImpl#doSelect()                                            | Stack Frame |   7.5 KB |
-| sun.nio.ch.SelectorImpl#select()                                                   | Stack Frame |   7.5 KB |
-| org.sparkproject.jetty.io.ManagedSelector$SelectorProducer#select()                | Stack Frame |   6.3 KB |
+| sun.nio.ch.EPollSelectorImpl#doSelect()                                            | Stack Frame |   7.4 KB |
+| sun.nio.ch.SelectorImpl#select()                                                   | Stack Frame |   7.4 KB |
+| org.sparkproject.jetty.io.ManagedSelector$SelectorProducer#select()                | Stack Frame |   6.2 KB |
 | org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill#doProduce()             | Stack Frame |   5.2 KB |
 | org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill#produce()               | Stack Frame |   5.2 KB |
 | org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill#produceTask()           | Stack Frame |   5.2 KB |
@@ -14125,17 +13612,17 @@ _6,039 reference instances. 177 instances have a null referent — referent coll
 | `java.util.logging.Logger`                                             |      65 |   3.6 KB |  21.8 KB |
 | `java.lang.Module`                                                     |      53 |   2.5 KB | 302.7 KB |
 | `javax.management.ImmutableDescriptor`                                 |      36 |    864 B |   4.2 KB |
-| `com.sun.jmx.mbeanserver.DefaultMXBeanMappingFactory$IdentityMapping`  |      32 |    768 B |   2.1 KB |
+| `com.sun.jmx.mbeanserver.DefaultMXBeanMappingFactory$IdentityMapping`  |      32 |    768 B |   2.0 KB |
 | `jdk.internal.vm.SharedThreadContainer`                                |      28 |   1.1 KB |   3.6 KB |
 | `com.sun.jmx.mbeanserver.PerInterface`                                 |      18 |    720 B |  74.0 KB |
-| `java.lang.Class`                                                      |      18 |   1.3 KB | 114.5 KB |
+| `java.lang.Class`                                                      |      18 |   1.3 KB | 114.4 KB |
 | `java.lang.String`                                                     |      16 |    408 B |    904 B |
 | `java.util.logging.LogManager$RootLogger`                              |      15 |    960 B |  19.9 KB |
 | `scala.reflect.ClassTag$GenericClassTag`                               |      15 |    240 B |    240 B |
 | `com.sun.jmx.mbeanserver.DefaultMXBeanMappingFactory$CompositeMapping` |      11 |    440 B |  23.2 KB |
 | `java.util.logging.Level`                                              |       9 |    288 B |    288 B |
 | `sun.management.MemoryPoolImpl`                                        |       9 |    456 B |   3.0 KB |
-| `sun.net.www.protocol.jar.URLJarFile`                                  |       8 |    640 B |   2.6 KB |
+| `sun.net.www.protocol.jar.URLJarFile`                                  |       8 |    576 B |   2.6 KB |
 _… 167 more classes (314 objects, 32.6 KB shallow, 5.7 MB retained)._
 
 #### Only Weakly Retained
@@ -14156,10 +13643,10 @@ _586 reference instances. 4 instances have a null referent — referent collecte
 | --------------------------------------------------------------------- | ------: | ------: | -------: |
 | `java.util.zip.Inflater`                                              |     192 | 12.0 KB |  12.0 KB |
 | `java.io.FileDescriptor`                                              |     183 |  7.1 KB |   7.1 KB |
-| `java.util.jar.JarFile`                                               |     181 | 11.3 KB |   1.4 MB |
-| `sun.net.www.protocol.jar.URLJarFile`                                 |      12 |   960 B |   4.0 KB |
+| `java.util.jar.JarFile`                                               |     181 |  9.9 KB |   1.4 MB |
+| `sun.net.www.protocol.jar.URLJarFile`                                 |      12 |   864 B |   3.9 KB |
 | `sun.nio.fs.NativeBuffer`                                             |       5 |   160 B |    392 B |
-| `java.nio.DirectByteBuffer`                                           |       3 |   216 B |    216 B |
+| `java.nio.DirectByteBuffer`                                           |       3 |   192 B |    192 B |
 | `java.net.URLClassLoader`                                             |       2 |   176 B |   5.3 MB |
 | `java.util.Timer`                                                     |       2 |    48 B |     48 B |
 | `java.lang.ref.Cleaner`                                               |       1 |    16 B |     16 B |
@@ -14233,421 +13720,421 @@ _Top garbage-root subtrees by retained heap — unreachable objects with no reac
 
 4. **java.lang.ref.SoftReference** — 101.3 KB (1,988 objects in subtree)
    └─ java.lang.Class$ReflectionData — 101.2 KB
-        ├─ java.lang.reflect.Method[] — 98.7 KB
-        │    ├─ java.lang.reflect.Method — 688 B
-        │    │    ├─ java.lang.String — 544 B
-        │    │    │    └─ byte[] — 520 B
-        │    │    └─ java.lang.Class[] — 56 B
-        │    ├─ java.lang.reflect.Method — 680 B
-        │    │    ├─ java.lang.String — 544 B
-        │    │    │    └─ byte[] — 520 B
-        │    │    └─ java.lang.Class[] — 48 B
-        │    ├─ java.lang.reflect.Method — 576 B
-        │    │    ├─ java.lang.String — 440 B
-        │    │    │    └─ byte[] — 416 B
-        │    │    └─ java.lang.Class[] — 48 B
-        │    ├─ java.lang.reflect.Method — 568 B
-        │    │    ├─ java.lang.String — 432 B
-        │    │    │    └─ byte[] — 408 B
-        │    │    └─ java.lang.Class[] — 48 B
-        │    ├─ java.lang.reflect.Method — 560 B
-        │    │    ├─ java.lang.String — 432 B
-        │    │    │    └─ byte[] — 408 B
-        │    │    └─ java.lang.Class[] — 40 B
-        │    ├─ java.lang.reflect.Method — 528 B
-        │    │    ├─ java.lang.String — 328 B
-        │    │    │    └─ byte[] — 304 B
-        │    │    ├─ java.lang.String — 72 B
-        │    │    │    └─ byte[] — 48 B
-        │    │    └─ java.lang.Class[] — 40 B
-        │    ├─ java.lang.reflect.Method — 480 B
-        │    │    ├─ java.lang.String — 296 B
-        │    │    │    └─ byte[] — 272 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    └─ java.lang.Class[] — 32 B
-        │    └─ java.lang.reflect.Method — 456 B
-        │         ├─ java.lang.String — 272 B
-        │         │    └─ byte[] — 248 B
-        │         ├─ java.lang.String — 64 B
-        │         │    └─ byte[] — 40 B
-        │         └─ java.lang.Class[] — 32 B
-        ├─ java.lang.reflect.Field[] — 1.5 KB
-        │    ├─ java.lang.reflect.Field — 208 B
-        │    │    └─ java.lang.String — 136 B
-        │    │         └─ byte[] — 112 B
-        │    ├─ java.lang.reflect.Field — 184 B
-        │    │    └─ java.lang.String — 112 B
-        │    │         └─ byte[] — 88 B
-        │    ├─ java.lang.reflect.Field — 176 B
-        │    │    └─ java.lang.String — 104 B
-        │    │         └─ byte[] — 80 B
-        │    ├─ java.lang.reflect.Field — 168 B
-        │    │    └─ java.lang.String — 96 B
-        │    │         └─ byte[] — 72 B
-        │    ├─ java.lang.reflect.Field — 160 B
-        │    │    └─ java.lang.String — 88 B
-        │    │         └─ byte[] — 64 B
-        │    ├─ java.lang.reflect.Field — 72 B
-        │    ├─ java.lang.reflect.Field — 72 B
-        │    └─ java.lang.reflect.Field — 72 B
-        ├─ java.lang.reflect.Constructor[] — 504 B
-        │    ├─ java.lang.reflect.Constructor — 280 B
-        │    │    ├─ java.lang.String — 176 B
-        │    │    │    └─ byte[] — 152 B
-        │    │    └─ java.lang.Class[] — 32 B
-        │    └─ java.lang.reflect.Constructor — 200 B
-        │         ├─ java.lang.String — 104 B
-        │         │    └─ byte[] — 80 B
-        │         └─ java.lang.Class[] — 24 B
-        ├─ java.lang.String — 64 B
-        │    └─ byte[] — 40 B
-        ├─ java.lang.String — 64 B
-        │    └─ byte[] — 40 B
-        ├─ java.lang.String — 56 B
-        │    └─ byte[] — 32 B
-        ├─ java.lang.String — 56 B
-        │    └─ byte[] — 32 B
-        └─ java.lang.String — 56 B
-             └─ byte[] — 32 B
+       ├─ java.lang.reflect.Method[] — 98.7 KB
+       │   ├─ java.lang.reflect.Method — 688 B
+       │   │   ├─ java.lang.String — 544 B
+       │   │   │   └─ byte[] — 520 B
+       │   │   └─ java.lang.Class[] — 56 B
+       │   ├─ java.lang.reflect.Method — 680 B
+       │   │   ├─ java.lang.String — 544 B
+       │   │   │   └─ byte[] — 520 B
+       │   │   └─ java.lang.Class[] — 48 B
+       │   ├─ java.lang.reflect.Method — 576 B
+       │   │   ├─ java.lang.String — 440 B
+       │   │   │   └─ byte[] — 416 B
+       │   │   └─ java.lang.Class[] — 48 B
+       │   ├─ java.lang.reflect.Method — 568 B
+       │   │   ├─ java.lang.String — 432 B
+       │   │   │   └─ byte[] — 408 B
+       │   │   └─ java.lang.Class[] — 48 B
+       │   ├─ java.lang.reflect.Method — 560 B
+       │   │   ├─ java.lang.String — 432 B
+       │   │   │   └─ byte[] — 408 B
+       │   │   └─ java.lang.Class[] — 40 B
+       │   ├─ java.lang.reflect.Method — 528 B
+       │   │   ├─ java.lang.String — 328 B
+       │   │   │   └─ byte[] — 304 B
+       │   │   ├─ java.lang.String — 72 B
+       │   │   │   └─ byte[] — 48 B
+       │   │   └─ java.lang.Class[] — 40 B
+       │   ├─ java.lang.reflect.Method — 480 B
+       │   │   ├─ java.lang.String — 296 B
+       │   │   │   └─ byte[] — 272 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   └─ java.lang.Class[] — 32 B
+       │   └─ java.lang.reflect.Method — 456 B
+       │       ├─ java.lang.String — 272 B
+       │       │   └─ byte[] — 248 B
+       │       ├─ java.lang.String — 64 B
+       │       │   └─ byte[] — 40 B
+       │       └─ java.lang.Class[] — 32 B
+       ├─ java.lang.reflect.Field[] — 1.5 KB
+       │   ├─ java.lang.reflect.Field — 208 B
+       │   │   └─ java.lang.String — 136 B
+       │   │       └─ byte[] — 112 B
+       │   ├─ java.lang.reflect.Field — 184 B
+       │   │   └─ java.lang.String — 112 B
+       │   │       └─ byte[] — 88 B
+       │   ├─ java.lang.reflect.Field — 176 B
+       │   │   └─ java.lang.String — 104 B
+       │   │       └─ byte[] — 80 B
+       │   ├─ java.lang.reflect.Field — 168 B
+       │   │   └─ java.lang.String — 96 B
+       │   │       └─ byte[] — 72 B
+       │   ├─ java.lang.reflect.Field — 160 B
+       │   │   └─ java.lang.String — 88 B
+       │   │       └─ byte[] — 64 B
+       │   ├─ java.lang.reflect.Field — 72 B
+       │   ├─ java.lang.reflect.Field — 72 B
+       │   └─ java.lang.reflect.Field — 72 B
+       ├─ java.lang.reflect.Constructor[] — 504 B
+       │   ├─ java.lang.reflect.Constructor — 280 B
+       │   │   ├─ java.lang.String — 176 B
+       │   │   │   └─ byte[] — 152 B
+       │   │   └─ java.lang.Class[] — 32 B
+       │   └─ java.lang.reflect.Constructor — 200 B
+       │       ├─ java.lang.String — 104 B
+       │       │   └─ byte[] — 80 B
+       │       └─ java.lang.Class[] — 24 B
+       ├─ java.lang.String — 64 B
+       │   └─ byte[] — 40 B
+       ├─ java.lang.String — 64 B
+       │   └─ byte[] — 40 B
+       ├─ java.lang.String — 56 B
+       │   └─ byte[] — 32 B
+       ├─ java.lang.String — 56 B
+       │   └─ byte[] — 32 B
+       └─ java.lang.String — 56 B
+           └─ byte[] — 32 B
 
 5. **java.lang.ref.SoftReference** — 98.4 KB (1,995 objects in subtree)
    └─ java.lang.Class$ReflectionData — 98.3 KB
-        └─ java.lang.reflect.Method[] — 98.3 KB
-             ├─ java.lang.reflect.Method — 560 B
-             │    ├─ java.lang.String — 376 B
-             │    │    └─ byte[] — 352 B
-             │    ├─ java.lang.String — 56 B
-             │    │    └─ byte[] — 32 B
-             │    └─ java.lang.Class[] — 40 B
-             ├─ java.lang.reflect.Method — 528 B
-             │    ├─ java.lang.String — 320 B
-             │    │    └─ byte[] — 296 B
-             │    ├─ java.lang.String — 64 B
-             │    │    └─ byte[] — 40 B
-             │    ├─ java.lang.Class[] — 32 B
-             │    └─ byte[] — 24 B
-             ├─ java.lang.reflect.Method — 480 B
-             │    ├─ java.lang.String — 352 B
-             │    │    └─ byte[] — 328 B
-             │    └─ java.lang.Class[] — 40 B
-             ├─ java.lang.reflect.Method — 472 B
-             │    ├─ java.lang.String — 296 B
-             │    │    └─ byte[] — 272 B
-             │    ├─ java.lang.String — 56 B
-             │    │    └─ byte[] — 32 B
-             │    └─ java.lang.Class[] — 32 B
-             ├─ java.lang.reflect.Method — 464 B
-             │    ├─ java.lang.String — 336 B
-             │    │    └─ byte[] — 312 B
-             │    └─ java.lang.Class[] — 40 B
-             ├─ java.lang.reflect.Method — 464 B
-             │    ├─ java.lang.String — 280 B
-             │    │    └─ byte[] — 256 B
-             │    ├─ java.lang.String — 56 B
-             │    │    └─ byte[] — 32 B
-             │    └─ java.lang.Class[] — 40 B
-             ├─ java.lang.reflect.Method — 440 B
-             │    ├─ java.lang.String — 312 B
-             │    │    └─ byte[] — 288 B
-             │    └─ java.lang.Class[] — 40 B
-             └─ java.lang.reflect.Method — 424 B
-                  ├─ java.lang.String — 296 B
-                  │    └─ byte[] — 272 B
-                  └─ java.lang.Class[] — 40 B
+       └─ java.lang.reflect.Method[] — 98.3 KB
+           ├─ java.lang.reflect.Method — 560 B
+           │   ├─ java.lang.String — 376 B
+           │   │   └─ byte[] — 352 B
+           │   ├─ java.lang.String — 56 B
+           │   │   └─ byte[] — 32 B
+           │   └─ java.lang.Class[] — 40 B
+           ├─ java.lang.reflect.Method — 528 B
+           │   ├─ java.lang.String — 320 B
+           │   │   └─ byte[] — 296 B
+           │   ├─ java.lang.String — 64 B
+           │   │   └─ byte[] — 40 B
+           │   ├─ java.lang.Class[] — 32 B
+           │   └─ byte[] — 24 B
+           ├─ java.lang.reflect.Method — 480 B
+           │   ├─ java.lang.String — 352 B
+           │   │   └─ byte[] — 328 B
+           │   └─ java.lang.Class[] — 40 B
+           ├─ java.lang.reflect.Method — 472 B
+           │   ├─ java.lang.String — 296 B
+           │   │   └─ byte[] — 272 B
+           │   ├─ java.lang.String — 56 B
+           │   │   └─ byte[] — 32 B
+           │   └─ java.lang.Class[] — 32 B
+           ├─ java.lang.reflect.Method — 464 B
+           │   ├─ java.lang.String — 336 B
+           │   │   └─ byte[] — 312 B
+           │   └─ java.lang.Class[] — 40 B
+           ├─ java.lang.reflect.Method — 464 B
+           │   ├─ java.lang.String — 280 B
+           │   │   └─ byte[] — 256 B
+           │   ├─ java.lang.String — 56 B
+           │   │   └─ byte[] — 32 B
+           │   └─ java.lang.Class[] — 40 B
+           ├─ java.lang.reflect.Method — 440 B
+           │   ├─ java.lang.String — 312 B
+           │   │   └─ byte[] — 288 B
+           │   └─ java.lang.Class[] — 40 B
+           └─ java.lang.reflect.Method — 424 B
+               ├─ java.lang.String — 296 B
+               │   └─ byte[] — 272 B
+               └─ java.lang.Class[] — 40 B
 
 6. **java.lang.ref.SoftReference** — 74.9 KB (1,724 objects in subtree)
    └─ java.lang.Class$ReflectionData — 74.9 KB
-        └─ java.lang.reflect.Method[] — 74.8 KB
-             ├─ java.lang.reflect.Method — 328 B
-             │    ├─ java.lang.String — 144 B
-             │    │    └─ byte[] — 120 B
-             │    ├─ java.lang.String — 56 B
-             │    │    └─ byte[] — 32 B
-             │    └─ java.lang.Class[] — 40 B
-             ├─ java.lang.reflect.Method — 296 B
-             │    ├─ java.lang.String — 88 B
-             │    │    └─ byte[] — 64 B
-             │    ├─ java.lang.String — 72 B
-             │    │    └─ byte[] — 48 B
-             │    ├─ java.lang.Class[] — 24 B
-             │    └─ byte[] — 24 B
-             ├─ java.lang.reflect.Method — 272 B
-             │    ├─ java.lang.String — 144 B
-             │    │    └─ byte[] — 120 B
-             │    └─ java.lang.Class[] — 40 B
-             ├─ java.lang.reflect.Method — 272 B
-             │    ├─ java.lang.String — 88 B
-             │    │    └─ byte[] — 64 B
-             │    ├─ java.lang.String — 72 B
-             │    │    └─ byte[] — 48 B
-             │    └─ java.lang.Class[] — 24 B
-             ├─ java.lang.reflect.Method — 264 B
-             │    ├─ java.lang.String — 88 B
-             │    │    └─ byte[] — 64 B
-             │    ├─ java.lang.String — 64 B
-             │    │    └─ byte[] — 40 B
-             │    └─ java.lang.Class[] — 24 B
-             ├─ java.lang.reflect.Method — 240 B
-             │    ├─ java.lang.String — 80 B
-             │    │    └─ byte[] — 56 B
-             │    ├─ java.lang.Class[] — 24 B
-             │    ├─ java.lang.Class[] — 24 B
-             │    └─ byte[] — 24 B
-             ├─ java.lang.reflect.Method — 240 B
-             │    ├─ java.lang.String — 64 B
-             │    │    └─ byte[] — 40 B
-             │    ├─ java.lang.String — 64 B
-             │    │    └─ byte[] — 40 B
-             │    └─ java.lang.Class[] — 24 B
-             └─ java.lang.reflect.Method — 240 B
-                  ├─ java.lang.String — 64 B
-                  │    └─ byte[] — 40 B
-                  ├─ java.lang.String — 64 B
-                  │    └─ byte[] — 40 B
-                  └─ java.lang.Class[] — 24 B
+       └─ java.lang.reflect.Method[] — 74.8 KB
+           ├─ java.lang.reflect.Method — 328 B
+           │   ├─ java.lang.String — 144 B
+           │   │   └─ byte[] — 120 B
+           │   ├─ java.lang.String — 56 B
+           │   │   └─ byte[] — 32 B
+           │   └─ java.lang.Class[] — 40 B
+           ├─ java.lang.reflect.Method — 296 B
+           │   ├─ java.lang.String — 88 B
+           │   │   └─ byte[] — 64 B
+           │   ├─ java.lang.String — 72 B
+           │   │   └─ byte[] — 48 B
+           │   ├─ java.lang.Class[] — 24 B
+           │   └─ byte[] — 24 B
+           ├─ java.lang.reflect.Method — 272 B
+           │   ├─ java.lang.String — 144 B
+           │   │   └─ byte[] — 120 B
+           │   └─ java.lang.Class[] — 40 B
+           ├─ java.lang.reflect.Method — 272 B
+           │   ├─ java.lang.String — 88 B
+           │   │   └─ byte[] — 64 B
+           │   ├─ java.lang.String — 72 B
+           │   │   └─ byte[] — 48 B
+           │   └─ java.lang.Class[] — 24 B
+           ├─ java.lang.reflect.Method — 264 B
+           │   ├─ java.lang.String — 88 B
+           │   │   └─ byte[] — 64 B
+           │   ├─ java.lang.String — 64 B
+           │   │   └─ byte[] — 40 B
+           │   └─ java.lang.Class[] — 24 B
+           ├─ java.lang.reflect.Method — 240 B
+           │   ├─ java.lang.String — 80 B
+           │   │   └─ byte[] — 56 B
+           │   ├─ java.lang.Class[] — 24 B
+           │   ├─ java.lang.Class[] — 24 B
+           │   └─ byte[] — 24 B
+           ├─ java.lang.reflect.Method — 240 B
+           │   ├─ java.lang.String — 64 B
+           │   │   └─ byte[] — 40 B
+           │   ├─ java.lang.String — 64 B
+           │   │   └─ byte[] — 40 B
+           │   └─ java.lang.Class[] — 24 B
+           └─ java.lang.reflect.Method — 240 B
+               ├─ java.lang.String — 64 B
+               │   └─ byte[] — 40 B
+               ├─ java.lang.String — 64 B
+               │   └─ byte[] — 40 B
+               └─ java.lang.Class[] — 24 B
 
 7. **java.lang.ref.SoftReference** — 73.5 KB (1,206 objects in subtree)
    └─ java.lang.Class$ReflectionData — 73.5 KB
-        ├─ java.lang.reflect.Method[] — 72.5 KB
-        │    ├─ java.lang.reflect.Method — 472 B
-        │    │    ├─ java.lang.String — 352 B
-        │    │    │    └─ byte[] — 328 B
-        │    │    └─ java.lang.Class[] — 32 B
-        │    ├─ java.lang.reflect.Method — 432 B
-        │    │    ├─ java.lang.String — 312 B
-        │    │    │    └─ byte[] — 288 B
-        │    │    └─ java.lang.Class[] — 32 B
-        │    ├─ java.lang.reflect.Method — 416 B
-        │    │    ├─ java.lang.String — 248 B
-        │    │    │    └─ byte[] — 224 B
-        │    │    ├─ java.lang.String — 56 B
-        │    │    │    └─ byte[] — 32 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Method — 408 B
-        │    │    ├─ java.lang.String — 240 B
-        │    │    │    └─ byte[] — 216 B
-        │    │    ├─ java.lang.String — 56 B
-        │    │    │    └─ byte[] — 32 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Method — 408 B
-        │    │    ├─ java.lang.String — 240 B
-        │    │    │    └─ byte[] — 216 B
-        │    │    ├─ java.lang.String — 56 B
-        │    │    │    └─ byte[] — 32 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Method — 408 B
-        │    │    ├─ java.lang.String — 240 B
-        │    │    │    └─ byte[] — 216 B
-        │    │    ├─ java.lang.String — 56 B
-        │    │    │    └─ byte[] — 32 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Method — 408 B
-        │    │    ├─ java.lang.String — 240 B
-        │    │    │    └─ byte[] — 216 B
-        │    │    ├─ java.lang.String — 56 B
-        │    │    │    └─ byte[] — 32 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    └─ java.lang.reflect.Method — 400 B
-        │         ├─ java.lang.String — 232 B
-        │         │    └─ byte[] — 208 B
-        │         ├─ java.lang.String — 56 B
-        │         │    └─ byte[] — 32 B
-        │         └─ java.lang.Class[] — 24 B
-        ├─ java.lang.reflect.Constructor[] — 696 B
-        │    ├─ java.lang.reflect.Constructor — 176 B
-        │    │    ├─ java.lang.String — 80 B
-        │    │    │    └─ byte[] — 56 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Constructor — 168 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    └─ java.lang.Class[] — 32 B
-        │    ├─ java.lang.reflect.Constructor — 160 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    └─ java.lang.reflect.Constructor — 160 B
-        │         ├─ java.lang.String — 64 B
-        │         │    └─ byte[] — 40 B
-        │         └─ java.lang.Class[] — 24 B
-        ├─ java.lang.reflect.Field[] — 240 B
-        │    └─ java.lang.reflect.Field — 200 B
-        │         └─ jdk.internal.reflect.MethodHandleLongFieldAccessorImpl — 128 B
-        │              └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B
-        └─ java.lang.Class[] — 24 B
+       ├─ java.lang.reflect.Method[] — 72.5 KB
+       │   ├─ java.lang.reflect.Method — 472 B
+       │   │   ├─ java.lang.String — 352 B
+       │   │   │   └─ byte[] — 328 B
+       │   │   └─ java.lang.Class[] — 32 B
+       │   ├─ java.lang.reflect.Method — 432 B
+       │   │   ├─ java.lang.String — 312 B
+       │   │   │   └─ byte[] — 288 B
+       │   │   └─ java.lang.Class[] — 32 B
+       │   ├─ java.lang.reflect.Method — 416 B
+       │   │   ├─ java.lang.String — 248 B
+       │   │   │   └─ byte[] — 224 B
+       │   │   ├─ java.lang.String — 56 B
+       │   │   │   └─ byte[] — 32 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Method — 408 B
+       │   │   ├─ java.lang.String — 240 B
+       │   │   │   └─ byte[] — 216 B
+       │   │   ├─ java.lang.String — 56 B
+       │   │   │   └─ byte[] — 32 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Method — 408 B
+       │   │   ├─ java.lang.String — 240 B
+       │   │   │   └─ byte[] — 216 B
+       │   │   ├─ java.lang.String — 56 B
+       │   │   │   └─ byte[] — 32 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Method — 408 B
+       │   │   ├─ java.lang.String — 240 B
+       │   │   │   └─ byte[] — 216 B
+       │   │   ├─ java.lang.String — 56 B
+       │   │   │   └─ byte[] — 32 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Method — 408 B
+       │   │   ├─ java.lang.String — 240 B
+       │   │   │   └─ byte[] — 216 B
+       │   │   ├─ java.lang.String — 56 B
+       │   │   │   └─ byte[] — 32 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   └─ java.lang.reflect.Method — 400 B
+       │       ├─ java.lang.String — 232 B
+       │       │   └─ byte[] — 208 B
+       │       ├─ java.lang.String — 56 B
+       │       │   └─ byte[] — 32 B
+       │       └─ java.lang.Class[] — 24 B
+       ├─ java.lang.reflect.Constructor[] — 696 B
+       │   ├─ java.lang.reflect.Constructor — 176 B
+       │   │   ├─ java.lang.String — 80 B
+       │   │   │   └─ byte[] — 56 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Constructor — 168 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   └─ java.lang.Class[] — 32 B
+       │   ├─ java.lang.reflect.Constructor — 160 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   └─ java.lang.reflect.Constructor — 160 B
+       │       ├─ java.lang.String — 64 B
+       │       │   └─ byte[] — 40 B
+       │       └─ java.lang.Class[] — 24 B
+       ├─ java.lang.reflect.Field[] — 240 B
+       │   └─ java.lang.reflect.Field — 200 B
+       │       └─ jdk.internal.reflect.MethodHandleLongFieldAccessorImpl — 128 B
+       │           └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B
+       └─ java.lang.Class[] — 24 B
 
 8. **java.lang.ref.SoftReference** — 61.6 KB (946 objects in subtree)
    └─ java.lang.Class$ReflectionData — 61.5 KB
-        ├─ java.lang.reflect.Method[] — 60.3 KB
-        │    ├─ java.lang.reflect.Method — 496 B
-        │    │    ├─ java.lang.String — 368 B
-        │    │    │    └─ byte[] — 344 B
-        │    │    └─ java.lang.Class[] — 40 B
-        │    ├─ java.lang.reflect.Method — 472 B
-        │    │    ├─ java.lang.String — 352 B
-        │    │    │    └─ byte[] — 328 B
-        │    │    └─ java.lang.Class[] — 32 B
-        │    ├─ java.lang.reflect.Method — 432 B
-        │    │    ├─ java.lang.String — 312 B
-        │    │    │    └─ byte[] — 288 B
-        │    │    └─ java.lang.Class[] — 32 B
-        │    ├─ java.lang.reflect.Method — 424 B
-        │    │    ├─ java.lang.String — 312 B
-        │    │    │    └─ byte[] — 288 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Method — 424 B
-        │    │    ├─ java.lang.String — 312 B
-        │    │    │    └─ byte[] — 288 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Method — 392 B
-        │    │    ├─ java.lang.String — 264 B
-        │    │    │    └─ byte[] — 240 B
-        │    │    └─ java.lang.Class[] — 40 B
-        │    ├─ java.lang.reflect.Method — 392 B
-        │    │    ├─ java.lang.String — 280 B
-        │    │    │    └─ byte[] — 256 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    └─ java.lang.reflect.Method — 392 B
-        │         ├─ java.lang.String — 280 B
-        │         │    └─ byte[] — 256 B
-        │         └─ java.lang.Class[] — 24 B
-        ├─ java.lang.reflect.Constructor[] — 912 B
-        │    ├─ java.lang.reflect.Constructor — 184 B
-        │    │    ├─ java.lang.String — 80 B
-        │    │    │    └─ byte[] — 56 B
-        │    │    └─ java.lang.Class[] — 32 B
-        │    ├─ java.lang.reflect.Constructor — 184 B
-        │    │    ├─ java.lang.String — 72 B
-        │    │    │    └─ byte[] — 48 B
-        │    │    └─ java.lang.Class[] — 40 B
-        │    ├─ java.lang.reflect.Constructor — 168 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    └─ java.lang.Class[] — 32 B
-        │    ├─ java.lang.reflect.Constructor — 168 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    └─ java.lang.Class[] — 32 B
-        │    └─ java.lang.reflect.Constructor — 168 B
-        │         ├─ java.lang.String — 64 B
-        │         │    └─ byte[] — 40 B
-        │         └─ java.lang.Class[] — 32 B
-        ├─ java.lang.reflect.Field[] — 248 B
-        │    └─ java.lang.reflect.Field — 200 B
-        │         └─ jdk.internal.reflect.MethodHandleLongFieldAccessorImpl — 128 B
-        │              └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B
-        └─ java.lang.Class[] — 24 B
+       ├─ java.lang.reflect.Method[] — 60.3 KB
+       │   ├─ java.lang.reflect.Method — 496 B
+       │   │   ├─ java.lang.String — 368 B
+       │   │   │   └─ byte[] — 344 B
+       │   │   └─ java.lang.Class[] — 40 B
+       │   ├─ java.lang.reflect.Method — 472 B
+       │   │   ├─ java.lang.String — 352 B
+       │   │   │   └─ byte[] — 328 B
+       │   │   └─ java.lang.Class[] — 32 B
+       │   ├─ java.lang.reflect.Method — 432 B
+       │   │   ├─ java.lang.String — 312 B
+       │   │   │   └─ byte[] — 288 B
+       │   │   └─ java.lang.Class[] — 32 B
+       │   ├─ java.lang.reflect.Method — 424 B
+       │   │   ├─ java.lang.String — 312 B
+       │   │   │   └─ byte[] — 288 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Method — 424 B
+       │   │   ├─ java.lang.String — 312 B
+       │   │   │   └─ byte[] — 288 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Method — 392 B
+       │   │   ├─ java.lang.String — 264 B
+       │   │   │   └─ byte[] — 240 B
+       │   │   └─ java.lang.Class[] — 40 B
+       │   ├─ java.lang.reflect.Method — 392 B
+       │   │   ├─ java.lang.String — 280 B
+       │   │   │   └─ byte[] — 256 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   └─ java.lang.reflect.Method — 392 B
+       │       ├─ java.lang.String — 280 B
+       │       │   └─ byte[] — 256 B
+       │       └─ java.lang.Class[] — 24 B
+       ├─ java.lang.reflect.Constructor[] — 912 B
+       │   ├─ java.lang.reflect.Constructor — 184 B
+       │   │   ├─ java.lang.String — 80 B
+       │   │   │   └─ byte[] — 56 B
+       │   │   └─ java.lang.Class[] — 32 B
+       │   ├─ java.lang.reflect.Constructor — 184 B
+       │   │   ├─ java.lang.String — 72 B
+       │   │   │   └─ byte[] — 48 B
+       │   │   └─ java.lang.Class[] — 40 B
+       │   ├─ java.lang.reflect.Constructor — 168 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   └─ java.lang.Class[] — 32 B
+       │   ├─ java.lang.reflect.Constructor — 168 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   └─ java.lang.Class[] — 32 B
+       │   └─ java.lang.reflect.Constructor — 168 B
+       │       ├─ java.lang.String — 64 B
+       │       │   └─ byte[] — 40 B
+       │       └─ java.lang.Class[] — 32 B
+       ├─ java.lang.reflect.Field[] — 248 B
+       │   └─ java.lang.reflect.Field — 200 B
+       │       └─ jdk.internal.reflect.MethodHandleLongFieldAccessorImpl — 128 B
+       │           └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B
+       └─ java.lang.Class[] — 24 B
 
 9. **java.lang.ref.SoftReference** — 28.5 KB (618 objects in subtree)
    └─ java.lang.Class$ReflectionData — 28.4 KB
-        ├─ java.lang.reflect.Method[] — 12.5 KB
-        │    ├─ java.lang.reflect.Method — 240 B
-        │    │    ├─ java.lang.String — 80 B
-        │    │    │    └─ byte[] — 56 B
-        │    │    ├─ java.lang.Class[] — 24 B
-        │    │    ├─ java.lang.Class[] — 24 B
-        │    │    └─ byte[] — 24 B
-        │    ├─ java.lang.reflect.Method — 216 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    ├─ byte[] — 40 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Method — 216 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    ├─ byte[] — 40 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Method — 200 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    ├─ java.lang.Class[] — 24 B
-        │    │    └─ byte[] — 24 B
-        │    ├─ java.lang.reflect.Method — 200 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    ├─ java.lang.Class[] — 24 B
-        │    │    └─ byte[] — 24 B
-        │    ├─ java.lang.reflect.Method — 152 B
-        │    │    ├─ java.lang.Class[] — 40 B
-        │    │    └─ byte[] — 24 B
-        │    ├─ java.lang.reflect.Method — 144 B
-        │    │    ├─ java.lang.Class[] — 32 B
-        │    │    └─ byte[] — 24 B
-        │    └─ java.lang.reflect.Method — 144 B
-        │         ├─ java.lang.Class[] — 32 B
-        │         └─ byte[] — 24 B
-        ├─ java.lang.reflect.Method[] — 12.5 KB
-        │    ├─ java.lang.reflect.Method — 240 B
-        │    │    ├─ java.lang.String — 80 B
-        │    │    │    └─ byte[] — 56 B
-        │    │    ├─ java.lang.Class[] — 24 B
-        │    │    ├─ java.lang.Class[] — 24 B
-        │    │    └─ byte[] — 24 B
-        │    ├─ java.lang.reflect.Method — 216 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    ├─ byte[] — 40 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Method — 216 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    ├─ byte[] — 40 B
-        │    │    └─ java.lang.Class[] — 24 B
-        │    ├─ java.lang.reflect.Method — 200 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    ├─ java.lang.Class[] — 24 B
-        │    │    └─ byte[] — 24 B
-        │    ├─ java.lang.reflect.Method — 200 B
-        │    │    ├─ java.lang.String — 64 B
-        │    │    │    └─ byte[] — 40 B
-        │    │    ├─ java.lang.Class[] — 24 B
-        │    │    └─ byte[] — 24 B
-        │    ├─ java.lang.reflect.Method — 152 B
-        │    │    ├─ java.lang.Class[] — 40 B
-        │    │    └─ byte[] — 24 B
-        │    ├─ java.lang.reflect.Method — 144 B
-        │    │    ├─ java.lang.Class[] — 32 B
-        │    │    └─ byte[] — 24 B
-        │    └─ java.lang.reflect.Method — 144 B
-        │         ├─ java.lang.Class[] — 32 B
-        │         └─ byte[] — 24 B
-        ├─ java.lang.reflect.Field[] — 3.1 KB
-        │    ├─ java.lang.reflect.Field — 200 B
-        │    │    └─ jdk.internal.reflect.MethodHandleObjectFieldAccessorImpl — 128 B
-        │    │         └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B
-        │    ├─ java.lang.reflect.Field — 144 B
-        │    │    └─ java.lang.String — 72 B
-        │    │         └─ byte[] — 48 B
-        │    ├─ java.lang.reflect.Field — 144 B
-        │    │    └─ java.lang.String — 72 B
-        │    │         └─ byte[] — 48 B
-        │    ├─ java.lang.reflect.Field — 136 B
-        │    │    └─ java.lang.String — 64 B
-        │    │         └─ byte[] — 40 B
-        │    ├─ java.lang.reflect.Field — 136 B
-        │    │    └─ java.lang.String — 64 B
-        │    │         └─ byte[] — 40 B
-        │    ├─ java.lang.reflect.Field — 136 B
-        │    │    └─ java.lang.String — 64 B
-        │    │         └─ byte[] — 40 B
-        │    ├─ java.lang.reflect.Field — 136 B
-        │    │    └─ java.lang.String — 64 B
-        │    │         └─ byte[] — 40 B
-        │    └─ java.lang.reflect.Field — 136 B
-        │         └─ java.lang.String — 64 B
-        │              └─ byte[] — 40 B
-        ├─ java.lang.String — 64 B
-        │    └─ byte[] — 40 B
-        ├─ java.lang.String — 64 B
-        │    └─ byte[] — 40 B
-        ├─ java.lang.String — 64 B
-        │    └─ byte[] — 40 B
-        ├─ java.lang.String — 56 B
-        │    └─ byte[] — 32 B
-        └─ java.lang.String — 56 B
-             └─ byte[] — 32 B
+       ├─ java.lang.reflect.Method[] — 12.5 KB
+       │   ├─ java.lang.reflect.Method — 240 B
+       │   │   ├─ java.lang.String — 80 B
+       │   │   │   └─ byte[] — 56 B
+       │   │   ├─ java.lang.Class[] — 24 B
+       │   │   ├─ java.lang.Class[] — 24 B
+       │   │   └─ byte[] — 24 B
+       │   ├─ java.lang.reflect.Method — 216 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   ├─ byte[] — 40 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Method — 216 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   ├─ byte[] — 40 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Method — 200 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   ├─ java.lang.Class[] — 24 B
+       │   │   └─ byte[] — 24 B
+       │   ├─ java.lang.reflect.Method — 200 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   ├─ java.lang.Class[] — 24 B
+       │   │   └─ byte[] — 24 B
+       │   ├─ java.lang.reflect.Method — 152 B
+       │   │   ├─ java.lang.Class[] — 40 B
+       │   │   └─ byte[] — 24 B
+       │   ├─ java.lang.reflect.Method — 144 B
+       │   │   ├─ java.lang.Class[] — 32 B
+       │   │   └─ byte[] — 24 B
+       │   └─ java.lang.reflect.Method — 144 B
+       │       ├─ java.lang.Class[] — 32 B
+       │       └─ byte[] — 24 B
+       ├─ java.lang.reflect.Method[] — 12.5 KB
+       │   ├─ java.lang.reflect.Method — 240 B
+       │   │   ├─ java.lang.String — 80 B
+       │   │   │   └─ byte[] — 56 B
+       │   │   ├─ java.lang.Class[] — 24 B
+       │   │   ├─ java.lang.Class[] — 24 B
+       │   │   └─ byte[] — 24 B
+       │   ├─ java.lang.reflect.Method — 216 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   ├─ byte[] — 40 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Method — 216 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   ├─ byte[] — 40 B
+       │   │   └─ java.lang.Class[] — 24 B
+       │   ├─ java.lang.reflect.Method — 200 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   ├─ java.lang.Class[] — 24 B
+       │   │   └─ byte[] — 24 B
+       │   ├─ java.lang.reflect.Method — 200 B
+       │   │   ├─ java.lang.String — 64 B
+       │   │   │   └─ byte[] — 40 B
+       │   │   ├─ java.lang.Class[] — 24 B
+       │   │   └─ byte[] — 24 B
+       │   ├─ java.lang.reflect.Method — 152 B
+       │   │   ├─ java.lang.Class[] — 40 B
+       │   │   └─ byte[] — 24 B
+       │   ├─ java.lang.reflect.Method — 144 B
+       │   │   ├─ java.lang.Class[] — 32 B
+       │   │   └─ byte[] — 24 B
+       │   └─ java.lang.reflect.Method — 144 B
+       │       ├─ java.lang.Class[] — 32 B
+       │       └─ byte[] — 24 B
+       ├─ java.lang.reflect.Field[] — 3.1 KB
+       │   ├─ java.lang.reflect.Field — 200 B
+       │   │   └─ jdk.internal.reflect.MethodHandleObjectFieldAccessorImpl — 128 B
+       │   │       └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B
+       │   ├─ java.lang.reflect.Field — 144 B
+       │   │   └─ java.lang.String — 72 B
+       │   │       └─ byte[] — 48 B
+       │   ├─ java.lang.reflect.Field — 144 B
+       │   │   └─ java.lang.String — 72 B
+       │   │       └─ byte[] — 48 B
+       │   ├─ java.lang.reflect.Field — 136 B
+       │   │   └─ java.lang.String — 64 B
+       │   │       └─ byte[] — 40 B
+       │   ├─ java.lang.reflect.Field — 136 B
+       │   │   └─ java.lang.String — 64 B
+       │   │       └─ byte[] — 40 B
+       │   ├─ java.lang.reflect.Field — 136 B
+       │   │   └─ java.lang.String — 64 B
+       │   │       └─ byte[] — 40 B
+       │   ├─ java.lang.reflect.Field — 136 B
+       │   │   └─ java.lang.String — 64 B
+       │   │       └─ byte[] — 40 B
+       │   └─ java.lang.reflect.Field — 136 B
+       │       └─ java.lang.String — 64 B
+       │           └─ byte[] — 40 B
+       ├─ java.lang.String — 64 B
+       │   └─ byte[] — 40 B
+       ├─ java.lang.String — 64 B
+       │   └─ byte[] — 40 B
+       ├─ java.lang.String — 64 B
+       │   └─ byte[] — 40 B
+       ├─ java.lang.String — 56 B
+       │   └─ byte[] — 32 B
+       └─ java.lang.String — 56 B
+           └─ byte[] — 32 B
 
 10. **int[]** — 27.1 KB (1 object in subtree)
 
@@ -14736,9 +14223,9 @@ _Collection classes ranked by retained heap. **Ratio** = retained ÷ shallow: a 
 | `breeze.linalg.operators.DenseVector_HashVector_Ops`                                        |         0 |      0 B |   4.1 KB |   0.0× |
 | `breeze.linalg.operators.DenseVectorOps`                                                    |         0 |      0 B |   3.1 KB |   0.0× |
 | `java.util.WeakHashMap$KeySet`                                                              |       196 |   3.1 KB |   3.1 KB |   1.0× |
+| `breeze.linalg.operators.DenseVector_ComparisonOps`                                         |         0 |      0 B |   3.0 KB |   0.0× |
 | `breeze.linalg.operators.DenseVector_DoubleOps`                                             |         0 |      0 B |   3.0 KB |   0.0× |
 | `breeze.linalg.operators.DenseVector_FloatOps`                                              |         0 |      0 B |   3.0 KB |   0.0× |
-| `breeze.linalg.operators.DenseVector_ComparisonOps`                                         |         0 |      0 B |   3.0 KB |   0.0× |
 | `breeze.linalg.operators.SparseVector_DenseMatrixOps`                                       |         0 |      0 B |   2.9 KB |   0.0× |
 | `com.sun.jmx.mbeanserver.WeakIdentityHashMap`                                               |         2 |     48 B |   2.4 KB |  50.7× |
 | `scala.collection.mutable.HashSet`                                                          |        17 |    544 B |   2.3 KB |   4.3× |
@@ -14752,1131 +14239,1131 @@ _Collection classes ranked by retained heap. **Ratio** = retained ÷ shallow: a 
 | `org.apache.spark.util.collection.OpenHashSet$mcJ$sp`                                       |         0 |      0 B |   1.4 KB |   0.0× |
 | `java.util.Hashtable`                                                                       |        10 |    480 B |   1.4 KB |   2.9× |
 | `breeze.linalg.operators.HashVectorExpandOps`                                               |         0 |      0 B |   1.3 KB |   0.0× |
-| `breeze.linalg.operators.VectorOps`                                                         |         0 |      0 B |   1.3 KB |   0.0× |
 | `breeze.linalg.SliceVectorOps`                                                              |         0 |      0 B |   1.3 KB |   0.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops`                                      |         0 |      0 B |   1.3 KB |   0.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps`                                      |         0 |      0 B |   1.3 KB |   0.0× |
+| `breeze.linalg.operators.VectorOps`                                                         |         0 |      0 B |   1.3 KB |   0.0× |
 | `breeze.linalg.operators.DenseVector_GenericOps`                                            |         0 |      0 B |   1.3 KB |   0.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps`                                      |         0 |      0 B |   1.3 KB |   0.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops`                                      |         0 |      0 B |   1.3 KB |   0.0× |
 | `java.util.LinkedList`                                                                      |        14 |    448 B |   1.2 KB |   2.8× |
 | `org.apache.spark.mllib.linalg.Vectors$`                                                    |         1 |     16 B |   1.1 KB |  70.5× |
 | `scala.collection.immutable.Vector`                                                         |         0 |      0 B |   1.0 KB |   0.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$176`                                         |         1 |     24 B |   1016 B |  42.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$175`                                         |         1 |     24 B |   1016 B |  42.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$174`                                         |         1 |     24 B |   1016 B |  42.3× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$173`                                         |         1 |     24 B |   1016 B |  42.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$174`                                         |         1 |     24 B |   1016 B |  42.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$175`                                         |         1 |     24 B |   1016 B |  42.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$176`                                         |         1 |     24 B |   1016 B |  42.3× |
 | `scala.collection.immutable.VectorBuilder`                                                  |         0 |      0 B |    984 B |   0.0× |
 | `org.apache.spark.util.collection.OpenHashSet$`                                             |         1 |     16 B |    944 B |  59.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$16`                                          |         1 |     24 B |    888 B |  37.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$15`                                          |         1 |     24 B |    888 B |  37.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$14`                                          |         1 |     24 B |    888 B |  37.0× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$13`                                          |         1 |     24 B |    888 B |  37.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$12`                                          |         1 |     24 B |    856 B |  35.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$11`                                          |         1 |     24 B |    856 B |  35.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$14`                                          |         1 |     24 B |    888 B |  37.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$15`                                          |         1 |     24 B |    888 B |  37.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$16`                                          |         1 |     24 B |    888 B |  37.0× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$10`                                          |         1 |     24 B |    856 B |  35.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$11`                                          |         1 |     24 B |    856 B |  35.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$12`                                          |         1 |     24 B |    856 B |  35.7× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$9`                                           |         1 |     24 B |    856 B |  35.7× |
-| `com.sun.jmx.mbeanserver.WeakIdentityHashMap$IdentityWeakReference`                         |        26 |    832 B |    832 B |   1.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$28`                                          |         1 |     24 B |    832 B |  34.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$27`                                          |         1 |     24 B |    832 B |  34.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$26`                                          |         1 |     24 B |    832 B |  34.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$25`                                          |         1 |     24 B |    832 B |  34.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$24`                                          |         1 |     24 B |    832 B |  34.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$23`                                          |         1 |     24 B |    832 B |  34.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$22`                                          |         1 |     24 B |    832 B |  34.7× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$21`                                          |         1 |     24 B |    832 B |  34.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$22`                                          |         1 |     24 B |    832 B |  34.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$23`                                          |         1 |     24 B |    832 B |  34.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$24`                                          |         1 |     24 B |    832 B |  34.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$25`                                          |         1 |     24 B |    832 B |  34.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$26`                                          |         1 |     24 B |    832 B |  34.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$27`                                          |         1 |     24 B |    832 B |  34.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$28`                                          |         1 |     24 B |    832 B |  34.7× |
+| `com.sun.jmx.mbeanserver.WeakIdentityHashMap$IdentityWeakReference`                         |        26 |    832 B |    832 B |   1.0× |
 | `java.util.LinkedHashMap$LinkedEntrySet`                                                    |        34 |    816 B |    816 B |   1.0× |
 | `java.util.HashMap$EntrySet`                                                                |        50 |    800 B |    800 B |   1.0× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$125`                                         |         1 |     24 B |    784 B |  32.7× |
-| `java.util.LinkedList$Node`                                                                 |        26 |    624 B |    776 B |   1.2× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$20`                                          |         1 |     24 B |    776 B |  32.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$19`                                          |         1 |     24 B |    776 B |  32.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$18`                                          |         1 |     24 B |    776 B |  32.3× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$17`                                          |         1 |     24 B |    776 B |  32.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$171`                                         |         1 |     24 B |    744 B |  31.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$170`                                         |         1 |     24 B |    744 B |  31.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$169`                                         |         1 |     24 B |    744 B |  31.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$168`                                         |         1 |     24 B |    744 B |  31.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$8`                                           |         1 |     24 B |    744 B |  31.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$7`                                           |         1 |     24 B |    744 B |  31.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$6`                                           |         1 |     24 B |    744 B |  31.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$5`                                           |         1 |     24 B |    744 B |  31.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$4`                                           |         1 |     24 B |    744 B |  31.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$3`                                           |         1 |     24 B |    744 B |  31.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$2`                                           |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$18`                                          |         1 |     24 B |    776 B |  32.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$19`                                          |         1 |     24 B |    776 B |  32.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$20`                                          |         1 |     24 B |    776 B |  32.3× |
+| `java.util.LinkedList$Node`                                                                 |        26 |    624 B |    776 B |   1.2× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$1`                                           |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$168`                                         |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$169`                                         |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$170`                                         |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$171`                                         |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$2`                                           |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$3`                                           |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$4`                                           |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$5`                                           |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$6`                                           |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$7`                                           |         1 |     24 B |    744 B |  31.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$8`                                           |         1 |     24 B |    744 B |  31.0× |
 | `scala.collection.mutable.HashMap`                                                          |         3 |     96 B |    712 B |   7.4× |
 | `java.util.HashMap$KeySet`                                                                  |        44 |    704 B |    704 B |   1.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$58`                                          |         1 |     24 B |    672 B |  28.0× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$42`                                          |         1 |     24 B |    672 B |  28.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$58`                                          |         1 |     24 B |    672 B |  28.0× |
 | `breeze.linalg.Vector`                                                                      |         0 |      0 B |    648 B |   0.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$111`                                         |         1 |     24 B |    592 B |  24.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$110`                                         |         1 |     24 B |    592 B |  24.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$109`                                         |         1 |     24 B |    592 B |  24.7× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$108`                                         |         1 |     24 B |    592 B |  24.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$127`                                         |         1 |     24 B |    560 B |  23.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$126`                                         |         1 |     24 B |    560 B |  23.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$124`                                         |         1 |     24 B |    560 B |  23.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$123`                                         |         1 |     24 B |    560 B |  23.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$122`                                         |         1 |     24 B |    560 B |  23.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$121`                                         |         1 |     24 B |    560 B |  23.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$109`                                         |         1 |     24 B |    592 B |  24.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$110`                                         |         1 |     24 B |    592 B |  24.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$111`                                         |         1 |     24 B |    592 B |  24.7× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$120`                                         |         1 |     24 B |    560 B |  23.3× |
-| `java.util.concurrent.ConcurrentHashMap$EntrySetView`                                       |        34 |    544 B |    552 B |   1.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$60`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$59`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$57`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$56`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$55`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$54`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$53`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$48`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$47`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$46`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$45`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$44`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$43`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$41`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$40`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$39`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$38`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$37`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$36`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$35`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$34`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$33`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$32`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$31`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$30`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$121`                                         |         1 |     24 B |    560 B |  23.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$122`                                         |         1 |     24 B |    560 B |  23.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$123`                                         |         1 |     24 B |    560 B |  23.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$124`                                         |         1 |     24 B |    560 B |  23.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$126`                                         |         1 |     24 B |    560 B |  23.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$127`                                         |         1 |     24 B |    560 B |  23.3× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$29`                                          |         1 |     24 B |    552 B |  23.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$119`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$118`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$117`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$116`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$115`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$114`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$113`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$112`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$107`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$106`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$105`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$104`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$103`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$102`                                         |         1 |     24 B |    536 B |  22.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$101`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$30`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$31`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$32`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$33`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$34`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$35`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$36`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$37`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$38`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$39`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$40`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$41`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$43`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$44`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$45`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$46`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$47`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$48`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$53`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$54`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$55`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$56`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$57`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$59`                                          |         1 |     24 B |    552 B |  23.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$60`                                          |         1 |     24 B |    552 B |  23.0× |
+| `java.util.concurrent.ConcurrentHashMap$EntrySetView`                                       |        34 |    544 B |    552 B |   1.0× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$100`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$101`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$102`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$103`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$104`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$105`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$106`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$107`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$112`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$113`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$114`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$115`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$116`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$117`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$118`                                         |         1 |     24 B |    536 B |  22.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$119`                                         |         1 |     24 B |    536 B |  22.3× |
 | `java.util.LinkedHashMap$LinkedKeyIterator`                                                 |         1 |     32 B |    480 B |  15.0× |
 | `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$54`                             |         1 |     24 B |    456 B |  19.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$52`                                          |         1 |     24 B |    440 B |  18.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$51`                                          |         1 |     24 B |    440 B |  18.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$50`                                          |         1 |     24 B |    440 B |  18.3× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$49`                                          |         1 |     24 B |    440 B |  18.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$155`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$154`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$153`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$152`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$151`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$150`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$149`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$148`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$147`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$146`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$145`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$144`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$139`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$138`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$137`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$136`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$135`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$134`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$133`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$132`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$131`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$130`                                         |         1 |     24 B |    424 B |  17.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$129`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$50`                                          |         1 |     24 B |    440 B |  18.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$51`                                          |         1 |     24 B |    440 B |  18.3× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$52`                                          |         1 |     24 B |    440 B |  18.3× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$128`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$129`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$130`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$131`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$132`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$133`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$134`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$135`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$136`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$137`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$138`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$139`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$144`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$145`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$146`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$147`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$148`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$149`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$150`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$151`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$152`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$153`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$154`                                         |         1 |     24 B |    424 B |  17.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$155`                                         |         1 |     24 B |    424 B |  17.7× |
 | `org.apache.spark.util.collection.OpenHashSet`                                              |         0 |      0 B |    408 B |   0.0× |
 | `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                  |         1 |     16 B |    400 B |  25.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$180`                                         |         1 |     32 B |    336 B |  10.5× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$179`                                         |         1 |     32 B |    336 B |  10.5× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$178`                                         |         1 |     32 B |    336 B |  10.5× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$177`                                         |         1 |     32 B |    336 B |  10.5× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$92`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$91`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$90`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$89`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$88`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$87`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$86`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$85`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$84`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$83`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$82`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$81`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$80`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$79`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$78`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$77`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$76`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$75`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$74`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$73`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$72`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$71`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$70`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$69`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$68`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$67`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$66`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$65`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$64`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$63`                                          |         1 |     24 B |    328 B |  13.7× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$62`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$178`                                         |         1 |     32 B |    336 B |  10.5× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$179`                                         |         1 |     32 B |    336 B |  10.5× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$180`                                         |         1 |     32 B |    336 B |  10.5× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$61`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$62`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$63`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$64`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$65`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$66`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$67`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$68`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$69`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$70`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$71`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$72`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$73`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$74`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$75`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$76`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$77`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$78`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$79`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$80`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$81`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$82`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$83`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$84`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$85`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$86`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$87`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$88`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$89`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$90`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$91`                                          |         1 |     24 B |    328 B |  13.7× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$92`                                          |         1 |     24 B |    328 B |  13.7× |
 | `jdk.internal.vm.vector.VectorSupport`                                                      |         0 |      0 B |    328 B |   0.0× |
-| `java.util.Hashtable$Entry`                                                                 |         9 |    288 B |    320 B |   1.1× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$60`                             |         1 |     24 B |    320 B |  13.3× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$59`                             |         1 |     24 B |    320 B |  13.3× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$57`                             |         1 |     24 B |    320 B |  13.3× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$56`                             |         1 |     24 B |    320 B |  13.3× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$55`                             |         1 |     24 B |    320 B |  13.3× |
 | `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$53`                             |         1 |     24 B |    320 B |  13.3× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$55`                             |         1 |     24 B |    320 B |  13.3× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$56`                             |         1 |     24 B |    320 B |  13.3× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$57`                             |         1 |     24 B |    320 B |  13.3× |
 | `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$58`                             |         1 |     24 B |    320 B |  13.3× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$159`                                         |         1 |     24 B |    312 B |  13.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$158`                                         |         1 |     24 B |    312 B |  13.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$157`                                         |         1 |     24 B |    312 B |  13.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$156`                                         |         1 |     24 B |    312 B |  13.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$143`                                         |         1 |     24 B |    312 B |  13.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$142`                                         |         1 |     24 B |    312 B |  13.0× |
-| `breeze.linalg.operators.VectorExpandOps$$anon$141`                                         |         1 |     24 B |    312 B |  13.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$59`                             |         1 |     24 B |    320 B |  13.3× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$60`                             |         1 |     24 B |    320 B |  13.3× |
+| `java.util.Hashtable$Entry`                                                                 |         9 |    288 B |    320 B |   1.1× |
 | `breeze.linalg.operators.VectorExpandOps$$anon$140`                                         |         1 |     24 B |    312 B |  13.0× |
-| `scala.collection.mutable.HashSet$Node`                                                     |        10 |    240 B |    280 B |   1.2× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$141`                                         |         1 |     24 B |    312 B |  13.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$142`                                         |         1 |     24 B |    312 B |  13.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$143`                                         |         1 |     24 B |    312 B |  13.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$156`                                         |         1 |     24 B |    312 B |  13.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$157`                                         |         1 |     24 B |    312 B |  13.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$158`                                         |         1 |     24 B |    312 B |  13.0× |
+| `breeze.linalg.operators.VectorExpandOps$$anon$159`                                         |         1 |     24 B |    312 B |  13.0× |
 | `scala.collection.mutable.ArrayDeque`                                                       |         0 |      0 B |    280 B |   0.0× |
-| `java.util.HashMap$Values`                                                                  |        16 |    256 B |    256 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$52`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$51`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$50`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$49`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$48`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$47`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$46`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$45`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$44`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$43`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$42`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$41`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$40`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$39`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$38`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$37`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$36`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$35`                             |         1 |     24 B |    256 B |  10.7× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$34`                             |         1 |     24 B |    256 B |  10.7× |
+| `scala.collection.mutable.HashSet$Node`                                                     |        10 |    240 B |    280 B |   1.2× |
 | `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$33`                             |         1 |     24 B |    256 B |  10.7× |
-| `java.util.concurrent.ConcurrentHashMap$ValuesView`                                         |        13 |    208 B |    216 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$32`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$31`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$30`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$29`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$28`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$27`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$26`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$25`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$24`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$23`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$22`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$21`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$20`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$19`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$18`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$17`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$16`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$15`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$14`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$13`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$12`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$11`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$34`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$35`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$36`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$37`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$38`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$39`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$40`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$41`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$42`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$43`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$44`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$45`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$46`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$47`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$48`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$49`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$50`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$51`                             |         1 |     24 B |    256 B |  10.7× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$52`                             |         1 |     24 B |    256 B |  10.7× |
+| `java.util.HashMap$Values`                                                                  |        16 |    256 B |    256 B |   1.0× |
 | `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$10`                             |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$9`                              |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$8`                              |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$7`                              |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$6`                              |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$11`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$12`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$13`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$14`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$15`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$16`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$17`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$18`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$19`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$20`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$21`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$22`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$23`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$24`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$25`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$26`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$27`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$28`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$29`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$30`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$31`                             |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$32`                             |         1 |     24 B |    216 B |   9.0× |
 | `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$5`                              |         1 |     24 B |    216 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_GenericOps$$anon$18`                                   |         0 |      0 B |    208 B |   0.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$6`                              |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$7`                              |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$8`                              |         1 |     24 B |    216 B |   9.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$9`                              |         1 |     24 B |    216 B |   9.0× |
+| `java.util.concurrent.ConcurrentHashMap$ValuesView`                                         |        13 |    208 B |    216 B |   1.0× |
 | `breeze.linalg.DenseVector`                                                                 |         0 |      0 B |    208 B |   0.0× |
+| `breeze.linalg.operators.DenseVector_GenericOps$$anon$18`                                   |         0 |      0 B |    208 B |   0.0× |
 | `io.netty.util.internal.DefaultPriorityQueue`                                               |         1 |     24 B |    200 B |   8.3× |
+| `breeze.linalg.operators.DenseVector_TraversalOps$$anon$4`                                  |        12 |    192 B |    192 B |   1.0× |
 | `java.util.LinkedHashMap$LinkedValues`                                                      |         8 |    192 B |    192 B |   1.0× |
 | `java.util.concurrent.ConcurrentHashMap$CounterCell`                                        |         8 |    192 B |    192 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_TraversalOps$$anon$4`                                  |        12 |    192 B |    192 B |   1.0× |
 | `java.util.PriorityQueue`                                                                   |         1 |     32 B |    176 B |   5.5× |
 | `scala.collection.mutable.HashMap$Node`                                                     |         4 |    128 B |    168 B |   1.3× |
 | `scala.collection.mutable.LinkedHashMap`                                                    |         1 |     32 B |    160 B |   5.0× |
 | `scala.collection.immutable.Vector$`                                                        |         1 |     16 B |    144 B |   9.0× |
 | `scala.collection.immutable.Vector$`                                                        |         1 |     16 B |    144 B |   9.0× |
-| `breeze.linalg.operators.DenseVector_DoubleOps$impl_scaleAdd_InPlace_DV_T_DV_Double$`       |         1 |     16 B |    136 B |   8.5× |
 | `breeze.linalg.operators.DenseVector_DoubleOps$canDotD$`                                    |         1 |     16 B |    136 B |   8.5× |
+| `breeze.linalg.operators.DenseVector_DoubleOps$impl_scaleAdd_InPlace_DV_T_DV_Double$`       |         1 |     16 B |    136 B |   8.5× |
 | `breeze.linalg.operators.SparseVector_GenericOps`                                           |         0 |      0 B |    136 B |   0.0× |
-| `scala.collection.immutable.VectorStatics$`                                                 |         1 |     16 B |    128 B |   8.0× |
+| `breeze.linalg.DenseVectorDeps$$anon$12`                                                    |         8 |    128 B |    128 B |   1.0× |
+| `breeze.math.MutableVectorField`                                                            |         0 |      0 B |    128 B |   0.0× |
 | `java.util.IdentityHashMap$KeySet`                                                          |         8 |    128 B |    128 B |   1.0× |
 | `scala.collection.immutable.VectorStatics$`                                                 |         1 |     16 B |    128 B |   8.0× |
-| `breeze.linalg.DenseVectorDeps$$anon$12`                                                    |         8 |    128 B |    128 B |   1.0× |
+| `scala.collection.immutable.VectorStatics$`                                                 |         1 |     16 B |    128 B |   8.0× |
 | `scala.collection.mutable.LinkedHashSet`                                                    |         0 |      0 B |    128 B |   0.0× |
-| `breeze.math.MutableVectorField`                                                            |         0 |      0 B |    128 B |   0.0× |
 | `scala.collection.immutable.Vector1`                                                        |         2 |     32 B |    120 B |   3.8× |
 | `scala.collection.mutable.ArrayDequeOps`                                                    |         0 |      0 B |    120 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$mcJ$sp$$Lambda+0x00007b0ac0742a38`            |         1 |     16 B |    112 B |   7.0× |
-| `org.apache.spark.util.collection.OpenHashSet$mcJ$sp$$Lambda+0x00007b0ac0743378`            |         1 |     16 B |    112 B |   7.0× |
-| `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741048`                  |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$96`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$95`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$94`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$93`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$92`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$91`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$90`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$89`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$88`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$87`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$86`                                      |         1 |     16 B |    112 B |   7.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$85`                                      |         1 |     16 B |    112 B |   7.0× |
 | `breeze.linalg.DenseVector$CanZipMapKeyValuesDenseVector`                                   |         4 |     64 B |    112 B |   1.8× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$85`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$86`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$87`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$88`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$89`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$90`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$91`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$92`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$93`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$94`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$95`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$96`                                      |         1 |     16 B |    112 B |   7.0× |
+| `breeze.math.MutableInnerProductVectorSpace`                                                |         0 |      0 B |    112 B |   0.0× |
+| `io.netty.util.internal.PriorityQueue`                                                      |         0 |      0 B |    112 B |   0.0× |
+| `org.apache.spark.mllib.linalg.Vector`                                                      |         0 |      0 B |    112 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741048`                  |         1 |     16 B |    112 B |   7.0× |
 | `org.apache.spark.util.collection.OpenHashSet$mcI$sp$$Lambda+0x00007b0ac074c9d8`            |         1 |     16 B |    112 B |   7.0× |
 | `org.apache.spark.util.collection.OpenHashSet$mcI$sp$$Lambda+0x00007b0ac074cc90`            |         1 |     16 B |    112 B |   7.0× |
 | `org.apache.spark.util.collection.OpenHashSet$mcI$sp$$Lambda+0x00007b0ac074d198`            |         1 |     16 B |    112 B |   7.0× |
 | `org.apache.spark.util.collection.OpenHashSet$mcI$sp$$Lambda+0x00007b0ac074d690`            |         1 |     16 B |    112 B |   7.0× |
+| `org.apache.spark.util.collection.OpenHashSet$mcJ$sp$$Lambda+0x00007b0ac0742a38`            |         1 |     16 B |    112 B |   7.0× |
 | `org.apache.spark.util.collection.OpenHashSet$mcJ$sp$$Lambda+0x00007b0ac07430c0`            |         1 |     16 B |    112 B |   7.0× |
+| `org.apache.spark.util.collection.OpenHashSet$mcJ$sp$$Lambda+0x00007b0ac0743378`            |         1 |     16 B |    112 B |   7.0× |
 | `org.apache.spark.util.collection.OpenHashSet$mcJ$sp$$Lambda+0x00007b0ac0743a00`            |         1 |     16 B |    112 B |   7.0× |
-| `org.apache.spark.mllib.linalg.Vector`                                                      |         0 |      0 B |    112 B |   0.0× |
-| `io.netty.util.internal.PriorityQueue`                                                      |         0 |      0 B |    112 B |   0.0× |
-| `breeze.math.MutableInnerProductVectorSpace`                                                |         0 |      0 B |    112 B |   0.0× |
-| `scala.collection.immutable.Vector`                                                         |         0 |      0 B |    104 B |   0.0× |
 | `breeze.linalg.StorageVector`                                                               |         0 |      0 B |    104 B |   0.0× |
-| `breeze.math.MutableVectorSpace`                                                            |         0 |      0 B |    104 B |   0.0× |
 | `breeze.math.MutableVectorRing`                                                             |         0 |      0 B |    104 B |   0.0× |
-| `java.util.LinkedHashMap$LinkedKeySet`                                                      |         4 |     96 B |     96 B |   1.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$65`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$64`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$63`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$62`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$61`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$187`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$188`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$186`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$185`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$152`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$151`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$150`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$149`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$148`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$147`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$146`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$145`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$144`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$143`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$142`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$141`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$140`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$139`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$138`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$137`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$136`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$135`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$134`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$133`                                     |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$209`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$208`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$207`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$206`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$205`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$204`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$203`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$202`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$201`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$200`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$199`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$198`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$197`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$196`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$195`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$194`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$84`                                      |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$83`                                      |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$82`                                      |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$81`                                      |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$249`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$248`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$247`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$246`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$245`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$244`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$243`                             |         1 |     16 B |     96 B |   6.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$242`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.math.MutableVectorSpace`                                                            |         0 |      0 B |    104 B |   0.0× |
+| `scala.collection.immutable.Vector`                                                         |         0 |      0 B |    104 B |   0.0× |
 | `breeze.linalg.DenseVector$$anon$1`                                                         |         4 |     96 B |     96 B |   1.0× |
 | `breeze.linalg.VectorConstructors$$anon$2`                                                  |         4 |     96 B |     96 B |   1.0× |
-| `java.util.ArrayList$Itr`                                                                   |         3 |     96 B |     96 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$133`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$134`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$135`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$136`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$137`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$138`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$139`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$140`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$141`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$142`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$143`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$144`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$145`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$146`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$147`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$148`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$149`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$150`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$151`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$152`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$185`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$186`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$187`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$188`                                     |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$81`                                      |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$82`                                      |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$83`                                      |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$84`                                      |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$194`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$195`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$196`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$197`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$198`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$199`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$200`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$201`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$202`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$203`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$204`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$205`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$206`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$207`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$208`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$209`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$61`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$62`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$63`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$64`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$65`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$242`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$243`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$244`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$245`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$246`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$247`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$248`                             |         1 |     16 B |     96 B |   6.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$249`                             |         1 |     16 B |     96 B |   6.0× |
 | `breeze.linalg.operators.Vector_GenericOps`                                                 |         0 |      0 B |     96 B |   0.0× |
 | `breeze.math.LPVectorField`                                                                 |         0 |      0 B |     96 B |   0.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$CanZipMapValuesSparseVector$mcII$sp`         |         1 |     40 B |     88 B |   2.2× |
-| `breeze.linalg.operators.SparseVectorExpandOps$CanZipMapValuesSparseVector$mcDD$sp`         |         1 |     40 B |     88 B |   2.2× |
+| `java.util.ArrayList$Itr`                                                                   |         3 |     96 B |     96 B |   1.0× |
+| `java.util.LinkedHashMap$LinkedKeySet`                                                      |         4 |     96 B |     96 B |   1.0× |
 | `breeze.linalg.DenseVector$CanZipMapValuesDenseVector`                                      |         2 |     32 B |     88 B |   2.8× |
-| `java.util.Vector`                                                                          |         0 |      0 B |     88 B |   0.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$CanZipMapValuesSparseVector$mcDD$sp`         |         1 |     40 B |     88 B |   2.2× |
+| `breeze.linalg.operators.SparseVectorExpandOps$CanZipMapValuesSparseVector$mcII$sp`         |         1 |     40 B |     88 B |   2.2× |
 | `breeze.math.VectorField`                                                                   |         0 |      0 B |     88 B |   0.0× |
-| `scala.collection.immutable.NewVectorIterator`                                              |         1 |     80 B |     80 B |   1.0× |
-| `scala.collection.immutable.NewVectorIterator`                                              |         1 |     80 B |     80 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$CanZipMapValuesSparseVector`                 |         1 |     32 B |     80 B |   2.5× |
-| `breeze.linalg.operators.HashVector_GenericOps$CanZipMapValuesHashVector$mcII$sp`           |         1 |     32 B |     80 B |   2.5× |
-| `breeze.linalg.operators.HashVector_GenericOps$CanZipMapValuesHashVector$mcDD$sp`           |         1 |     32 B |     80 B |   2.5× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$184`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$183`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$182`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$181`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$180`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$179`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$178`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$177`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$176`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$175`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$174`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$173`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$168`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$167`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$166`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$165`                                     |         1 |     16 B |     80 B |   5.0× |
-| `breeze.linalg.DenseVector$CanZipMapValuesDenseVector$mcII$sp`                              |         1 |     24 B |     80 B |   3.3× |
+| `java.util.Vector`                                                                          |         0 |      0 B |     88 B |   0.0× |
 | `breeze.linalg.DenseVector$CanZipMapValuesDenseVector$mcDD$sp`                              |         1 |     24 B |     80 B |   3.3× |
+| `breeze.linalg.DenseVector$CanZipMapValuesDenseVector$mcII$sp`                              |         1 |     24 B |     80 B |   3.3× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$165`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$166`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$167`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$168`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$173`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$174`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$175`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$176`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$177`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$178`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$179`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$180`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$181`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$182`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$183`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$184`                                     |         1 |     16 B |     80 B |   5.0× |
+| `breeze.linalg.operators.HashVector_GenericOps$CanZipMapValuesHashVector$mcDD$sp`           |         1 |     32 B |     80 B |   2.5× |
+| `breeze.linalg.operators.HashVector_GenericOps$CanZipMapValuesHashVector$mcII$sp`           |         1 |     32 B |     80 B |   2.5× |
+| `breeze.linalg.operators.SparseVectorExpandOps$CanZipMapValuesSparseVector`                 |         1 |     32 B |     80 B |   2.5× |
 | `breeze.math.InnerProductVectorSpace`                                                       |         0 |      0 B |     80 B |   0.0× |
 | `breeze.math.NormedVectorSpace`                                                             |         0 |      0 B |     80 B |   0.0× |
-| `scala.collection.mutable.ArrayDeque$`                                                      |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.HashVector_GenericOps$CanZipMapValuesHashVector`                   |         1 |     24 B |     72 B |   3.0× |
-| `breeze.linalg.operators.DenseVector_FloatOps$impl_scaledAdd_InPlace_DV_S_DV_Float$`        |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.DenseVector_FloatOps$$anon$5`                                      |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$137`                                   |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$136`                                   |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$135`                                   |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$134`                                   |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.BitVectorOps$$anon$24`                                             |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.BitVectorOps$$anon$23`                                             |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.BitVectorOps$$anon$22`                                             |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.BitVectorOps$$anon$21`                                             |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.BitVectorOps$$anon$16`                                             |         1 |     16 B |     72 B |   4.5× |
-| `breeze.linalg.operators.DenseVector_DoubleOps$$anonfun$impl_dim_DV_eq_I$2`                 |         4 |     64 B |     72 B |   1.1× |
+| `scala.collection.immutable.NewVectorIterator`                                              |         1 |     80 B |     80 B |   1.0× |
+| `scala.collection.immutable.NewVectorIterator`                                              |         1 |     80 B |     80 B |   1.0× |
 | `breeze.linalg.VectorLike`                                                                  |         0 |      0 B |     72 B |   0.0× |
 | `breeze.linalg.VectorLike$mcD$sp`                                                           |         0 |      0 B |     72 B |   0.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$16`                                             |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.BitVectorOps$$anon$21`                                             |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.BitVectorOps$$anon$22`                                             |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.BitVectorOps$$anon$23`                                             |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.BitVectorOps$$anon$24`                                             |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.DenseVector_DoubleOps$$anonfun$impl_dim_DV_eq_I$2`                 |         4 |     64 B |     72 B |   1.1× |
+| `breeze.linalg.operators.DenseVector_FloatOps$$anon$5`                                      |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.DenseVector_FloatOps$impl_scaledAdd_InPlace_DV_S_DV_Float$`        |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.HashVector_GenericOps$CanZipMapValuesHashVector`                   |         1 |     24 B |     72 B |   3.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$134`                                   |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$135`                                   |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$136`                                   |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$137`                                   |         1 |     16 B |     72 B |   4.5× |
 | `breeze.math.VectorRing`                                                                    |         0 |      0 B |     72 B |   0.0× |
 | `breeze.math.VectorSpace`                                                                   |         0 |      0 B |     72 B |   0.0× |
-| `scala.collection.immutable.Vector0$`                                                       |         1 |     24 B |     64 B |   2.7× |
-| `scala.collection.immutable.Vector0$`                                                       |         1 |     24 B |     64 B |   2.7× |
-| `breeze.linalg.operators.SparseVector_DenseMatrixOps$$anon$214`                             |         1 |     16 B |     64 B |   4.0× |
+| `scala.collection.mutable.ArrayDeque$`                                                      |         1 |     16 B |     72 B |   4.5× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$125`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$126`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$127`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$128`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$129`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$130`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$131`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$132`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$133`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$134`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$135`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$136`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$137`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$138`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$139`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$140`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$141`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$142`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$143`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$144`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$145`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$146`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$147`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$148`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$149`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$150`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$151`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$152`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$153`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$154`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$155`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$156`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$157`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$158`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$159`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$160`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$161`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$162`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$163`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$164`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$165`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$166`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$167`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$168`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$169`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$170`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$171`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$172`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$173`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$174`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$175`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$176`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$177`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$178`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$179`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$180`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$209`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$210`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$211`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$213`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$215`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$217`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$219`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$220`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$1`                                |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$2`                                |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$3`                                |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$4`                                |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$100`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$101`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$106`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$108`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$110`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$112`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$114`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$115`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$116`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$117`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$118`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$119`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$120`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$121`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$122`                            |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$66`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$67`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$68`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$69`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$70`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$71`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$72`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$73`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$74`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$75`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$76`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$77`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$78`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$79`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$80`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$81`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$82`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$83`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$84`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$85`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$86`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$87`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$88`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$89`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$90`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$91`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$92`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$93`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$94`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$95`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$96`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$97`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$98`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$99`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$1`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$2`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$3`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$4`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$100`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$101`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$102`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$103`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$104`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$105`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$106`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$107`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$108`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$109`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$110`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$111`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$112`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$113`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$114`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$115`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$116`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$117`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$118`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$119`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$120`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$121`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$122`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$123`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$124`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$153`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$154`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$155`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$156`                                     |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$69`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$70`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$71`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$72`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$73`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$74`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$75`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$76`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$77`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$78`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$79`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$80`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$97`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$98`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$99`                                      |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$10`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$11`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$12`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$13`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$14`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$15`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$16`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$17`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$18`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$19`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$20`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$21`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$22`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$23`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$24`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$25`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$26`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$27`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$28`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$29`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$30`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$31`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$32`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$33`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$34`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$35`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$36`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$37`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$38`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$39`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$40`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$41`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$42`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$43`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$44`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$45`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$46`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$47`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$48`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$49`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$50`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$51`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$52`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$53`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$54`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$55`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$56`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$57`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$58`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$59`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$60`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$61`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$62`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$63`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$64`                               |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$9`                                |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$210`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$211`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$212`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$213`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$214`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$215`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$216`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$217`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$218`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$219`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$220`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$221`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$124`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$125`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$126`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$127`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$128`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$129`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$130`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$131`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$138`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$139`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$140`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$141`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$142`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$143`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$144`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$145`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$146`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$147`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$148`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$149`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$150`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$151`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$152`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$153`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$154`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$155`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$156`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$157`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$158`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$159`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$160`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$161`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$162`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$163`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$164`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$165`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$166`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$167`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$168`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$169`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$202`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$203`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$204`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$205`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$207`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$208`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$209`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$210`                                   |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseMatrixOps$$anon$211`                             |         1 |     16 B |     64 B |   4.0× |
 | `breeze.linalg.operators.SparseVector_DenseMatrixOps$$anon$212`                             |         1 |     16 B |     64 B |   4.0× |
 | `breeze.linalg.operators.SparseVector_DenseMatrixOps$$anon$213`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseMatrixOps$$anon$211`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$122`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$121`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$120`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$119`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$118`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$112`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$110`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$108`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$106`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$6`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$14`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$217`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$215`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$213`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$211`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$117`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$210`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$72`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$217`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$4`                                |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$220`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$216`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$116`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$71`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$3`                                |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$209`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$70`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$115`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$215`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$208`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$2`                                |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$207`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$69`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$219`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$1`                                |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$214`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$114`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$221`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$2`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$203`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$58`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$220`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$3`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$204`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$59`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$219`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$4`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$205`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$210`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$60`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$218`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_Vector_ExpandOps$$anon$1`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$202`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$209`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$57`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$16`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$93`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$160`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$8`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$15`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$92`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$7`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$13`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$90`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$157`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$5`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$12`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$89`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$156`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$4`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$11`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$88`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$3`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$10`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$87`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$2`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$9`                                |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$86`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$153`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseMatrixOps$$anon$214`                             |         1 |     16 B |     64 B |   4.0× |
 | `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$1`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$36`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$85`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$180`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$28`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$35`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$84`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$179`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$27`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$34`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$83`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$178`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$26`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$33`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$82`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$177`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$25`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$32`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$81`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$176`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$24`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$31`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$80`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$175`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$23`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$30`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$79`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$174`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$22`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$29`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$78`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$173`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$21`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$28`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$77`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$156`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$172`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$20`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$27`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$76`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$155`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$171`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$19`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$26`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$75`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$154`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$170`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$18`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$25`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$74`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$153`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$169`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$17`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$24`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$73`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$168`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$16`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$23`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$72`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$167`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$15`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$22`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$71`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$166`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$14`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$21`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$70`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$165`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$13`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$20`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$69`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$164`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$12`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$19`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$68`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$163`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$11`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$18`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$67`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$162`                                    |         1 |     16 B |     64 B |   4.0× |
 | `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$10`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$17`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$66`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$161`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$9`                              |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$124`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$64`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$169`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$237`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$153`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$152`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$56`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$123`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$63`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$168`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$236`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$152`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$151`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$55`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$122`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$62`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$167`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$235`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$151`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$150`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$54`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$121`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$61`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$166`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$234`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$150`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$149`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$53`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$120`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$60`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$165`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$233`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$149`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$148`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$52`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$119`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$59`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$164`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$232`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$148`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$147`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$51`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$118`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$58`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$163`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$231`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$147`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$146`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$50`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$117`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$57`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$162`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$230`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$146`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$145`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$49`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$116`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$56`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$161`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$229`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$145`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$144`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$48`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$115`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$55`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$160`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$228`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$144`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$143`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$47`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$114`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$54`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$159`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$227`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$143`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$142`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$46`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$113`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$53`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$158`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$226`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$142`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$141`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$45`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$112`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$52`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$157`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$101`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$225`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$141`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$140`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$36`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$111`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$51`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$156`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$100`                            |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$224`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$140`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$139`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$35`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$110`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$50`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$155`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$99`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$223`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$139`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$138`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$34`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$109`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$49`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$154`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$98`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$222`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$138`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$137`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$33`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$108`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$213`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$48`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$97`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$241`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$136`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$32`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$107`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$212`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$47`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$96`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$240`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$135`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$31`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$106`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$211`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$46`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$95`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$239`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$134`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$30`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$105`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_SparseVector_Ops$$anon$210`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$45`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$94`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$238`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$133`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$11`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$12`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$13`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$14`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$15`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$16`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$17`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$18`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$19`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$2`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$20`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$21`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$22`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$23`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$24`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$25`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$26`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$27`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$28`                             |         1 |     16 B |     64 B |   4.0× |
 | `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$29`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$104`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$44`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$80`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$131`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$132`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$44`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$103`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$43`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$79`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$130`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$43`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$102`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$42`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$78`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$129`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$42`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$101`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$41`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$77`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$128`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$129`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$41`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$100`                                     |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$40`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$76`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$127`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$128`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$40`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$99`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$39`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$75`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$126`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$39`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$98`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$38`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$74`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$125`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$38`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$97`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVector_DenseVector_Ops$$anon$37`                               |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$73`                                      |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$124`                                   |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$125`                                    |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$3`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$30`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$31`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$32`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$33`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$34`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$35`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$36`                             |         1 |     16 B |     64 B |   4.0× |
 | `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$37`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$91`                             |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$159`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$158`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$155`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$154`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$131`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$130`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$127`                                    |         1 |     16 B |     64 B |   4.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$126`                                    |         1 |     16 B |     64 B |   4.0× |
-| `scala.collection.immutable.HashMapBuilder`                                                 |         0 |      0 B |     64 B |   0.0× |
-| `scala.collection.immutable.HashMap$HashKeySet`                                             |         0 |      0 B |     64 B |   0.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$38`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$39`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$4`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$40`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$41`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$42`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$43`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$44`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$45`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$46`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$47`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$48`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$49`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$5`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$50`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$51`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$52`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$53`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$54`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$55`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$56`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$57`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$58`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$59`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$6`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$60`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$7`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$8`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_DenseVector_Ops$$anon$9`                              |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$222`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$223`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$224`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$225`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$226`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$227`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$228`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$229`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$230`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$231`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$232`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$233`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$234`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$235`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$236`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$237`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$238`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$239`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$240`                             |         1 |     16 B |     64 B |   4.0× |
+| `breeze.linalg.operators.SparseVector_HashVector_Ops$$anon$241`                             |         1 |     16 B |     64 B |   4.0× |
 | `java.util.TreeMap$NavigableSubMap`                                                         |         0 |      0 B |     64 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$mcI$sp$$Lambda+0x00007b0ac07baaf0`            |         0 |      0 B |     56 B |   0.0× |
+| `scala.collection.immutable.HashMap$HashKeySet`                                             |         0 |      0 B |     64 B |   0.0× |
+| `scala.collection.immutable.HashMapBuilder`                                                 |         0 |      0 B |     64 B |   0.0× |
+| `scala.collection.immutable.Vector0$`                                                       |         1 |     24 B |     64 B |   2.7× |
+| `scala.collection.immutable.Vector0$`                                                       |         1 |     24 B |     64 B |   2.7× |
 | `breeze.linalg.DenseVector$SerializedForm`                                                  |         0 |      0 B |     56 B |   0.0× |
 | `org.apache.hadoop.shaded.com.ctc.wstx.util.StringVector`                                   |         0 |      0 B |     56 B |   0.0× |
-| `scala.collection.immutable.HashMap$`                                                       |         1 |     16 B |     48 B |   3.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$10`                                             |         1 |     16 B |     48 B |   3.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$7`                                              |         1 |     16 B |     48 B |   3.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$6`                                              |         1 |     16 B |     48 B |   3.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$5`                                              |         1 |     16 B |     48 B |   3.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$4`                                              |         1 |     16 B |     48 B |   3.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$3`                                              |         1 |     16 B |     48 B |   3.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$2`                                              |         1 |     16 B |     48 B |   3.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$1`                                              |         1 |     16 B |     48 B |   3.0× |
-| `scala.collection.immutable.HashSet$`                                                       |         1 |     16 B |     48 B |   3.0× |
+| `org.apache.spark.util.collection.OpenHashSet$mcI$sp$$Lambda+0x00007b0ac07baaf0`            |         0 |      0 B |     56 B |   0.0× |
 | `breeze.linalg.Vector$$Lambda+0x00007b0ac09d1ca8`                                           |         0 |      0 B |     48 B |   0.0× |
-| `scala.collection.immutable.Vector$$Lambda+0x00007b0ac094f590`                              |         0 |      0 B |     48 B |   0.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$1`                                              |         1 |     16 B |     48 B |   3.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$10`                                             |         1 |     16 B |     48 B |   3.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$2`                                              |         1 |     16 B |     48 B |   3.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$3`                                              |         1 |     16 B |     48 B |   3.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$4`                                              |         1 |     16 B |     48 B |   3.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$5`                                              |         1 |     16 B |     48 B |   3.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$6`                                              |         1 |     16 B |     48 B |   3.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$7`                                              |         1 |     16 B |     48 B |   3.0× |
 | `java.util.concurrent.ConcurrentHashMap$CollectionView`                                     |         0 |      0 B |     48 B |   0.0× |
+| `scala.collection.immutable.HashMap$`                                                       |         1 |     16 B |     48 B |   3.0× |
+| `scala.collection.immutable.HashSet$`                                                       |         1 |     16 B |     48 B |   3.0× |
+| `scala.collection.immutable.Vector$$Lambda+0x00007b0ac094f590`                              |         0 |      0 B |     48 B |   0.0× |
 | `dev.ludovic.netlib.blas.VectorBLAS`                                                        |         0 |      0 B |     40 B |   0.0× |
 | `java.util.TreeMap$AscendingSubMap`                                                         |         0 |      0 B |     40 B |   0.0× |
-| `java.util.IdentityHashMap$Values`                                                          |         2 |     32 B |     32 B |   1.0× |
-| `scala.collection.mutable.LinkedHashMap$`                                                   |         1 |     16 B |     32 B |   2.0× |
-| `scala.collection.mutable.HashMap$`                                                         |         1 |     16 B |     32 B |   2.0× |
-| `java.util.TreeMap$KeySet`                                                                  |         2 |     32 B |     32 B |   1.0× |
-| `scala.collection.mutable.TreeMap$`                                                         |         1 |     16 B |     32 B |   2.0× |
-| `scala.collection.mutable.LinkedHashSet$`                                                   |         1 |     16 B |     32 B |   2.0× |
-| `scala.collection.mutable.TreeSet$`                                                         |         1 |     16 B |     32 B |   2.0× |
-| `scala.collection.mutable.LinkedHashSet$`                                                   |         1 |     16 B |     32 B |   2.0× |
-| `scala.collection.mutable.HashMap$`                                                         |         1 |     16 B |     32 B |   2.0× |
-| `scala.collection.mutable.HashSet$`                                                         |         1 |     16 B |     32 B |   2.0× |
-| `scala.collection.immutable.TreeMap$`                                                       |         1 |     16 B |     32 B |   2.0× |
-| `scala.collection.mutable.LinkedHashMap$`                                                   |         1 |     16 B |     32 B |   2.0× |
-| `scala.collection.immutable.TreeSet$`                                                       |         1 |     16 B |     32 B |   2.0× |
-| `scala.collection.immutable.VectorImpl`                                                     |         0 |      0 B |     32 B |   0.0× |
-| `scala.collection.immutable.BigVector`                                                      |         0 |      0 B |     32 B |   0.0× |
-| `com.fasterxml.jackson.databind.deser.impl.JDKValueInstantiators$ArrayListInstantiator`     |         0 |      0 B |     32 B |   0.0× |
-| `com.fasterxml.jackson.databind.deser.impl.JDKValueInstantiators$LinkedHashMapInstantiator` |         0 |      0 B |     32 B |   0.0× |
-| `com.fasterxml.jackson.databind.deser.impl.JDKValueInstantiators$HashMapInstantiator`       |         0 |      0 B |     32 B |   0.0× |
-| `scala.collection.immutable.BigVector`                                                      |         0 |      0 B |     32 B |   0.0× |
-| `scala.collection.immutable.VectorImpl`                                                     |         0 |      0 B |     32 B |   0.0× |
-| `org.sparkproject.guava.collect.ComputingConcurrentHashMap`                                 |         0 |      0 B |     32 B |   0.0× |
-| `breeze.linalg.VectorBuilder$mcJ$sp`                                                        |         0 |      0 B |     32 B |   0.0× |
-| `breeze.linalg.VectorBuilder$mcF$sp`                                                        |         0 |      0 B |     32 B |   0.0× |
-| `breeze.linalg.VectorBuilder$mcD$sp`                                                        |         0 |      0 B |     32 B |   0.0× |
-| `breeze.linalg.VectorBuilder$mcI$sp`                                                        |         0 |      0 B |     32 B |   0.0× |
-| `breeze.linalg.VectorBuilder`                                                               |         0 |      0 B |     32 B |   0.0× |
-| `java.util.WeakHashMap$HashIterator`                                                        |         0 |      0 B |     32 B |   0.0× |
+| `breeze.linalg.DenseVector$mcF$sp`                                                          |         0 |      0 B |     32 B |   0.0× |
+| `breeze.linalg.DenseVector$mcI$sp`                                                          |         0 |      0 B |     32 B |   0.0× |
+| `breeze.linalg.DenseVector$mcJ$sp`                                                          |         0 |      0 B |     32 B |   0.0× |
 | `breeze.linalg.SparseVector`                                                                |         0 |      0 B |     32 B |   0.0× |
-| `breeze.linalg.operators.VectorExpandOps`                                                   |         0 |      0 B |     32 B |   0.0× |
-| `breeze.linalg.SparseVector$mcI$sp`                                                         |         0 |      0 B |     32 B |   0.0× |
 | `breeze.linalg.SparseVector$mcD$sp`                                                         |         0 |      0 B |     32 B |   0.0× |
 | `breeze.linalg.SparseVector$mcF$sp`                                                         |         0 |      0 B |     32 B |   0.0× |
+| `breeze.linalg.SparseVector$mcI$sp`                                                         |         0 |      0 B |     32 B |   0.0× |
 | `breeze.linalg.SparseVector$mcJ$sp`                                                         |         0 |      0 B |     32 B |   0.0× |
-| `breeze.linalg.DenseVector$mcJ$sp`                                                          |         0 |      0 B |     32 B |   0.0× |
-| `breeze.linalg.DenseVector$mcI$sp`                                                          |         0 |      0 B |     32 B |   0.0× |
-| `breeze.linalg.DenseVector$mcF$sp`                                                          |         0 |      0 B |     32 B |   0.0× |
+| `breeze.linalg.VectorBuilder`                                                               |         0 |      0 B |     32 B |   0.0× |
+| `breeze.linalg.VectorBuilder$mcD$sp`                                                        |         0 |      0 B |     32 B |   0.0× |
+| `breeze.linalg.VectorBuilder$mcF$sp`                                                        |         0 |      0 B |     32 B |   0.0× |
+| `breeze.linalg.VectorBuilder$mcI$sp`                                                        |         0 |      0 B |     32 B |   0.0× |
+| `breeze.linalg.VectorBuilder$mcJ$sp`                                                        |         0 |      0 B |     32 B |   0.0× |
 | `breeze.linalg.VectorConstructors`                                                          |         0 |      0 B |     32 B |   0.0× |
-| `java.util.Hashtable$Enumerator`                                                            |         0 |      0 B |     32 B |   0.0× |
-| `java.util.concurrent.ConcurrentHashMap$Segment`                                            |         0 |      0 B |     32 B |   0.0× |
+| `breeze.linalg.operators.VectorExpandOps`                                                   |         0 |      0 B |     32 B |   0.0× |
+| `com.fasterxml.jackson.databind.deser.impl.JDKValueInstantiators$ArrayListInstantiator`     |         0 |      0 B |     32 B |   0.0× |
+| `com.fasterxml.jackson.databind.deser.impl.JDKValueInstantiators$HashMapInstantiator`       |         0 |      0 B |     32 B |   0.0× |
+| `com.fasterxml.jackson.databind.deser.impl.JDKValueInstantiators$LinkedHashMapInstantiator` |         0 |      0 B |     32 B |   0.0× |
 | `java.util.ArrayList$SubList`                                                               |         0 |      0 B |     32 B |   0.0× |
+| `java.util.Hashtable$Enumerator`                                                            |         0 |      0 B |     32 B |   0.0× |
+| `java.util.IdentityHashMap$Values`                                                          |         2 |     32 B |     32 B |   1.0× |
+| `java.util.TreeMap$KeySet`                                                                  |         2 |     32 B |     32 B |   1.0× |
 | `java.util.TreeMap$PrivateEntryIterator`                                                    |         0 |      0 B |     32 B |   0.0× |
+| `java.util.WeakHashMap$HashIterator`                                                        |         0 |      0 B |     32 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$Segment`                                            |         0 |      0 B |     32 B |   0.0× |
 | `jdk.internal.org.objectweb.asm.ByteVector`                                                 |         0 |      0 B |     32 B |   0.0× |
-| `org.apache.spark.util.collection.PrimitiveVector$`                                         |         1 |     16 B |     24 B |   1.5× |
+| `org.sparkproject.guava.collect.ComputingConcurrentHashMap`                                 |         0 |      0 B |     32 B |   0.0× |
+| `scala.collection.immutable.BigVector`                                                      |         0 |      0 B |     32 B |   0.0× |
+| `scala.collection.immutable.BigVector`                                                      |         0 |      0 B |     32 B |   0.0× |
+| `scala.collection.immutable.TreeMap$`                                                       |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.immutable.TreeSet$`                                                       |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.immutable.VectorImpl`                                                     |         0 |      0 B |     32 B |   0.0× |
+| `scala.collection.immutable.VectorImpl`                                                     |         0 |      0 B |     32 B |   0.0× |
+| `scala.collection.mutable.HashMap$`                                                         |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.HashMap$`                                                         |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.HashSet$`                                                         |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.LinkedHashMap$`                                                   |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.LinkedHashMap$`                                                   |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.LinkedHashSet$`                                                   |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.LinkedHashSet$`                                                   |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.TreeMap$`                                                         |         1 |     16 B |     32 B |   2.0× |
+| `scala.collection.mutable.TreeSet$`                                                         |         1 |     16 B |     32 B |   2.0× |
 | `breeze.linalg.DenseVectorDeps$`                                                            |         1 |     16 B |     24 B |   1.5× |
-| `scala.collection.immutable.VectorInline$`                                                  |         1 |     16 B |     24 B |   1.5× |
+| `breeze.linalg.HashVector`                                                                  |         0 |      0 B |     24 B |   0.0× |
+| `breeze.linalg.HashVector$mcD$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
+| `breeze.linalg.HashVector$mcF$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
+| `breeze.linalg.HashVector$mcI$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
+| `breeze.linalg.HashVector$mcJ$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
 | `breeze.linalg.Vector$`                                                                     |         1 |     16 B |     24 B |   1.5× |
-| `jdk.internal.reflect.ByteVector`                                                           |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.mutable.LinkedHashMap$LinkedEntry`                                        |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.immutable.HashMap`                                                        |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.immutable.VectorMap`                                                      |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.immutable.Vector1`                                                        |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.immutable.TreeMap`                                                        |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.mutable.TreeMap`                                                          |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.mutable.LinkedHashSet`                                                    |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.mutable.TreeSet`                                                          |         0 |      0 B |     24 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashMap`                                              |         0 |      0 B |     24 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashMap$mcJ$sp`                                       |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.immutable.VectorMap`                                                      |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.mutable.HashSet$$anon$3`                                                  |         0 |      0 B |     24 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$FloatHasher`                                  |         0 |      0 B |     24 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$Hasher$mcF$sp`                                |         0 |      0 B |     24 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$DoubleHasher`                                 |         0 |      0 B |     24 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$Hasher$mcD$sp`                                |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.immutable.Vector4`                                                        |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.immutable.Vector5`                                                        |         0 |      0 B |     24 B |   0.0× |
-| `scala.collection.immutable.Vector6`                                                        |         0 |      0 B |     24 B |   0.0× |
-| `io.netty.util.internal.PriorityQueueNode`                                                  |         0 |      0 B |     24 B |   0.0× |
+| `breeze.linalg.Vector$mcD$sp`                                                               |         0 |      0 B |     24 B |   0.0× |
+| `breeze.linalg.Vector$mcF$sp`                                                               |         0 |      0 B |     24 B |   0.0× |
+| `breeze.linalg.Vector$mcI$sp`                                                               |         0 |      0 B |     24 B |   0.0× |
+| `breeze.linalg.VectorLike$mcF$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
+| `breeze.linalg.VectorLike$mcI$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
+| `breeze.linalg.VectorLike$mcJ$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
 | `breeze.linalg.VectorizedReduceUFunc$VectorizeHelper`                                       |         0 |      0 B |     24 B |   0.0× |
+| `io.netty.util.internal.PriorityQueueNode`                                                  |         0 |      0 B |     24 B |   0.0× |
+| `java.util.HashMap$TreeNode`                                                                |         0 |      0 B |     24 B |   0.0× |
+| `java.util.regex.IntHashSet`                                                                |         0 |      0 B |     24 B |   0.0× |
+| `jdk.internal.reflect.ByteVector`                                                           |         0 |      0 B |     24 B |   0.0× |
+| `jdk.internal.vm.vector.VectorSupport$Vector`                                               |         0 |      0 B |     24 B |   0.0× |
+| `jdk.internal.vm.vector.VectorSupport$VectorMask`                                           |         0 |      0 B |     24 B |   0.0× |
+| `jdk.internal.vm.vector.VectorSupport$VectorPayload`                                        |         0 |      0 B |     24 B |   0.0× |
+| `jdk.internal.vm.vector.VectorSupport$VectorShuffle`                                        |         0 |      0 B |     24 B |   0.0× |
 | `org.apache.spark.ml.linalg.DenseVector`                                                    |         0 |      0 B |     24 B |   0.0× |
 | `org.apache.spark.ml.linalg.Vector`                                                         |         0 |      0 B |     24 B |   0.0× |
 | `org.apache.spark.mllib.linalg.SparseVector`                                                |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.HashVector`                                                                  |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.Vector$mcI$sp`                                                               |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.HashVector$mcI$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.Vector$mcD$sp`                                                               |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.HashVector$mcD$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.Vector$mcF$sp`                                                               |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.HashVector$mcF$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.VectorLike$mcJ$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.VectorLike$mcI$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.VectorLike$mcF$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.HashVector$mcJ$sp`                                                           |         0 |      0 B |     24 B |   0.0× |
-| `jdk.internal.vm.vector.VectorSupport$VectorPayload`                                        |         0 |      0 B |     24 B |   0.0× |
-| `jdk.internal.vm.vector.VectorSupport$Vector`                                               |         0 |      0 B |     24 B |   0.0× |
-| `jdk.internal.vm.vector.VectorSupport$VectorMask`                                           |         0 |      0 B |     24 B |   0.0× |
-| `jdk.internal.vm.vector.VectorSupport$VectorShuffle`                                        |         0 |      0 B |     24 B |   0.0× |
-| `java.util.HashMap$TreeNode`                                                                |         0 |      0 B |     24 B |   0.0× |
-| `java.util.regex.IntHashSet`                                                                |         0 |      0 B |     24 B |   0.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$192`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$191`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$190`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$189`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$6`                                |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$103`                            |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$7`                                |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$104`                            |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$8`                                |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$105`                            |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$5`                                |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$102`                            |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$208`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$207`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$206`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$205`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$204`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$172`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$203`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$171`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$170`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$202`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$169`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$201`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$200`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$199`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$198`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$197`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$196`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$195`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$194`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$193`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$192`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$191`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$190`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$189`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$188`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$164`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$187`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$163`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$162`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$186`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$161`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$185`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$184`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$160`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$183`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$159`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$158`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$182`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$157`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$181`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_FloatOps$$anon$4`                                      |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_FloatOps$$anon$3`                                      |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_DoubleOps$$anon$1`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$124`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$123`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$122`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$121`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$120`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$119`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$118`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$117`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$116`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$115`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$114`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$113`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$112`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$111`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$110`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$109`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$108`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$107`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$106`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$105`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$104`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$103`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$102`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$101`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$100`                                    |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$99`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$98`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$97`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$96`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$95`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$94`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$93`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$92`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$185`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$91`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$184`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$183`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$90`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$89`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$182`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$88`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$193`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$87`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$192`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$191`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$86`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$85`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$190`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$84`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$181`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$83`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$180`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$179`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$82`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$81`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$178`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$80`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$189`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$79`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$188`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$187`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$78`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$77`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$186`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$76`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$201`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$75`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$200`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$199`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$74`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$73`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$198`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$72`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$197`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$71`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$196`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$195`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$70`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$69`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$194`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$68`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$177`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$132`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$67`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$176`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$131`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$175`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$130`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$66`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$129`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$65`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$174`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$64`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$173`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$128`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$63`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$172`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$127`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$171`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$126`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$62`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.HashVectorExpandOps$$anon$125`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVectorExpandOps$$anon$61`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.SparseVectorExpandOps$$anon$170`                                   |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.DenseVector_DoubleOps$$anon$2`                                     |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$20`                                             |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$19`                                             |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$18`                                             |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$17`                                             |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$9`                                              |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.operators.BitVectorOps$$anon$8`                                              |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.DenseVector$$anon$2`                                                         |         1 |     16 B |     16 B |   1.0× |
+| `org.apache.spark.util.collection.OpenHashMap`                                              |         0 |      0 B |     24 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashMap$mcJ$sp`                                       |         0 |      0 B |     24 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashSet$DoubleHasher`                                 |         0 |      0 B |     24 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashSet$FloatHasher`                                  |         0 |      0 B |     24 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashSet$Hasher$mcD$sp`                                |         0 |      0 B |     24 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashSet$Hasher$mcF$sp`                                |         0 |      0 B |     24 B |   0.0× |
+| `org.apache.spark.util.collection.PrimitiveVector$`                                         |         1 |     16 B |     24 B |   1.5× |
+| `scala.collection.immutable.HashMap`                                                        |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.immutable.TreeMap`                                                        |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.immutable.Vector1`                                                        |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.immutable.Vector4`                                                        |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.immutable.Vector5`                                                        |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.immutable.Vector6`                                                        |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.immutable.VectorInline$`                                                  |         1 |     16 B |     24 B |   1.5× |
+| `scala.collection.immutable.VectorMap`                                                      |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.immutable.VectorMap`                                                      |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.mutable.HashSet$$anon$3`                                                  |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.mutable.LinkedHashMap$LinkedEntry`                                        |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.mutable.LinkedHashSet`                                                    |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.mutable.TreeMap`                                                          |         0 |      0 B |     24 B |   0.0× |
+| `scala.collection.mutable.TreeSet`                                                          |         0 |      0 B |     24 B |   0.0× |
 | `breeze.linalg.DenseVector$$anon$11`                                                        |         1 |     16 B |     16 B |   1.0× |
-| `breeze.linalg.DenseVector$$anon$7`                                                         |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.DenseVector$$anon$2`                                                         |         1 |     16 B |     16 B |   1.0× |
 | `breeze.linalg.DenseVector$$anon$3`                                                         |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.DenseVector$$anon$7`                                                         |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$17`                                             |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$18`                                             |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$19`                                             |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$20`                                             |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$8`                                              |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.BitVectorOps$$anon$9`                                              |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$100`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$101`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$102`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$103`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$104`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$105`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$106`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$107`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$108`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$109`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$110`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$111`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$112`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$113`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$114`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$115`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$116`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$117`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$118`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$119`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$120`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$121`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$122`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$123`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$124`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$181`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$182`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$183`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$184`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$185`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$186`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$187`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$188`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$189`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$190`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$191`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$192`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$193`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$194`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$195`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$196`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$197`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$198`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$199`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$200`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$201`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$202`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$203`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$204`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$205`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$206`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$207`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$208`                                    |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$61`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$62`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$63`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$64`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$65`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$66`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$67`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$68`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$69`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$70`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$71`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$72`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$73`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$74`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$75`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$76`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$77`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$78`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$79`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$80`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$81`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$82`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$83`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$84`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$85`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$86`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$87`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$88`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$89`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$90`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$91`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$92`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$93`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$94`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$95`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$96`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$97`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$98`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVectorExpandOps$$anon$99`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_DoubleOps$$anon$1`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_DoubleOps$$anon$2`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_FloatOps$$anon$3`                                      |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_FloatOps$$anon$4`                                      |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$5`                                |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$6`                                |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$7`                                |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_HashVector_Ops$$anon$8`                                |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$102`                            |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$103`                            |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$104`                            |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.DenseVector_SparseVector_Ops$$anon$105`                            |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$125`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$126`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$127`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$128`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$129`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$130`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$131`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$132`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$157`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$158`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$159`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$160`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$161`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$162`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$163`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$164`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$169`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$170`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$171`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$172`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$189`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$190`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$191`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.HashVectorExpandOps$$anon$192`                                     |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$170`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$171`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$172`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$173`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$174`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$175`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$176`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$177`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$178`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$179`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$180`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$181`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$182`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$183`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$184`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$185`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$186`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$187`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$188`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$189`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$190`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$191`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$192`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$193`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$194`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$195`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$196`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$197`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$198`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$199`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$200`                                   |         1 |     16 B |     16 B |   1.0× |
+| `breeze.linalg.operators.SparseVectorExpandOps$$anon$201`                                   |         1 |     16 B |     16 B |   1.0× |
 | `breeze.linalg.operators.DenseVectorSupportMethods`                                         |         0 |      0 B |      8 B |   0.0× |
-| `jdk.internal.reflect.ByteVectorFactory`                                                    |         0 |      0 B |      0 B |   0.0× |
-| `jdk.internal.reflect.ByteVectorImpl`                                                       |         0 |      0 B |      0 B |   0.0× |
-| `java.util.HashMap$EntrySpliterator`                                                        |         0 |      0 B |      0 B |   0.0× |
-| `org.apache.spark.util.collection.PrimitiveVector`                                          |         0 |      0 B |      0 B |   0.0× |
-| `org.apache.spark.util.collection.SizeTrackingVector`                                       |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.LinkedHashSet$$anon$1`                                            |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.LinkedHashSet$LinkedHashSetIterator`                              |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.LinkedHashSet$Entry`                                              |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.HashSet$$anon$1`                                                  |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.HashSet$HashSetIterator`                                          |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.HashSet$$anon$4`                                                  |         0 |      0 B |      0 B |   0.0× |
-| `java.util.LinkedHashMap$LinkedValueIterator`                                               |         0 |      0 B |      0 B |   0.0× |
-| `java.util.TreeMap$TreeMapSpliterator`                                                      |         0 |      0 B |      0 B |   0.0× |
-| `java.util.TreeMap$KeySpliterator`                                                          |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.immutable.Vector2`                                                        |         0 |      0 B |      0 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$IntHasher`                                    |         0 |      0 B |      0 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$Hasher$mcI$sp`                                |         0 |      0 B |      0 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$LongHasher`                                   |         0 |      0 B |      0 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$Hasher$mcJ$sp`                                |         0 |      0 B |      0 B |   0.0× |
-| `org.apache.spark.util.collection.OpenHashSet$Hasher`                                       |         0 |      0 B |      0 B |   0.0× |
-| `java.util.LinkedList$ListItr`                                                              |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.immutable.HashSetBuilder`                                                 |         0 |      0 B |      0 B |   0.0× |
-| `java.util.WeakHashMap$KeyIterator`                                                         |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.immutable.Vector3`                                                        |         0 |      0 B |      0 B |   0.0× |
 | `breeze.linalg.Vector$$Lambda+0x00007b0ac09d2078`                                           |         0 |      0 B |      0 B |   0.0× |
-| `breeze.linalg.VectorizedReduceUFunc`                                                       |         0 |      0 B |      0 B |   0.0× |
 | `breeze.linalg.Vector$$anon$1`                                                              |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.LinkedHashMap$$anon$1`                                            |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.LinkedHashMap$LinkedHashMapIterator`                              |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.HashMap$$anon$6`                                                  |         0 |      0 B |      0 B |   0.0× |
-| `java.util.concurrent.ConcurrentHashMap$EntrySpliterator`                                   |         0 |      0 B |      0 B |   0.0× |
-| `java.util.TreeMap$NavigableSubMap$EntrySetView`                                            |         0 |      0 B |      0 B |   0.0× |
-| `java.util.TreeMap$AscendingSubMap$AscendingEntrySetView`                                   |         0 |      0 B |      0 B |   0.0× |
-| `breeze.linalg.operators.SparseVector_TraversalOps`                                         |         0 |      0 B |      0 B |   0.0× |
-| `breeze.linalg.operators.HashVector_GenericOps`                                             |         0 |      0 B |      0 B |   0.0× |
+| `breeze.linalg.VectorizedReduceUFunc`                                                       |         0 |      0 B |      0 B |   0.0× |
+| `breeze.linalg.operators.BitVectorOps`                                                      |         0 |      0 B |      0 B |   0.0× |
 | `breeze.linalg.operators.DenseVector_SlicingOps`                                            |         0 |      0 B |      0 B |   0.0× |
 | `breeze.linalg.operators.DenseVector_TraversalOps`                                          |         0 |      0 B |      0 B |   0.0× |
+| `breeze.linalg.operators.HashVector_GenericOps`                                             |         0 |      0 B |      0 B |   0.0× |
+| `breeze.linalg.operators.SparseVector_TraversalOps`                                         |         0 |      0 B |      0 B |   0.0× |
 | `breeze.linalg.operators.Vector_TraversalOps`                                               |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.HashMap$$anon$2`                                                  |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.LinkedHashMap$$anon$4`                                            |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.HashMap$$anon$3`                                                  |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.HashMap$HashMapIterator`                                          |         0 |      0 B |      0 B |   0.0× |
-| `scala.collection.mutable.HashMap$$anon$1`                                                  |         0 |      0 B |      0 B |   0.0× |
-| `breeze.linalg.operators.BitVectorOps`                                                      |         0 |      0 B |      0 B |   0.0× |
-| `java.util.concurrent.ConcurrentHashMap$Traverser`                                          |         0 |      0 B |      0 B |   0.0× |
-| `java.util.concurrent.ConcurrentHashMap$ReservationNode`                                    |         0 |      0 B |      0 B |   0.0× |
-| `java.util.concurrent.ConcurrentHashMap$KeyIterator`                                        |         0 |      0 B |      0 B |   0.0× |
-| `java.util.concurrent.ConcurrentHashMap$ValueIterator`                                      |         0 |      0 B |      0 B |   0.0× |
-| `java.util.concurrent.ConcurrentHashMap$ForwardingNode`                                     |         0 |      0 B |      0 B |   0.0× |
-| `java.util.concurrent.ConcurrentHashMap$MapEntry`                                           |         0 |      0 B |      0 B |   0.0× |
-| `java.util.concurrent.ConcurrentHashMap$EntryIterator`                                      |         0 |      0 B |      0 B |   0.0× |
-| `java.util.concurrent.ConcurrentHashMap$BaseIterator`                                       |         0 |      0 B |      0 B |   0.0× |
-| `java.util.ArrayList$ArrayListSpliterator`                                                  |         0 |      0 B |      0 B |   0.0× |
-| `java.util.HashMap$ValueSpliterator`                                                        |         0 |      0 B |      0 B |   0.0× |
-| `java.util.HashMap$KeySpliterator`                                                          |         0 |      0 B |      0 B |   0.0× |
-| `java.util.HashMap$HashMapSpliterator`                                                      |         0 |      0 B |      0 B |   0.0× |
-| `java.util.HashMap$EntryIterator`                                                           |         0 |      0 B |      0 B |   0.0× |
-| `java.util.HashMap$ValueIterator`                                                           |         0 |      0 B |      0 B |   0.0× |
-| `java.util.HashMap$KeyIterator`                                                             |         0 |      0 B |      0 B |   0.0× |
-| `java.util.HashMap$HashIterator`                                                            |         0 |      0 B |      0 B |   0.0× |
 | `java.util.ArrayDeque$DeqIterator`                                                          |         0 |      0 B |      0 B |   0.0× |
-| `java.util.concurrent.CopyOnWriteArrayList$COWIterator`                                     |         0 |      0 B |      0 B |   0.0× |
+| `java.util.ArrayList$ArrayListSpliterator`                                                  |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$EntryIterator`                                                           |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$EntrySpliterator`                                                        |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$HashIterator`                                                            |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$HashMapSpliterator`                                                      |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$KeyIterator`                                                             |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$KeySpliterator`                                                          |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$ValueIterator`                                                           |         0 |      0 B |      0 B |   0.0× |
+| `java.util.HashMap$ValueSpliterator`                                                        |         0 |      0 B |      0 B |   0.0× |
 | `java.util.LinkedHashMap$LinkedEntryIterator`                                               |         0 |      0 B |      0 B |   0.0× |
 | `java.util.LinkedHashMap$LinkedHashIterator`                                                |         0 |      0 B |      0 B |   0.0× |
-| `java.util.TreeMap$Values`                                                                  |         0 |      0 B |      0 B |   0.0× |
+| `java.util.LinkedHashMap$LinkedValueIterator`                                               |         0 |      0 B |      0 B |   0.0× |
+| `java.util.LinkedList$ListItr`                                                              |         0 |      0 B |      0 B |   0.0× |
+| `java.util.TreeMap$AscendingSubMap$AscendingEntrySetView`                                   |         0 |      0 B |      0 B |   0.0× |
+| `java.util.TreeMap$EntryIterator`                                                           |         0 |      0 B |      0 B |   0.0× |
 | `java.util.TreeMap$EntrySet`                                                                |         0 |      0 B |      0 B |   0.0× |
 | `java.util.TreeMap$KeyIterator`                                                             |         0 |      0 B |      0 B |   0.0× |
+| `java.util.TreeMap$KeySpliterator`                                                          |         0 |      0 B |      0 B |   0.0× |
+| `java.util.TreeMap$NavigableSubMap$EntrySetView`                                            |         0 |      0 B |      0 B |   0.0× |
+| `java.util.TreeMap$TreeMapSpliterator`                                                      |         0 |      0 B |      0 B |   0.0× |
 | `java.util.TreeMap$ValueIterator`                                                           |         0 |      0 B |      0 B |   0.0× |
-| `java.util.TreeMap$EntryIterator`                                                           |         0 |      0 B |      0 B |   0.0× |
+| `java.util.TreeMap$Values`                                                                  |         0 |      0 B |      0 B |   0.0× |
+| `java.util.WeakHashMap$KeyIterator`                                                         |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$BaseIterator`                                       |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$EntryIterator`                                      |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$EntrySpliterator`                                   |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$ForwardingNode`                                     |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$KeyIterator`                                        |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$MapEntry`                                           |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$ReservationNode`                                    |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$Traverser`                                          |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.ConcurrentHashMap$ValueIterator`                                      |         0 |      0 B |      0 B |   0.0× |
+| `java.util.concurrent.CopyOnWriteArrayList$COWIterator`                                     |         0 |      0 B |      0 B |   0.0× |
+| `jdk.internal.reflect.ByteVectorFactory`                                                    |         0 |      0 B |      0 B |   0.0× |
+| `jdk.internal.reflect.ByteVectorImpl`                                                       |         0 |      0 B |      0 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashSet$Hasher`                                       |         0 |      0 B |      0 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashSet$Hasher$mcI$sp`                                |         0 |      0 B |      0 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashSet$Hasher$mcJ$sp`                                |         0 |      0 B |      0 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashSet$IntHasher`                                    |         0 |      0 B |      0 B |   0.0× |
+| `org.apache.spark.util.collection.OpenHashSet$LongHasher`                                   |         0 |      0 B |      0 B |   0.0× |
+| `org.apache.spark.util.collection.PrimitiveVector`                                          |         0 |      0 B |      0 B |   0.0× |
+| `org.apache.spark.util.collection.SizeTrackingVector`                                       |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.immutable.HashSetBuilder`                                                 |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.immutable.Vector2`                                                        |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.immutable.Vector3`                                                        |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.HashMap$$anon$1`                                                  |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.HashMap$$anon$2`                                                  |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.HashMap$$anon$3`                                                  |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.HashMap$$anon$6`                                                  |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.HashMap$HashMapIterator`                                          |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.HashSet$$anon$1`                                                  |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.HashSet$$anon$4`                                                  |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.HashSet$HashSetIterator`                                          |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.LinkedHashMap$$anon$1`                                            |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.LinkedHashMap$$anon$4`                                            |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.LinkedHashMap$LinkedHashMapIterator`                              |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.LinkedHashSet$$anon$1`                                            |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.LinkedHashSet$Entry`                                              |         0 |      0 B |      0 B |   0.0× |
+| `scala.collection.mutable.LinkedHashSet$LinkedHashSetIterator`                              |         0 |      0 B |      0 B |   0.0× |
 
 ## Resource Handles
 
@@ -15890,107 +15377,107 @@ _File, stream, and JDBC resource handle classes ranked by instance count. High c
 | `jdk.net.ExtendedSocketOptions$ExtSocketOption`                                        |         7 |   168 B |    168 B |
 | `java.net.InetSocketAddress`                                                           |         5 |    80 B |    600 B |
 | `java.net.InetSocketAddress$InetSocketAddressHolder`                                   |         5 |   120 B |    288 B |
-| `java.io.OutputStreamWriter`                                                           |         3 |    72 B |   2.4 KB |
-| `sun.nio.ch.ServerSocketChannelImpl`                                                   |         3 |   288 B |   1.2 KB |
-| `sun.nio.ch.ServerSocketAdaptor`                                                       |         3 |   120 B |    640 B |
 | `java.io.FileInputStream`                                                              |         3 |    96 B |    184 B |
+| `java.io.OutputStreamWriter`                                                           |         3 |    72 B |   2.4 KB |
 | `sun.nio.ch.DummySocketImpl`                                                           |         3 |    96 B |    128 B |
+| `sun.nio.ch.ServerSocketAdaptor`                                                       |         3 |   120 B |    640 B |
+| `sun.nio.ch.ServerSocketChannelImpl`                                                   |         3 |   264 B |   1.2 KB |
 | `io.netty.channel.socket.nio.NioServerSocketChannel`                                   |         2 |   208 B |   2.2 KB |
 | `io.netty.channel.socket.nio.NioServerSocketChannel$NioServerSocketChannelConfig`      |         2 |   128 B |    176 B |
 | `java.io.FileOutputStream`                                                             |         2 |    64 B |    128 B |
 | `sun.security.provider.FileInputStreamPool$StreamRef`                                  |         2 |    64 B |     64 B |
 | `sun.security.provider.FileInputStreamPool$UnclosableInputStream`                      |         2 |    32 B |     32 B |
-| `java.io.InputStreamReader`                                                            |         1 |    24 B |   8.3 KB |
-| `sun.net.www.protocol.jar.JarURLConnection$JarURLInputStream`                          |         1 |    24 B |   5.2 KB |
-| `org.sparkproject.jetty.server.HttpConnectionFactory`                                  |         1 |    72 B |   2.0 KB |
-| `sun.net.www.protocol.jar.JarURLConnection`                                            |         1 |    72 B |   1.0 KB |
-| `sun.net.www.protocol.file.FileURLConnection`                                          |         1 |   104 B |    488 B |
-| `java.net.SocketPermission`                                                            |         1 |    56 B |    456 B |
-| `jdk.net.ExtendedSocketOptions$1`                                                      |         1 |    32 B |    304 B |
-| `org.apache.spark.util.ReturnStatementFinder`                                          |         1 |    24 B |    128 B |
-| `sun.nio.ch.FileChannelImpl$3`                                                         |         1 |    16 B |    120 B |
-| `jdk.net.LinuxSocketOptions`                                                           |         1 |    16 B |    112 B |
-| `sun.nio.ch.FileChannelImpl$2`                                                         |         1 |    16 B |     96 B |
-| `java.util.zip.ZipFile$ZipFileInputStream`                                             |         1 |    56 B |     88 B |
-| `sun.nio.ch.ExtendedSocketOption$1`                                                    |         1 |    16 B |     48 B |
-| `org.apache.spark.util.ReturnStatementFinder$$anon$3`                                  |         1 |    24 B |     24 B |
 | `java.io.FileDescriptor$1`                                                             |         1 |    16 B |     16 B |
+| `java.io.InputStreamReader`                                                            |         1 |    24 B |   8.3 KB |
+| `java.net.SocketPermission`                                                            |         1 |    56 B |    456 B |
+| `java.util.zip.ZipFile$ZipFileInputStream`                                             |         1 |    56 B |     88 B |
+| `jdk.net.ExtendedSocketOptions$1`                                                      |         1 |    32 B |    304 B |
+| `jdk.net.LinuxSocketOptions`                                                           |         1 |    16 B |    112 B |
+| `org.apache.spark.util.ReturnStatementFinder`                                          |         1 |    24 B |    128 B |
+| `org.apache.spark.util.ReturnStatementFinder$$anon$3`                                  |         1 |    24 B |     24 B |
+| `org.sparkproject.jetty.server.HttpConnectionFactory`                                  |         1 |    64 B |   1.9 KB |
+| `sun.net.www.protocol.file.FileURLConnection`                                          |         1 |   104 B |    488 B |
+| `sun.net.www.protocol.jar.JarURLConnection`                                            |         1 |    72 B |   1.0 KB |
+| `sun.net.www.protocol.jar.JarURLConnection$JarURLInputStream`                          |         1 |    24 B |   5.2 KB |
+| `sun.nio.ch.ExtendedSocketOption$1`                                                    |         1 |    16 B |     48 B |
+| `sun.nio.ch.FileChannelImpl$2`                                                         |         1 |    16 B |     96 B |
+| `sun.nio.ch.FileChannelImpl$3`                                                         |         1 |    16 B |    120 B |
 | `sun.nio.ch.SocketDispatcher`                                                          |         1 |    16 B |     16 B |
-| `sun.nio.ch.SocketOptionRegistry$LazyInitialization`                                   |         0 |     0 B |   1.5 KB |
-| `sun.nio.ch.FileChannelImpl`                                                           |         0 |     0 B |    824 B |
-| `sun.nio.ch.ServerSocketChannelImpl$DefaultOptionsHolder`                              |         0 |     0 B |    616 B |
-| `java.net.URLConnection`                                                               |         0 |     0 B |    552 B |
-| `org.apache.logging.log4j.core.net.UrlConnectionFactory`                               |         0 |     0 B |    464 B |
-| `sun.security.provider.FileInputStreamPool`                                            |         0 |     0 B |    448 B |
-| `org.apache.hadoop.fs.RawLocalFileSystem$LocalFSFileInputStream`                       |         0 |     0 B |    400 B |
-| `sun.net.ext.ExtendedSocketOptions`                                                    |         0 |     0 B |    232 B |
-| `org.apache.log4j.builders.appender.SocketAppenderBuilder`                             |         0 |     0 B |    216 B |
+| `com.fasterxml.jackson.databind.ser.std.InetSocketAddressSerializer`                   |         0 |     0 B |     24 B |
+| `io.netty.channel.AbstractChannel$AnnotatedSocketException`                            |         0 |     0 B |     32 B |
+| `io.netty.channel.socket.DefaultServerSocketChannelConfig`                             |         0 |     0 B |     88 B |
+| `io.netty.channel.socket.ServerSocketChannel`                                          |         0 |     0 B |     24 B |
+| `io.netty.channel.socket.ServerSocketChannelConfig`                                    |         0 |     0 B |     24 B |
+| `io.netty.channel.socket.SocketChannel`                                                |         0 |     0 B |     24 B |
+| `io.netty.channel.socket.nio.NioSocketChannel`                                         |         0 |     0 B |     32 B |
+| `io.netty.util.internal.SocketUtils`                                                   |         0 |     0 B |     32 B |
+| `io.netty.util.internal.SocketUtils$11`                                                |         0 |     0 B |      0 B |
+| `io.netty.util.internal.SocketUtils$13`                                                |         0 |     0 B |      0 B |
+| `io.netty.util.internal.SocketUtils$7`                                                 |         0 |     0 B |      0 B |
+| `java.io.FileInputStream$1`                                                            |         0 |     0 B |      0 B |
+| `java.io.FileOutputStream$1`                                                           |         0 |     0 B |      0 B |
+| `java.io.InputStream`                                                                  |         0 |     0 B |     56 B |
+| `java.io.OutputStream`                                                                 |         0 |     0 B |      0 B |
 | `java.net.HttpURLConnection`                                                           |         0 |     0 B |    176 B |
-| `jdk.net.ExtendedSocketOptions$PlatformSocketOptions`                                  |         0 |     0 B |    144 B |
-| `org.sparkproject.jetty.server.HttpConnection`                                         |         0 |     0 B |    136 B |
-| `sun.net.www.URLConnection`                                                            |         0 |     0 B |    120 B |
-| `java.net.StandardSocketOptions`                                                       |         0 |     0 B |    120 B |
-| `org.apache.spark.util.ReturnStatementFinder$$anon$2`                                  |         0 |     0 B |    112 B |
 | `java.net.JarURLConnection`                                                            |         0 |     0 B |    104 B |
 | `java.net.ServerSocket`                                                                |         0 |     0 B |    104 B |
-| `jdk.net.ExtendedSocketOptions`                                                        |         0 |     0 B |    104 B |
-| `io.netty.channel.socket.DefaultServerSocketChannelConfig`                             |         0 |     0 B |     88 B |
-| `java.net.SocketOptions`                                                               |         0 |     0 B |     80 B |
-| `java.nio.file.FileChannelLinesSpliterator`                                            |         0 |     0 B |     72 B |
-| `java.net.SocketImpl`                                                                  |         0 |     0 B |     56 B |
-| `java.io.InputStream`                                                                  |         0 |     0 B |     56 B |
-| `sun.nio.ch.SocketChannelImpl`                                                         |         0 |     0 B |     48 B |
-| `jdk.net.ExtendedSocketOptions$2`                                                      |         0 |     0 B |     40 B |
-| `sun.nio.ch.FileChannelImpl$Closer`                                                    |         0 |     0 B |     32 B |
+| `java.net.SocketAddress`                                                               |         0 |     0 B |      8 B |
 | `java.net.SocketException`                                                             |         0 |     0 B |     32 B |
-| `org.sparkproject.jetty.server.SslConnectionFactory`                                   |         0 |     0 B |     32 B |
+| `java.net.SocketImpl`                                                                  |         0 |     0 B |     56 B |
+| `java.net.SocketOption`                                                                |         0 |     0 B |     24 B |
+| `java.net.SocketOptions`                                                               |         0 |     0 B |     80 B |
 | `java.net.SocketTimeoutException`                                                      |         0 |     0 B |     32 B |
-| `org.sparkproject.jetty.server.AbstractConnectionFactory`                              |         0 |     0 B |     32 B |
-| `io.netty.util.internal.SocketUtils`                                                   |         0 |     0 B |     32 B |
+| `java.net.StandardSocketOptions`                                                       |         0 |     0 B |    120 B |
+| `java.net.URLConnection`                                                               |         0 |     0 B |    552 B |
 | `java.nio.channels.ConnectionPendingException`                                         |         0 |     0 B |     32 B |
-| `io.netty.channel.socket.nio.NioSocketChannel`                                         |         0 |     0 B |     32 B |
-| `io.netty.channel.AbstractChannel$AnnotatedSocketException`                            |         0 |     0 B |     32 B |
-| `org.apache.hadoop.fs.RawLocalFileSystem$LocalFSFileOutputStream`                      |         0 |     0 B |     24 B |
 | `java.nio.channels.FileChannel`                                                        |         0 |     0 B |     24 B |
+| `java.nio.channels.ServerSocketChannel`                                                |         0 |     0 B |      0 B |
 | `java.nio.channels.SocketChannel`                                                      |         0 |     0 B |     24 B |
-| `org.apache.spark.util.ReturnStatementInClosureException`                              |         0 |     0 B |     24 B |
+| `java.nio.file.FileChannelLinesSpliterator`                                            |         0 |     0 B |     72 B |
+| `javax.management.MBeanServerConnection`                                               |         0 |     0 B |     24 B |
+| `jdk.internal.access.JavaIOFileDescriptorAccess`                                       |         0 |     0 B |     24 B |
+| `jdk.net.ExtendedSocketOptions`                                                        |         0 |     0 B |    104 B |
+| `jdk.net.ExtendedSocketOptions$2`                                                      |         0 |     0 B |     40 B |
+| `jdk.net.ExtendedSocketOptions$PlatformSocketOptions`                                  |         0 |     0 B |    144 B |
 | `org.apache.hadoop.fs.HasFileDescriptor`                                               |         0 |     0 B |     24 B |
+| `org.apache.hadoop.fs.RawLocalFileSystem$LocalFSFileInputStream`                       |         0 |     0 B |    400 B |
+| `org.apache.hadoop.fs.RawLocalFileSystem$LocalFSFileOutputStream`                      |         0 |     0 B |     24 B |
+| `org.apache.log4j.builders.appender.SocketAppenderBuilder`                             |         0 |     0 B |    216 B |
+| `org.apache.logging.log4j.core.appender.SocketAppender`                                |         0 |     0 B |     24 B |
+| `org.apache.logging.log4j.core.appender.db.jdbc.AbstractConnectionSource`              |         0 |     0 B |     24 B |
+| `org.apache.logging.log4j.core.appender.db.jdbc.AbstractDriverManagerConnectionSource` |         0 |     0 B |     24 B |
+| `org.apache.logging.log4j.core.appender.db.jdbc.ConnectionSource`                      |         0 |     0 B |     24 B |
+| `org.apache.logging.log4j.core.appender.db.jdbc.DataSourceConnectionSource`            |         0 |     0 B |     24 B |
+| `org.apache.logging.log4j.core.appender.db.jdbc.DriverManagerConnectionSource`         |         0 |     0 B |     24 B |
+| `org.apache.logging.log4j.core.appender.db.jdbc.FactoryMethodConnectionSource`         |         0 |     0 B |     24 B |
+| `org.apache.logging.log4j.core.net.SocketAddress`                                      |         0 |     0 B |     24 B |
+| `org.apache.logging.log4j.core.net.SocketOptions`                                      |         0 |     0 B |     24 B |
+| `org.apache.logging.log4j.core.net.SocketPerformancePreferences`                       |         0 |     0 B |     24 B |
+| `org.apache.logging.log4j.core.net.UrlConnectionFactory`                               |         0 |     0 B |    464 B |
+| `org.apache.spark.util.ReturnStatementFinder$$anon$2`                                  |         0 |     0 B |    112 B |
+| `org.apache.spark.util.ReturnStatementInClosureException`                              |         0 |     0 B |     24 B |
+| `org.sparkproject.jetty.io.AbstractConnection`                                         |         0 |     0 B |     24 B |
+| `org.sparkproject.jetty.io.Connection`                                                 |         0 |     0 B |     24 B |
 | `org.sparkproject.jetty.io.Connection$UpgradeFrom`                                     |         0 |     0 B |     24 B |
 | `org.sparkproject.jetty.io.Connection$UpgradeTo`                                       |         0 |     0 B |     24 B |
 | `org.sparkproject.jetty.io.SocketChannelEndPoint`                                      |         0 |     0 B |     24 B |
-| `org.sparkproject.jetty.server.ConnectionFactory$Detecting`                            |         0 |     0 B |     24 B |
+| `org.sparkproject.jetty.server.AbstractConnectionFactory`                              |         0 |     0 B |     32 B |
 | `org.sparkproject.jetty.server.ConnectionFactory`                                      |         0 |     0 B |     24 B |
+| `org.sparkproject.jetty.server.ConnectionFactory$Detecting`                            |         0 |     0 B |     24 B |
 | `org.sparkproject.jetty.server.HttpConfiguration$ConnectionFactory`                    |         0 |     0 B |     24 B |
-| `org.sparkproject.jetty.io.Connection`                                                 |         0 |     0 B |     24 B |
-| `org.sparkproject.jetty.io.AbstractConnection`                                         |         0 |     0 B |     24 B |
-| `com.fasterxml.jackson.databind.ser.std.InetSocketAddressSerializer`                   |         0 |     0 B |     24 B |
-| `io.netty.channel.socket.ServerSocketChannelConfig`                                    |         0 |     0 B |     24 B |
-| `io.netty.channel.socket.ServerSocketChannel`                                          |         0 |     0 B |     24 B |
-| `io.netty.channel.socket.SocketChannel`                                                |         0 |     0 B |     24 B |
-| `java.net.SocketOption`                                                                |         0 |     0 B |     24 B |
-| `javax.management.MBeanServerConnection`                                               |         0 |     0 B |     24 B |
-| `org.apache.logging.log4j.core.appender.db.jdbc.AbstractDriverManagerConnectionSource` |         0 |     0 B |     24 B |
-| `org.apache.logging.log4j.core.appender.db.jdbc.AbstractConnectionSource`              |         0 |     0 B |     24 B |
-| `org.apache.logging.log4j.core.appender.db.jdbc.ConnectionSource`                      |         0 |     0 B |     24 B |
-| `org.apache.logging.log4j.core.appender.db.jdbc.FactoryMethodConnectionSource`         |         0 |     0 B |     24 B |
-| `org.apache.logging.log4j.core.appender.db.jdbc.DataSourceConnectionSource`            |         0 |     0 B |     24 B |
-| `org.apache.logging.log4j.core.net.SocketPerformancePreferences`                       |         0 |     0 B |     24 B |
-| `org.apache.logging.log4j.core.net.SocketOptions`                                      |         0 |     0 B |     24 B |
-| `org.apache.logging.log4j.core.net.SocketAddress`                                      |         0 |     0 B |     24 B |
-| `org.apache.logging.log4j.core.appender.SocketAppender`                                |         0 |     0 B |     24 B |
-| `org.apache.logging.log4j.core.appender.db.jdbc.DriverManagerConnectionSource`         |         0 |     0 B |     24 B |
-| `jdk.internal.access.JavaIOFileDescriptorAccess`                                       |         0 |     0 B |     24 B |
+| `org.sparkproject.jetty.server.HttpConnection`                                         |         0 |     0 B |    136 B |
+| `org.sparkproject.jetty.server.SslConnectionFactory`                                   |         0 |     0 B |     32 B |
+| `sun.net.ext.ExtendedSocketOptions`                                                    |         0 |     0 B |    232 B |
+| `sun.net.www.URLConnection`                                                            |         0 |     0 B |    120 B |
 | `sun.nio.ch.ExtendedSocketOption`                                                      |         0 |     0 B |      8 B |
-| `java.net.SocketAddress`                                                               |         0 |     0 B |      8 B |
-| `io.netty.util.internal.SocketUtils$11`                                                |         0 |     0 B |      0 B |
-| `io.netty.util.internal.SocketUtils$13`                                                |         0 |     0 B |      0 B |
-| `sun.nio.ch.SocketOptionRegistry`                                                      |         0 |     0 B |      0 B |
+| `sun.nio.ch.FileChannelImpl`                                                           |         0 |     0 B |    824 B |
+| `sun.nio.ch.FileChannelImpl$Closer`                                                    |         0 |     0 B |     32 B |
 | `sun.nio.ch.ServerSocketAdaptor$$Lambda+0x00007b0ac0398490`                            |         0 |     0 B |      0 B |
-| `java.io.FileOutputStream$1`                                                           |         0 |     0 B |      0 B |
-| `io.netty.util.internal.SocketUtils$7`                                                 |         0 |     0 B |      0 B |
-| `java.nio.channels.ServerSocketChannel`                                                |         0 |     0 B |      0 B |
-| `java.io.OutputStream`                                                                 |         0 |     0 B |      0 B |
-| `java.io.FileInputStream$1`                                                            |         0 |     0 B |      0 B |
+| `sun.nio.ch.ServerSocketChannelImpl$DefaultOptionsHolder`                              |         0 |     0 B |    616 B |
+| `sun.nio.ch.SocketChannelImpl`                                                         |         0 |     0 B |     48 B |
+| `sun.nio.ch.SocketOptionRegistry`                                                      |         0 |     0 B |      0 B |
+| `sun.nio.ch.SocketOptionRegistry$LazyInitialization`                                   |         0 |     0 B |   1.5 KB |
+| `sun.security.provider.FileInputStreamPool`                                            |         0 |     0 B |    448 B |
 
 ## Leak Indicators
 
@@ -16000,6 +15487,21 @@ _Point-in-time counts for known Java leak patterns. Non-zero values are not alwa
 | ------------------------------------ | -------: | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Anonymous/generated classes          |    2,064 | High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by `$` to find the biggest offenders. |
 | `DirectByteBuffer` off-heap capacity | 134.4 MB | Native memory, excluded from JVM heap totals. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.           |
+
+**Top DirectByteBuffer owners:**
+
+| Capacity | Buffer object                       | Owner (root → … → buffer)                                                         |
+| -------: | ----------------------------------- | --------------------------------------------------------------------------------- |
+| 134.3 MB | `java.nio.DirectByteBuffer` @97191  | `java.nio.DirectByteBuffer` → `jdk.internal.jimage.ImageReader$SharedImageReader` |
+|  32.0 KB | `java.nio.DirectByteBuffer` @487386 | `java.nio.DirectByteBuffer`                                                       |
+|  16.0 KB | `java.nio.DirectByteBuffer` @391841 | `java.nio.DirectByteBuffer`                                                       |
+|      8 B | `java.nio.DirectByteBuffer` @163201 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      8 B | `java.nio.DirectByteBuffer` @163204 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      8 B | `java.nio.DirectByteBuffer` @178769 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      8 B | `java.nio.DirectByteBuffer` @178771 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      8 B | `java.nio.DirectByteBuffer` @178773 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      8 B | `java.nio.DirectByteBuffer` @178778 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      0 B | `java.nio.DirectByteBuffer` @318956 | `java.nio.DirectByteBuffer`                                                       |
 
 ## Glossary
 

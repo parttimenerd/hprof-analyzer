@@ -62,20 +62,20 @@ _Automated signals pointing to where memory concentrates and what to investigate
 - **One Leak or Many:** the single biggest object, `java.util.zip.ZipFile$Source`, retains 8.1% and the top 10 retain 43.5% of the heap; 15 objects each hold ≥1%. See [Top Consumers](#top-consumers).
 - **Off-Heap (DirectByteBuffer):** 134.4 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. If RSS grows beyond heap + DirectByteBuffer total, native heap fragmentation may be the cause: repeatedly allocating and freeing differently-sized buffers leaves gaps the allocator cannot reuse for larger requests. Diagnose with `jcmd <pid> VM.native_memory detail`, or use jemalloc heap profiling (`MALLOC_CONF=prof:true`) or async-profiler's malloc mode. See [Off-Heap NIO](#off-heap-nio).
 - **GC Waste:** 11.6% of the heap is unreachable (4.3 MB) — largest garbage cluster rooted at `int[]` (512.0 KB); the GC has not yet collected it. Trigger a full GC (`jcmd <pid> GC.run`) and re-dump — if the count drops sharply, the dump was taken mid-collection. See [Unreachable Objects](#unreachable-objects).
-- **Empty-Collection Cemetery:** 6,686 of 9,466 tracked collections (70.6%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
+- **Hash-Map Collision Hotspot:** 8 of 2,450 tracked maps (0.3%) have a load factor > 90% — over-packed hash tables cause long collision chains and degrade lookup performance. Increase initial capacity or lower the load factor (pass `initialCapacity` and `loadFactor` to the constructor, default is 0.75). See [Collections](#collections).
+- **Empty-Collection Cemetery:** 6,889 of 10,053 tracked collections (68.5%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
 - **Component Retention Imbalance:** Component `<boot>` retains 79.7% of heap (95.2 MB) while the next largest component (`java/net/URLClassLoader`) retains only 17.9%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `<boot>` is accumulating without a release path. See [Top Components](#top-components).
-- **Shutdown Hook Accumulation:** 270 `java.lang.Thread` instances with `ApplicationShutdownHooks` present — likely `Runtime.addShutdownHook()` called per request without a matching `removeShutdownHook()`. Each call leaks a `Thread` in the JVM-wide hook registry. Register shutdown hooks once at startup (or use a framework lifecycle callback instead). See [Threads](#threads).
 - **Thread Pool Saturation:** 245 of 262 threads (94%) are WAITING or BLOCKED — the thread pool appears saturated. Possible causes: slow downstream calls monopolising all pool threads (thread starvation), monitor deadlock, or executor self-submit deadlock. Check the Threads section for the common frame shared by stuck threads and look for a blocked-on resource (semaphore, DB call, HTTP request, synchronized method). See [Threads](#threads).
 - **Collection Waste Not Analyzed:** Collection waste not analyzed — re-run with `--collections` to check for wasted capacity.
 
 ## Waste Summary
 
-**3.8 MB** estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
+**3.9 MB** estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
 
 | Source                                     | Reclaimable |
 | ------------------------------------------ | ----------: |
 | [Under-filled Object Arrays](#collections) |      3.0 MB |
-| [Under-filled Collections](#collections)   |    851.3 KB |
+| [Under-filled Collections](#collections)   |    938.8 KB |
 
 ## System Overview
 
@@ -166,7 +166,7 @@ _Every loaded class with its instance count, shallow heap (own bytes), and retai
 |  4 | `java.lang.Object[]`                                             |    11,059 |   1.6 MB | 512.0 KB |   6.3 MB |  19.0% | ██████▊          |
 |  5 | `java.lang.String`                                               |    56,540 |   1.3 MB |     24 B |   4.4 MB |  13.5% | ████▊            |
 |  6 | `java.util.concurrent.ConcurrentHashMap`                         |     1,128 |  70.5 KB |     64 B |   3.2 MB |   9.5% | ███▍             |
-|  7 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  |       444 | 412.4 KB |  64.0 KB |   3.1 MB |   9.4% | ███▍             |
+|  7 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  |       444 | 412.4 KB |  64.0 KB |   3.1 MB |   9.4% | ███▎             |
 |  8 | `java.util.LinkedHashMap`                                        |     6,104 | 381.5 KB |     64 B |   3.1 MB |   9.3% | ███▎             |
 |  9 | `java.net.URLClassLoader`                                        |         2 |    176 B |     88 B |   2.7 MB |   8.2% | ██▉              |
 | 10 | `java.util.concurrent.ConcurrentHashMap$Node`                    |    42,785 |   1.3 MB |     32 B |   2.6 MB |   8.0% | ██▊              |
@@ -180,7 +180,7 @@ _Every loaded class with its instance count, shallow heap (own bytes), and retai
 | 18 | `int[]`                                                          |     9,056 |   2.0 MB | 229.8 KB |   2.0 MB |   6.0% | ██▏              |
 | 19 | `java.lang.ref.SoftReference`                                    |     1,653 |  64.6 KB |     40 B |   1.5 MB |   4.6% | █▋               |
 | 20 | `double[]`                                                       |    16,101 |   1.5 MB |  11.7 KB |   1.5 MB |   4.4% | █▌               |
-| 21 | `java.util.jar.JarFile`                                          |       181 |  11.3 KB |     64 B |   1.4 MB |   4.2% | █▌               |
+| 21 | `java.util.jar.JarFile`                                          |       181 |   9.9 KB |     56 B |   1.4 MB |   4.2% | █▌               |
 | 22 | `java.util.jar.Manifest`                                         |        63 |   1.5 KB |     24 B |   1.3 MB |   4.0% | █▍               |
 | 23 | `java.util.LinkedHashMap$Entry`                                  |     2,792 | 109.1 KB |     40 B |   1.3 MB |   4.0% | █▍               |
 | 24 | `io.netty.buffer.PoolSubpage[]`                                  |       202 |  34.7 KB |    176 B | 957.9 KB |   2.8% | █                |
@@ -196,17 +196,17 @@ _Every loaded class with its instance count, shallow heap (own bytes), and retai
 | 34 | `breeze.linalg.DenseVector$mcD$sp`                               |    15,006 | 586.2 KB |     40 B | 586.8 KB |   1.7% | ▌                |
 | 35 | `org.sparkproject.jetty.util.ArrayTernaryTrie`                   |       256 |   8.0 KB |     32 B | 556.5 KB |   1.6% | ▌                |
 | 36 | `org.sparkproject.jetty.http.pathmap.PathMappings`               |        84 |   2.6 KB |     32 B | 546.7 KB |   1.6% | ▌                |
-| 37 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |         1 |     64 B |     64 B | 477.1 KB |   1.4% | ▌                |
-| 38 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         |        28 |   2.8 KB |    104 B | 463.2 KB |   1.4% | ▍                |
+| 37 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |         1 |     64 B |     64 B | 476.9 KB |   1.4% | ▌                |
+| 38 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         |        28 |   2.6 KB |     96 B | 463.0 KB |   1.4% | ▍                |
 | 39 | `java.lang.invoke.MemberName`                                    |     5,801 | 226.6 KB |     40 B | 460.6 KB |   1.4% | ▍                |
 | 40 | `org.sparkproject.jetty.util.IncludeExclude`                     |       112 |   3.5 KB |     32 B | 446.7 KB |   1.3% | ▍                |
 | 41 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                |         1 |     96 B |     96 B | 432.1 KB |   1.3% | ▍                |
-| 42 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |         1 |     96 B |     96 B | 402.4 KB |   1.2% | ▍                |
+| 42 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |         1 |     96 B |     96 B | 402.3 KB |   1.2% | ▍                |
 | 43 | `java.lang.String[]`                                             |     1,528 | 208.6 KB |  18.5 KB | 393.4 KB |   1.2% | ▍                |
 | 44 | `java.util.concurrent.locks.ReentrantLock`                       |     8,514 | 133.0 KB |     16 B | 386.8 KB |   1.1% | ▍                |
 | 45 | `java.lang.invoke.DirectMethodHandle`                            |     2,436 |  95.2 KB |     40 B | 375.2 KB |   1.1% | ▍                |
 | 46 | `org.sparkproject.jetty.http.pathmap.PathSpecSet`                |        56 |    896 B |     16 B | 364.4 KB |   1.1% | ▍                |
-| 47 | `org.sparkproject.jetty.servlet.ServletContextHandler`           |        29 |   6.3 KB |    224 B | 307.1 KB |   0.9% | ▎                |
+| 47 | `org.sparkproject.jetty.servlet.ServletContextHandler`           |        29 |   6.3 KB |    224 B | 306.9 KB |   0.9% | ▎                |
 | 48 | `org.apache.spark.status.ElementTrackingStore`                   |         1 |     40 B |     40 B | 303.3 KB |   0.9% | ▎                |
 | 49 | `jdk.internal.util.ReferencedKeyMap`                             |         1 |     24 B |     24 B | 302.6 KB |   0.9% | ▎                |
 | 50 | `jdk.internal.util.ReferencedKeySet`                             |         1 |     16 B |     16 B | 302.5 KB |   0.9% | ▎                |
@@ -220,7 +220,7 @@ _Classes grouped into JDK/framework/other (or your own `[[category]]`/`--categor
 | ----------- | ------: | --------: | -------: | -----: | -------: | ---------------- |
 | `other`     |   7,430 |   134,305 |  20.4 MB |  61.6% |  35.7 MB | ████████████████ |
 | `jdk`       |   5,122 |   417,154 |  12.0 MB |  36.2% |  79.6 MB | █████████▍       |
-| `framework` |     384 |    10,926 | 745.5 KB |   2.2% |   4.2 MB | ▌                |
+| `framework` |     384 |    10,926 | 745.5 KB |   2.2% |   4.1 MB | ▌                |
 
 ### Biggest Non-JDK Classes
 
@@ -242,22 +242,22 @@ _The same class histogram, filtered to exclude built-in JDK/platform classes —
 | 12 | `breeze.linalg.DenseVector$mcD$sp`                               | `other`     |    15,006 | 586.2 KB | 586.8 KB |   1.7% | ▌                |
 | 13 | `org.sparkproject.jetty.util.ArrayTernaryTrie`                   | `other`     |       256 |   8.0 KB | 556.5 KB |   1.6% | ▌                |
 | 14 | `org.sparkproject.jetty.http.pathmap.PathMappings`               | `other`     |        84 |   2.6 KB | 546.7 KB |   1.6% | ▌                |
-| 15 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` | `other`     |         1 |     64 B | 477.1 KB |   1.4% | ▌                |
-| 16 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         | `other`     |        28 |   2.8 KB | 463.2 KB |   1.4% | ▍                |
+| 15 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` | `other`     |         1 |     64 B | 476.9 KB |   1.4% | ▌                |
+| 16 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         | `other`     |        28 |   2.6 KB | 463.0 KB |   1.4% | ▍                |
 | 17 | `org.sparkproject.jetty.util.IncludeExclude`                     | `other`     |       112 |   3.5 KB | 446.7 KB |   1.3% | ▍                |
 | 18 | `org.sparkproject.jetty.http.pathmap.PathSpecSet`                | `other`     |        56 |    896 B | 364.4 KB |   1.1% | ▍                |
-| 19 | `org.sparkproject.jetty.servlet.ServletContextHandler`           | `other`     |        29 |   6.3 KB | 307.1 KB |   0.9% | ▎                |
+| 19 | `org.sparkproject.jetty.servlet.ServletContextHandler`           | `other`     |        29 |   6.3 KB | 306.9 KB |   0.9% | ▎                |
 | 20 | `org.apache.spark.status.ElementTrackingStore`                   | `other`     |         1 |     40 B | 303.3 KB |   0.9% | ▎                |
 | 21 | `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`      | `other`     |         1 |     16 B | 301.3 KB |   0.9% | ▎                |
 | 22 | `org.apache.spark.util.kvstore.InMemoryStore`                    | `other`     |         1 |     24 B | 301.1 KB |   0.9% | ▎                |
 | 23 | `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`       | `other`     |        12 |    480 B | 297.5 KB |   0.9% | ▎                |
 | 24 | `org.apache.spark.mllib.linalg.Vector[]`                         | `other`     |         2 |  58.6 KB | 293.0 KB |   0.9% | ▎                |
-| 25 | `org.sparkproject.jetty.servlet.ServletHandler`                  | `other`     |        29 |   4.1 KB | 251.9 KB |   0.7% | ▎                |
-| 26 | `io.netty.channel.nio.NioEventLoop`                              | `framework` |        18 |   2.7 KB | 245.8 KB |   0.7% | ▎                |
+| 25 | `org.sparkproject.jetty.servlet.ServletHandler`                  | `other`     |        29 |   3.9 KB | 251.7 KB |   0.7% | ▎                |
+| 26 | `io.netty.channel.nio.NioEventLoop`                              | `framework` |        18 |   2.7 KB | 245.7 KB |   0.7% | ▎                |
 | 27 | `com.codahale.metrics.Timer`                                     | `other`     |         7 |    168 B | 243.8 KB |   0.7% | ▎                |
 | 28 | `com.codahale.metrics.Histogram`                                 | `other`     |        11 |    264 B | 242.4 KB |   0.7% | ▎                |
 | 29 | `com.codahale.metrics.ExponentiallyDecayingReservoir`            | `other`     |        11 |    616 B | 241.9 KB |   0.7% | ▎                |
-| 30 | `org.sparkproject.jetty.util.ArrayTrie`                          | `other`     |         9 |    360 B | 238.4 KB |   0.7% | ▎                |
+| 30 | `org.sparkproject.jetty.util.ArrayTrie`                          | `other`     |         9 |    288 B | 238.3 KB |   0.7% | ▎                |
 
 ### Class Loaders
 
@@ -562,12 +562,12 @@ _All top-level dominators ranked by retained heap — every object directly held
 |  6 | `java.lang.Thread`                                               |   104 B | 787.2 KB |   2.3% | ████▌            |
 |  7 | `java.util.zip.ZipFile$Source`                                   |    80 B | 602.0 KB |   1.8% | ███▌             |
 |  8 | `java.util.zip.ZipFile$Source`                                   |    80 B | 588.3 KB |   1.7% | ███▍             |
-|  9 | `java.util.jar.JarFile`                                          |    64 B | 584.6 KB |   1.7% | ███▍             |
-| 10 | `java.util.jar.JarFile`                                          |    64 B | 584.5 KB |   1.7% | ███▍             |
+|  9 | `java.util.jar.JarFile`                                          |    56 B | 584.6 KB |   1.7% | ███▍             |
+| 10 | `java.util.jar.JarFile`                                          |    56 B | 584.5 KB |   1.7% | ███▍             |
 | 11 | `java.util.zip.ZipFile$Source`                                   |    80 B | 533.4 KB |   1.6% | ███              |
-| 12 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |    64 B | 477.1 KB |   1.4% | ██▊              |
+| 12 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |    64 B | 476.9 KB |   1.4% | ██▊              |
 | 13 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                |    96 B | 432.0 KB |   1.3% | ██▌              |
-| 14 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |    96 B | 402.4 KB |   1.2% | ██▎              |
+| 14 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |    96 B | 402.3 KB |   1.2% | ██▎              |
 | 15 | `java.util.zip.ZipFile$Source`                                   |    80 B | 374.5 KB |   1.1% | ██▏              |
 | 16 | `java.lang.invoke.MethodType`                                    |    48 B | 302.8 KB |   0.9% | █▊               |
 | 17 | `org.apache.spark.status.ElementTrackingStore`                   |    40 B | 301.7 KB |   0.9% | █▊               |
@@ -579,68 +579,28 @@ _All top-level dominators ranked by retained heap — every object directly held
 
 _Classes ranked by total retained heap. High retained with low shallow means the class is keeping many other objects alive — investigate it in Dominator Analysis._
 
-|  # | Class                                                            | Instances | Retained |                  |
-| -: | ---------------------------------------------------------------- | --------: | -------: | ---------------- |
-|  1 | `byte[]`                                                         |    58,366 |  14.7 MB | ████████████████ |
-|  2 | `java.util.zip.ZipFile$Source`                                   |       181 |  12.3 MB | █████████████▍   |
-|  3 | `java.lang.Class`                                                |    12,493 |   7.0 MB | ███████▌         |
-|  4 | `java.lang.Object[]`                                             |    11,059 |   6.3 MB | ██████▊          |
-|  5 | `java.lang.String`                                               |    56,540 |   4.4 MB | ████▊            |
-|  6 | `java.util.concurrent.ConcurrentHashMap`                         |     1,128 |   3.2 MB | ███▍             |
-|  7 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  |       444 |   3.1 MB | ███▍             |
-|  8 | `java.util.LinkedHashMap`                                        |     6,104 |   3.1 MB | ███▎             |
-|  9 | `java.net.URLClassLoader`                                        |         2 |   2.7 MB | ██▉              |
-| 10 | `java.util.concurrent.ConcurrentHashMap$Node`                    |    42,785 |   2.6 MB | ██▊              |
-| 11 | `java.lang.Object`                                               |   154,653 |   2.4 MB | ██▌              |
-| 12 | `org.apache.spark.storage.memory.MemoryStore`                    |         1 |   2.3 MB | ██▌              |
-| 13 | `java.util.HashMap`                                              |     1,089 |   2.2 MB | ██▍              |
-| 14 | `java.util.HashMap$Node[]`                                       |     1,053 |   2.2 MB | ██▎              |
-| 15 | `java.util.ArrayList`                                            |       716 |   2.1 MB | ██▎              |
-| 16 | `java.util.HashMap$Node`                                         |    16,017 |   2.0 MB | ██▏              |
-| 17 | `int[]`                                                          |     9,056 |   2.0 MB | ██▏              |
-| 18 | `java.lang.ref.SoftReference`                                    |     1,653 |   1.5 MB | █▋               |
-| 19 | `double[]`                                                       |    16,101 |   1.5 MB | █▌               |
-| 20 | `java.util.jar.JarFile`                                          |       181 |   1.4 MB | █▌               |
-| 21 | `java.util.jar.Manifest`                                         |        63 |   1.3 MB | █▍               |
-| 22 | `java.util.LinkedHashMap$Entry`                                  |     2,792 |   1.3 MB | █▍               |
-| 23 | `io.netty.buffer.PoolSubpage[]`                                  |       202 | 957.9 KB | █                |
-| 24 | `org.apache.spark.storage.memory.DeserializedMemoryEntry`        |         7 | 937.9 KB | ▉                |
-| 25 | `io.netty.buffer.PoolSubpage`                                    |     7,878 | 923.2 KB | ▉                |
-| 26 | `java.lang.Thread`                                               |       270 | 913.1 KB | ▉                |
-| 27 | `io.netty.buffer.PoolArena$HeapArena`                            |       101 | 695.2 KB | ▋                |
-| 28 | `io.netty.buffer.PoolArena$DirectArena`                          |       101 | 695.2 KB | ▋                |
-| 29 | `java.util.jar.Attributes`                                       |     5,841 | 652.9 KB | ▋                |
-| 30 | `breeze.linalg.Vector[]`                                         |         2 | 644.6 KB | ▋                |
-| 31 | `char[]`                                                         |       733 | 636.3 KB | ▋                |
-| 32 | `breeze.linalg.DenseVector$mcD$sp`                               |    15,006 | 586.7 KB | ▌                |
-| 33 | `java.lang.invoke.MethodType`                                    |     4,164 | 582.6 KB | ▌                |
-| 34 | `org.sparkproject.jetty.util.ArrayTernaryTrie`                   |       256 | 556.3 KB | ▌                |
-| 35 | `org.sparkproject.jetty.http.pathmap.PathMappings`               |        84 | 546.4 KB | ▌                |
-| 36 | `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |         1 | 477.1 KB | ▌                |
-| 37 | `org.sparkproject.jetty.server.handler.gzip.GzipHandler`         |        28 | 462.2 KB | ▍                |
-| 38 | `java.lang.invoke.MemberName`                                    |     5,801 | 460.4 KB | ▍                |
-| 39 | `org.sparkproject.jetty.util.IncludeExclude`                     |       112 | 446.7 KB | ▍                |
-| 40 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                |         1 | 432.0 KB | ▍                |
-| 41 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           |         1 | 402.4 KB | ▍                |
-| 42 | `java.lang.String[]`                                             |     1,528 | 393.4 KB | ▍                |
-| 43 | `java.util.concurrent.locks.ReentrantLock`                       |     8,514 | 386.8 KB | ▍                |
-| 44 | `java.lang.invoke.DirectMethodHandle`                            |     2,436 | 371.6 KB | ▍                |
-| 45 | `org.sparkproject.jetty.http.pathmap.PathSpecSet`                |        56 | 364.4 KB | ▍                |
-| 46 | `org.sparkproject.jetty.servlet.ServletContextHandler`           |        29 | 307.1 KB | ▎                |
-| 47 | `jdk.internal.util.ReferencedKeySet`                             |         1 | 302.5 KB | ▎                |
-| 48 | `jdk.internal.util.ReferencedKeyMap`                             |         1 | 302.5 KB | ▎                |
-| 49 | `org.apache.spark.status.ElementTrackingStore`                   |         1 | 301.7 KB | ▎                |
-| 50 | `org.apache.spark.util.kvstore.InMemoryStore`                    |         1 | 301.1 KB | ▎                |
-| 51 | `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`      |         1 | 301.1 KB | ▎                |
-| 52 | `java.util.concurrent.locks.ReentrantLock$NonfairSync`           |     9,583 | 300.2 KB | ▎                |
-| 53 | `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`       |        12 | 297.3 KB | ▎                |
-| 54 | `org.apache.spark.mllib.linalg.Vector[]`                         |         2 | 293.0 KB | ▎                |
-| 55 | `java.lang.invoke.LambdaForm`                                    |       618 | 260.5 KB | ▎                |
-| 56 | `org.sparkproject.jetty.servlet.ServletHandler`                  |        29 | 251.2 KB | ▎                |
-| 57 | `io.netty.channel.nio.NioEventLoop`                              |        18 | 245.2 KB | ▎                |
-| 58 | `com.codahale.metrics.Timer`                                     |         7 | 243.8 KB | ▎                |
-| 59 | `com.codahale.metrics.Histogram`                                 |        11 | 242.4 KB | ▎                |
-| 60 | `com.codahale.metrics.ExponentiallyDecayingReservoir`            |        11 | 241.8 KB | ▎                |
+|  # | Class                                           | Instances | Retained |                  |
+| -: | ----------------------------------------------- | --------: | -------: | ---------------- |
+|  1 | `byte[]`                                        |    58,366 |  14.7 MB | ████████████████ |
+|  2 | `java.util.zip.ZipFile$Source`                  |       181 |  12.3 MB | █████████████▍   |
+|  3 | `java.lang.Class`                               |    12,493 |   7.0 MB | ███████▌         |
+|  4 | `java.lang.Object[]`                            |    11,059 |   6.3 MB | ██████▊          |
+|  5 | `java.lang.String`                              |    56,540 |   4.4 MB | ████▊            |
+|  6 | `java.util.concurrent.ConcurrentHashMap`        |     1,128 |   3.2 MB | ███▍             |
+|  7 | `java.util.concurrent.ConcurrentHashMap$Node[]` |       444 |   3.1 MB | ███▎             |
+|  8 | `java.util.LinkedHashMap`                       |     6,104 |   3.1 MB | ███▎             |
+|  9 | `java.net.URLClassLoader`                       |         2 |   2.7 MB | ██▉              |
+| 10 | `java.util.concurrent.ConcurrentHashMap$Node`   |    42,785 |   2.6 MB | ██▊              |
+| 11 | `java.lang.Object`                              |   154,653 |   2.4 MB | ██▌              |
+| 12 | `org.apache.spark.storage.memory.MemoryStore`   |         1 |   2.3 MB | ██▌              |
+| 13 | `java.util.HashMap`                             |     1,089 |   2.2 MB | ██▍              |
+| 14 | `java.util.HashMap$Node[]`                      |     1,053 |   2.2 MB | ██▎              |
+| 15 | `java.util.ArrayList`                           |       716 |   2.1 MB | ██▎              |
+| 16 | `java.util.HashMap$Node`                        |    16,017 |   2.0 MB | ██▏              |
+| 17 | `int[]`                                         |     9,056 |   2.0 MB | ██▏              |
+| 18 | `java.lang.ref.SoftReference`                   |     1,653 |   1.5 MB | █▋               |
+| 19 | `double[]`                                      |    16,101 |   1.5 MB | █▌               |
+| 20 | `java.util.jar.JarFile`                         |       181 |   1.4 MB | █▌               |
 
 #### Who Holds Each Class?
 
@@ -796,9 +756,9 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 | `java.util.concurrent.ConcurrentHashMap$Node[]`             | 34,753 |   2.9 MB | ████████████████ |
 | `java.lang.Object[]`                                        |  5,151 |   1.5 MB | ████████▎        |
 | `java.util.jar.JarFile`                                     |     63 |   1.3 MB | ███████▎         |
-| `java.net.URLClassLoader`                                   |      9 | 633.3 KB | ███▍             |
+| `java.net.URLClassLoader`                                   |      9 | 632.9 KB | ███▍             |
 | `jdk.internal.loader.ClassLoaders$AppClassLoader`           |      7 | 417.3 KB | ██▎              |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`      |      7 | 391.2 KB | ██               |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`      |      7 | 391.1 KB | ██               |
 | `jdk.internal.util.ReferencedKeySet`                        |      1 | 302.5 KB | █▋               |
 | `jdk.internal.util.ReferencedKeyMap`                        |      1 | 302.4 KB | █▋               |
 |   ↳ `jdk.internal.util.ReferencedKeySet`                    |      1 | 302.5 KB | █▋               |
@@ -811,9 +771,9 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 | Holder Class                                                    | Count | Retained |                  |
 | --------------------------------------------------------------- | ----: | -------: | ---------------- |
 | `java.util.concurrent.ConcurrentHashMap`                        |   408 |   3.4 MB | ████████████████ |
-|   ↳ `java.net.URLClassLoader`                                   |     9 | 633.3 KB | ██▉              |
+|   ↳ `java.net.URLClassLoader`                                   |     9 | 632.9 KB | ██▉              |
 |   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`           |     7 | 417.3 KB | █▉               |
-|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`      |     7 | 391.2 KB | █▊               |
+|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader`      |     7 | 391.1 KB | █▊               |
 |   ↳ `jdk.internal.util.ReferencedKeyMap`                        |     1 | 302.4 KB | █▍               |
 |   ↳ `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists` |     1 | 301.0 KB | █▍               |
 |   ↳ `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`  |    24 | 228.1 KB | █                |
@@ -821,9 +781,9 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `sun.util.locale.BaseLocale$Cache`                          |     1 | 154.9 KB | ▋                |
 |   ↳ `java.util.Properties`                                      |    27 | 139.1 KB | ▋                |
 |   ↳ `java.time.zone.TzdbZoneRulesProvider`                      |     1 | 115.7 KB | ▌                |
-| `java.net.URLClassLoader`                                       |     9 | 633.3 KB | ██▉              |
+| `java.net.URLClassLoader`                                       |     9 | 632.9 KB | ██▉              |
 | `jdk.internal.loader.ClassLoaders$AppClassLoader`               |     7 | 417.3 KB | █▉               |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`          |     7 | 391.2 KB | █▊               |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`          |     7 | 391.1 KB | █▊               |
 | `jdk.internal.util.ReferencedKeyMap`                            |     1 | 302.4 KB | █▍               |
 | `org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`     |     1 | 301.0 KB | █▍               |
 | `org.apache.spark.util.kvstore.InMemoryStore$InstanceList`      |    24 | 228.1 KB | █                |
@@ -877,9 +837,9 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `java.util.concurrent.ConcurrentHashMap`                  |    408 |   3.4 MB | ████████████████ |
 |   ↳ `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys` |     35 |   4.9 KB | ▏                |
 |   ↳ `com.fasterxml.jackson.core.util.InternCache`             |      1 |   1.1 KB | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node`                 |  8,033 | 626.6 KB | ██▉              |
+| `java.util.concurrent.ConcurrentHashMap$Node`                 |  8,033 | 626.5 KB | ██▉              |
 |   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`           | 34,752 |   2.9 MB | █████████████▋   |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`             |  8,033 | 626.6 KB | ██▉              |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`             |  8,033 | 626.5 KB | ██▉              |
 | `org.apache.spark.util.kvstore.InMemoryStore$NaturalKeys`     |     35 |   4.9 KB | ▏                |
 | `com.fasterxml.jackson.core.util.InternCache`                 |      1 |   1.1 KB | ▏                |
 
@@ -902,7 +862,7 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 |   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                           |       1 |  32.0 KB | ▏                |
 | `java.util.concurrent.ConcurrentHashMap$Node`                                  |  21,815 | 340.9 KB | █▊               |
 |   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]`                            |  34,752 |   2.9 MB | ████████████████ |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                              |   8,033 | 626.6 KB | ███▍             |
+|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`                              |   8,033 | 626.5 KB | ███▍             |
 | `java.util.ImmutableCollections$SetN`                                          |     165 | 148.6 KB | ▊                |
 | `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`     |      36 | 144.8 KB | ▊                |
 | `org.sparkproject.jetty.util.ArrayTernaryTrie`                                 |     256 | 140.0 KB | ▊                |
@@ -1102,520 +1062,6 @@ _For each class above with holder data, the immediate-dominator class breakdown.
 | ------------ | ----: | -------: | ---------------- |
 | `(GC Root)`  |   181 |   1.4 MB | ████████████████ |
 
-**`java.util.jar.Manifest`**
-
-| Holder Class                                               | Count | Retained |                  |
-| ---------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.util.jar.JarFile`                                    |    63 |   1.3 MB | ████████████████ |
-| `java.lang.ref.SoftReference`                              |    63 |   1.3 MB | ███████████████▉ |
-|   ↳ `java.util.jar.JarFile`                                |    63 |   1.3 MB | ████████████████ |
-|   ↳ `java.lang.ThreadLocal$ThreadLocalMap$Entry`           |     4 |  66.0 KB | ▊                |
-|   ↳ `java.lang.ref.SoftReference[]`                        |   535 |  60.7 KB | ▋                |
-|   ↳ `sun.util.locale.BaseLocale$Key`                       | 1,044 |  40.8 KB | ▍                |
-|   ↳ `jdk.internal.loader.ClassLoaders$BootClassLoader`     |     1 |  10.3 KB | ▏                |
-|   ↳ `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |     1 |  10.3 KB | ▏                |
-|   ↳ `jdk.internal.loader.ClassLoaders$AppClassLoader`      |     1 |  10.3 KB | ▏                |
-|   ↳ `sun.security.util.CryptoAlgorithmConstraints`         |     1 |    664 B | ▏                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`          |     1 |    224 B | ▏                |
-|   ↳ `org.apache.spark.broadcast.TorrentBroadcast`          |     2 |     80 B | ▏                |
-| `java.lang.ThreadLocal$ThreadLocalMap$Entry`               |     4 |  66.0 KB | ▊                |
-| `java.lang.ref.SoftReference[]`                            |   535 |  60.7 KB | ▋                |
-| `sun.util.locale.BaseLocale$Key`                           | 1,044 |  40.8 KB | ▍                |
-| `jdk.internal.loader.ClassLoaders$AppClassLoader`          |     1 |  10.3 KB | ▏                |
-| `jdk.internal.loader.ClassLoaders$BootClassLoader`         |     1 |  10.3 KB | ▏                |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`     |     1 |  10.3 KB | ▏                |
-| `sun.security.util.CryptoAlgorithmConstraints`             |     1 |    664 B | ▏                |
-| `java.util.concurrent.ConcurrentHashMap$Node`              |     1 |    224 B | ▏                |
-
-**`java.util.LinkedHashMap$Entry`**
-
-| Holder Class                                                          | Count | Retained |                  |
-| --------------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `org.apache.spark.storage.memory.MemoryStore`                         |     1 |   2.3 MB | ████████████████ |
-| `java.util.LinkedHashMap`                                             | 2,718 |   1.3 MB | █████████        |
-|   ↳ `org.apache.spark.storage.memory.MemoryStore`                     |     1 |   2.3 MB | ████████████████ |
-|   ↳ `java.util.jar.Attributes`                                        | 5,841 | 561.6 KB | ███▊             |
-|   ↳ `java.util.LinkedHashSet`                                         |    67 | 147.5 KB | ▉                |
-|   ↳ `sun.reflect.annotation.AnnotationInvocationHandler`              |   102 |  23.8 KB | ▏                |
-|   ↳ `java.lang.reflect.Method`                                        |    71 |  18.1 KB | ▏                |
-|   ↳ `org.apache.logging.log4j.core.pattern.PatternParser`             |     1 |   8.0 KB | ▏                |
-|   ↳ `org.apache.logging.log4j.core.config.plugins.util.PluginManager` |     1 |   6.2 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.introspect.AnnotatedMethodMap`    |     2 |   3.8 KB | ▏                |
-|   ↳ `java.lang.reflect.Field`                                         |     3 |   1.1 KB | ▏                |
-|   ↳ `java.util.Collections$SingletonMap`                              |     2 |   1.1 KB | ▏                |
-| `java.util.jar.Attributes`                                            | 5,841 | 561.6 KB | ███▊             |
-| `java.util.LinkedHashSet`                                             |    67 | 147.5 KB | ▉                |
-| `sun.reflect.annotation.AnnotationInvocationHandler`                  |   102 |  23.8 KB | ▏                |
-| `java.lang.reflect.Method`                                            |    71 |  18.1 KB | ▏                |
-| `org.apache.logging.log4j.core.pattern.PatternParser`                 |     1 |   8.0 KB | ▏                |
-| `org.apache.hadoop.metrics2.lib.Interns$Info$1`                       |     1 |   7.7 KB | ▏                |
-| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`             |    32 |   7.6 KB | ▏                |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$Info$1`                   |     1 |   7.7 KB | ▏                |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$Tags$1`                   |     1 |    384 B | ▏                |
-| `java.util.LinkedHashMap$Entry`                                       |    32 |   6.4 KB | ▏                |
-
-**`io.netty.buffer.PoolSubpage[]`**
-
-| Holder Class                            | Count | Retained |                  |
-| --------------------------------------- | ----: | -------: | ---------------- |
-| `io.netty.buffer.PoolArena$DirectArena` |   101 | 479.0 KB | ████████████████ |
-| `io.netty.buffer.PoolArena$HeapArena`   |   101 | 479.0 KB | ████████████████ |
-
-**`org.apache.spark.storage.memory.DeserializedMemoryEntry`**
-
-| Holder Class                                                  | Count | Retained |                  |
-| ------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.util.LinkedHashMap`                                     | 2,718 |   1.3 MB | ████████████████ |
-| `java.util.LinkedHashMap$Entry`                               |     7 | 937.9 KB | ███████████▏     |
-|   ↳ `java.util.LinkedHashMap`                                 | 2,718 |   1.3 MB | ████████████████ |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1` |    32 |   7.6 KB | ▏                |
-|   ↳ `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2` |    33 |   1.6 KB | ▏                |
-|   ↳ `java.util.LinkedHashMap$LinkedKeyIterator`               |     7 |    280 B | ▏                |
-|   ↳ `java.util.Map$Entry[]`                                   |     2 |     80 B | ▏                |
-| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$1`     |    32 |   7.6 KB | ▏                |
-| `org.apache.hadoop.metrics2.lib.Interns$CacheWith2Keys$2`     |    33 |   1.6 KB | ▏                |
-| `java.util.LinkedHashMap$LinkedKeyIterator`                   |     7 |    280 B | ▏                |
-| `java.util.Map$Entry[]`                                       |     2 |     80 B | ▏                |
-
-**`io.netty.buffer.PoolSubpage`**
-
-| Holder Class                                | Count | Retained |                  |
-| ------------------------------------------- | ----: | -------: | ---------------- |
-| `io.netty.buffer.PoolSubpage[]`             | 7,878 | 923.2 KB | ████████████████ |
-|   ↳ `io.netty.buffer.PoolArena$HeapArena`   |   101 | 479.0 KB | ████████▎        |
-|   ↳ `io.netty.buffer.PoolArena$DirectArena` |   101 | 479.0 KB | ████████▎        |
-| `io.netty.buffer.PoolArena$DirectArena`     |   101 | 479.0 KB | ████████▎        |
-| `io.netty.buffer.PoolArena$HeapArena`       |   101 | 479.0 KB | ████████▎        |
-
-**`java.lang.Thread`**
-
-| Holder Class                                                               | Count | Retained |                  |
-| -------------------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.lang.Class`                                                          | 6,044 |   3.9 MB | ████████████████ |
-| `java.util.ArrayList`                                                      |   547 |   2.1 MB | ████████▊        |
-| `(GC Root)`                                                                |   268 | 912.6 KB | ███▋             |
-| `java.util.ImmutableCollections$SetN`                                      |   165 | 148.6 KB | ▌                |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |    36 | 144.8 KB | ▌                |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |   256 | 140.0 KB | ▌                |
-| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |     1 |  75.3 KB | ▎                |
-| `java.lang.invoke.LambdaForm$Name`                                         | 1,665 |  48.1 KB | ▏                |
-| `java.util.concurrent.atomic.AtomicReferenceArray`                         |    60 |  42.6 KB | ▏                |
-| `org.sparkproject.jetty.util.BlockingArrayQueue`                           |     1 |  32.0 KB | ▏                |
-
-**`io.netty.buffer.PoolArena$HeapArena`**
-
-| Holder Class | Count | Retained |                  |
-| ------------ | ----: | -------: | ---------------- |
-| `(GC Root)`  |   101 | 695.2 KB | ████████████████ |
-
-**`io.netty.buffer.PoolArena$DirectArena`**
-
-| Holder Class | Count | Retained |                  |
-| ------------ | ----: | -------: | ---------------- |
-| `(GC Root)`  |   101 | 695.2 KB | ████████████████ |
-
-**`java.util.jar.Attributes`**
-
-| Holder Class                      |  Count | Retained |                  |
-| --------------------------------- | -----: | -------: | ---------------- |
-| `java.util.HashMap$Node[]`        | 12,159 |   2.0 MB | ████████████████ |
-| `java.lang.ref.SoftReference`     |     63 |   1.3 MB | ██████████▍      |
-| `java.util.HashMap$Node`          |  5,778 | 451.4 KB | ███▍             |
-|   ↳ `java.util.HashMap$Node[]`    | 12,159 |   2.0 MB | ████████████████ |
-|   ↳ `java.util.HashMap$Node`      |  3,830 | 659.2 KB | █████            |
-|   ↳ `java.lang.Object[]`          |     28 |   2.8 KB | ▏                |
-| `java.util.jar.Manifest`          |     63 | 201.4 KB | █▌               |
-|   ↳ `java.lang.ref.SoftReference` |     63 |   1.3 MB | ██████████▍      |
-| `java.lang.Object[]`              |     28 |   2.8 KB | ▏                |
-
-**`breeze.linalg.Vector[]`**
-
-| Holder Class                                              | Count | Retained |                  |
-| --------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.util.LinkedHashMap$Entry`                           |     7 | 937.9 KB | ████████████████ |
-| `org.apache.spark.storage.memory.DeserializedMemoryEntry` |     2 | 644.6 KB | ██████████▉      |
-|   ↳ `java.util.LinkedHashMap$Entry`                       |     7 | 937.9 KB | ████████████████ |
-
-**`char[]`**
-
-| Holder Class                                                                 | Count | Retained |                  |
-| ---------------------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.util.ArrayList`                                                        |   547 |   2.1 MB | ████████████████ |
-| `org.sparkproject.jetty.http.pathmap.PathMappings`                           |   252 | 529.6 KB | ███▊             |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                               |   256 | 267.9 KB | █▉               |
-|   ↳ `org.sparkproject.jetty.http.pathmap.PathMappings`                       |   252 | 529.6 KB | ███▊             |
-|   ↳ `java.lang.Class`                                                        |     3 |  14.3 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping` |     1 |  12.4 KB | ▏                |
-| `org.sparkproject.jetty.util.ArrayTrie`                                      |     9 | 160.3 KB | █▏               |
-|   ↳ `java.lang.Class`                                                        |     9 | 237.7 KB | █▋               |
-| `java.util.ImmutableCollections$SetN`                                        |   165 | 148.6 KB | █                |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`   |    36 | 144.8 KB | █                |
-| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`              |     1 |  75.3 KB | ▌                |
-| `char[][]`                                                                   |   381 |  51.3 KB | ▎                |
-|   ↳ `org.sparkproject.jetty.util.ArrayTrie`                                  |     6 |  55.1 KB | ▍                |
-|   ↳ `char[][][]`                                                             |   103 |   7.2 KB | ▏                |
-| `java.lang.ref.SoftReference`                                                |     3 |  49.6 KB | ▎                |
-| `java.lang.invoke.LambdaForm$Name`                                           | 1,665 |  48.1 KB | ▎                |
-
-**`breeze.linalg.DenseVector$mcD$sp`**
-
-| Holder Class                                                  |  Count | Retained |                  |
-| ------------------------------------------------------------- | -----: | -------: | ---------------- |
-| `org.apache.spark.storage.memory.DeserializedMemoryEntry`     |      2 | 644.6 KB | ████████████████ |
-| `breeze.linalg.Vector[]`                                      | 15,000 | 585.9 KB | ██████████████▌  |
-|   ↳ `org.apache.spark.storage.memory.DeserializedMemoryEntry` |      2 | 644.6 KB | ████████████████ |
-| `org.apache.spark.mllib.clustering.ExpectationSum`            |      1 |    856 B | ▏                |
-| `breeze.linalg.DenseVector[]`                                 |      6 |    816 B | ▏                |
-|   ↳ `org.apache.spark.mllib.clustering.ExpectationSum`        |      1 |    856 B | ▏                |
-
-**`java.lang.invoke.MethodType`**
-
-| Holder Class                                      | Count | Retained |                  |
-| ------------------------------------------------- | ----: | -------: | ---------------- |
-| `(GC Root)`                                       | 3,989 | 582.6 KB | ████████████████ |
-| `java.util.concurrent.ConcurrentHashMap$Node`     | 4,164 | 140.2 KB | ███▊             |
-| `jdk.internal.util.WeakReferenceKey`              |   175 |  10.0 KB | ▎                |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node` | 4,164 | 140.2 KB | ███▊             |
-
-**`org.sparkproject.jetty.util.ArrayTernaryTrie`**
-
-| Holder Class                                                                                     | Count | Retained |                  |
-| ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
-| `java.lang.Object[]`                                                                             | 5,148 |   1.5 MB | ████████████████ |
-| `org.sparkproject.jetty.http.pathmap.PathMappings`                                               |   252 | 529.6 KB | █████▍           |
-|   ↳ `org.sparkproject.jetty.http.pathmap.PathSpecSet`                                            |    56 | 363.6 KB | ███▊             |
-|   ↳ `org.sparkproject.jetty.servlet.ServletHandler`                                              |    28 | 182.8 KB | █▉               |
-| `org.sparkproject.jetty.http.pathmap.PathSpecSet`                                                |    56 | 363.6 KB | ███▊             |
-| `org.sparkproject.jetty.servlet.ServletHandler`                                                  |    28 | 182.8 KB | █▉               |
-| `java.lang.invoke.DirectMethodHandle$Constructor`                                                |   847 |  45.3 KB | ▍                |
-| `java.lang.Class`                                                                                |     3 |  14.3 KB | ▏                |
-|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████████████████ |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | ▍                |
-|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |    24 |    488 B | ▏                |
-|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B | ▏                |
-|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B | ▏                |
-|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
-| `java.util.concurrent.atomic.AtomicReference`                                                    |     1 |  13.8 KB | ▏                |
-| `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping`                         |     1 |  12.4 KB | ▏                |
-|   ↳ `java.util.concurrent.atomic.AtomicReference`                                                |     1 |  13.8 KB | ▏                |
-| `java.net.URLClassLoader`                                                                        |    10 |   9.4 KB | ▏                |
-| `java.lang.invoke.MemberName`                                                                    |   472 |   8.9 KB | ▏                |
-
-**`org.sparkproject.jetty.http.pathmap.PathMappings`**
-
-| Holder Class                                               | Count | Retained |                  |
-| ---------------------------------------------------------- | ----: | -------: | ---------------- |
-| `org.sparkproject.jetty.util.IncludeExclude`               |    56 | 364.4 KB | ████████████████ |
-| `org.sparkproject.jetty.http.pathmap.PathSpecSet`          |    56 | 363.6 KB | ███████████████▉ |
-|   ↳ `org.sparkproject.jetty.util.IncludeExclude`           |    56 | 364.4 KB | ████████████████ |
-| `org.sparkproject.jetty.servlet.ServletContextHandler`     |    29 | 251.2 KB | ███████████      |
-| `org.sparkproject.jetty.servlet.ServletHandler`            |    28 | 182.8 KB | ████████         |
-|   ↳ `org.sparkproject.jetty.servlet.ServletContextHandler` |    29 | 251.2 KB | ███████████      |
-
-**`org.sparkproject.jetty.server.handler.ContextHandlerCollection`**
-
-| Holder Class | Count | Retained |                  |
-| ------------ | ----: | -------: | ---------------- |
-| `(GC Root)`  |     1 | 477.1 KB | ████████████████ |
-
-**`org.sparkproject.jetty.server.handler.gzip.GzipHandler`**
-
-| Holder Class                                                     | Count | Retained |                  |
-| ---------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |    28 | 462.2 KB | ████████████████ |
-
-**`java.lang.invoke.MemberName`**
-
-| Holder Class                                                               |  Count | Retained |                  |
-| -------------------------------------------------------------------------- | -----: | -------: | ---------------- |
-| `java.lang.Class`                                                          |  6,051 |   3.9 MB | ████████████████ |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`                            | 34,752 |   2.9 MB | ███████████▉     |
-| `java.util.ArrayList`                                                      |    547 |   2.1 MB | ████████▊        |
-| `java.lang.invoke.DirectMethodHandle`                                      |  2,334 | 275.4 KB | █                |
-|   ↳ `java.lang.Object[]`                                                   |  1,973 | 321.1 KB | █▎               |
-|   ↳ `java.lang.invoke.MethodHandleImpl$AsVarargsCollector`                 |    292 |  39.3 KB | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`                        |     16 |   1.5 KB | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLL`                       |      7 |    672 B | ▏                |
-|   ↳ `java.lang.Class`                                                      |      3 |    656 B | ▏                |
-|   ↳ `java.lang.invoke.MethodType`                                          |     10 |    400 B | ▏                |
-|   ↳ `java.util.ImmutableCollections$List12`                                |      4 |    384 B | ▏                |
-|   ↳ `java.lang.invoke.MethodHandleImpl$IntrinsicMethodHandle`              |      3 |    224 B | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LI`                        |      1 |    152 B | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLLL`                      |      1 |    128 B | ▏                |
-| `java.util.ImmutableCollections$SetN`                                      |    165 | 148.6 KB | ▌                |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |     36 | 144.8 KB | ▌                |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |    256 | 140.0 KB | ▌                |
-| `java.lang.invoke.LambdaFormEditor$Transform`                              |     80 |  93.3 KB | ▍                |
-| `java.lang.invoke.DirectMethodHandle$Constructor`                          |  2,137 |  83.5 KB | ▎                |
-|   ↳ `java.lang.Object[]`                                                   |    995 | 184.8 KB | ▋                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LL`                        |     41 |   5.8 KB | ▏                |
-|   ↳ `java.util.HashMap$Node`                                               |     11 |   3.2 KB | ▏                |
-|   ↳ `jdk.internal.reflect.DirectConstructorHandleAccessor`                 |     18 |   2.5 KB | ▏                |
-|   ↳ `java.lang.invoke.BoundMethodHandle$Species_LLL`                       |      1 |    144 B | ▏                |
-| `java.lang.invoke.LambdaForm$Name`                                         |  2,193 |  78.3 KB | ▎                |
-
-**`org.sparkproject.jetty.util.IncludeExclude`**
-
-| Holder Class                                                         | Count | Retained |                  |
-| -------------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `org.sparkproject.jetty.server.handler.ContextHandlerCollection`     |    28 | 462.2 KB | ████████████████ |
-| `org.sparkproject.jetty.server.handler.gzip.GzipHandler`             |   112 | 446.7 KB | ███████████████▍ |
-|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection` |    28 | 462.2 KB | ████████████████ |
-
-**`jdk.internal.loader.ClassLoaders$AppClassLoader`**
-
-| Holder Class | Count | Retained |                  |
-| ------------ | ----: | -------: | ---------------- |
-| `(GC Root)`  |     1 | 432.0 KB | ████████████████ |
-
-**`jdk.internal.loader.ClassLoaders$PlatformClassLoader`**
-
-| Holder Class | Count | Retained |                  |
-| ------------ | ----: | -------: | ---------------- |
-| `(GC Root)`  |     1 | 402.4 KB | ████████████████ |
-
-**`java.lang.String[]`**
-
-| Holder Class                                                                 | Count | Retained |                  |
-| ---------------------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.util.concurrent.ConcurrentHashMap`                                     |   408 |   3.4 MB | ████████████████ |
-| `java.util.HashMap`                                                          |   716 |   2.2 MB | ██████████▍      |
-| `java.util.ArrayList`                                                        |   547 |   2.1 MB | ██████████▏      |
-| `java.util.LinkedHashMap`                                                    | 3,021 |   1.3 MB | ██████▍          |
-| `org.sparkproject.jetty.http.pathmap.PathMappings`                           |   252 | 529.6 KB | ██▍              |
-| `org.apache.xbean.asm9.ClassReader`                                          |     1 | 181.0 KB | ▊                |
-|   ↳ `java.lang.Thread`                                                       |     1 | 200.4 KB | ▉                |
-| `java.util.ImmutableCollections$SetN`                                        |   165 | 148.6 KB | ▋                |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`   |    36 | 144.8 KB | ▋                |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                               |   256 | 140.4 KB | ▋                |
-|   ↳ `org.sparkproject.jetty.http.pathmap.PathMappings`                       |   252 | 529.6 KB | ██▍              |
-|   ↳ `java.lang.Class`                                                        |     3 |  14.3 KB | ▏                |
-|   ↳ `org.sparkproject.jetty.server.handler.ContextHandlerCollection$Mapping` |     1 |  12.4 KB | ▏                |
-| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`              |     1 |  75.3 KB | ▎                |
-
-**`java.util.concurrent.locks.ReentrantLock`**
-
-| Holder Class                                          | Count | Retained |                  |
-| ----------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.lang.Object[]`                                  | 5,149 |   1.5 MB | ████████████████ |
-| `io.netty.buffer.PoolSubpage[]`                       | 7,878 | 923.2 KB | █████████▌       |
-| `io.netty.buffer.PoolSubpage`                         | 7,878 | 369.3 KB | ███▊             |
-|   ↳ `io.netty.buffer.PoolSubpage[]`                   | 7,878 | 923.2 KB | █████████▌       |
-| `java.lang.invoke.DirectMethodHandle$Constructor`     |   847 |  45.3 KB | ▍                |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool` |     1 |  32.4 KB | ▎                |
-| `java.util.WeakHashMap`                               |   239 |  24.3 KB | ▎                |
-| `com.fasterxml.jackson.databind.util.LRUMap`          |    13 |  15.1 KB | ▏                |
-| `java.net.URLClassLoader`                             |    10 |   9.4 KB | ▏                |
-| `java.lang.invoke.MemberName`                         |   472 |   8.9 KB | ▏                |
-| `io.netty.buffer.PoolArena$DirectArena`               |   101 |   4.7 KB | ▏                |
-
-**`java.lang.invoke.DirectMethodHandle`**
-
-| Holder Class                                                                   | Count | Retained |                  |
-| ------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
-| `java.util.ArrayList`                                                          |   547 |   2.1 MB | ████████████████ |
-| `java.lang.Object[]`                                                           | 1,973 | 321.1 KB | ██▎              |
-|   ↳ `java.lang.Class`                                                          | 6,044 |   3.9 MB | ████████████████ |
-|   ↳ `java.util.ArrayList`                                                      |   547 |   2.1 MB | ████████████████ |
-|   ↳ `java.util.ImmutableCollections$SetN`                                      |   165 | 148.6 KB | █                |
-|   ↳ `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |    36 | 144.8 KB | █                |
-|   ↳ `org.sparkproject.jetty.util.ArrayTernaryTrie`                             |   256 | 140.0 KB | █                |
-|   ↳ `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`            |     1 |  75.3 KB | ▌                |
-|   ↳ `java.lang.Object[]`                                                       |   446 |  62.4 KB | ▍                |
-|   ↳ `java.lang.invoke.LambdaForm$Name`                                         | 1,665 |  48.1 KB | ▎                |
-|   ↳ `java.util.concurrent.atomic.AtomicReferenceArray`                         |    60 |  42.6 KB | ▎                |
-|   ↳ `org.sparkproject.jetty.util.BlockingArrayQueue`                           |     1 |  32.0 KB | ▏                |
-| `java.util.ImmutableCollections$SetN`                                          |   165 | 148.6 KB | █                |
-| `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue`     |    36 | 144.8 KB | █                |
-| `org.sparkproject.jetty.util.ArrayTernaryTrie`                                 |   256 | 140.0 KB | █                |
-| `org.sparkproject.guava.util.concurrent.Striped$CompactStriped`                |     1 |  75.3 KB | ▌                |
-| `java.lang.invoke.LambdaForm$Name`                                             | 1,665 |  48.1 KB | ▎                |
-| `java.lang.invoke.DirectMethodHandle$Constructor`                              |   858 |  46.4 KB | ▎                |
-| `java.util.concurrent.atomic.AtomicReferenceArray`                             |    60 |  42.6 KB | ▎                |
-| `java.lang.invoke.MethodHandleImpl$AsVarargsCollector`                         |   292 |  39.3 KB | ▎                |
-|   ↳ `java.lang.Object[]`                                                       |   292 |  53.6 KB | ▍                |
-
-**`org.sparkproject.jetty.http.pathmap.PathSpecSet`**
-
-| Holder Class                                                 | Count | Retained |                  |
-| ------------------------------------------------------------ | ----: | -------: | ---------------- |
-| `org.sparkproject.jetty.server.handler.gzip.GzipHandler`     |   112 | 446.7 KB | ████████████████ |
-| `org.sparkproject.jetty.util.IncludeExclude`                 |    56 | 364.4 KB | █████████████    |
-|   ↳ `org.sparkproject.jetty.server.handler.gzip.GzipHandler` |   112 | 446.7 KB | ████████████████ |
-
-**`org.sparkproject.jetty.servlet.ServletContextHandler`**
-
-| Holder Class                  | Count | Retained |                  |
-| ----------------------------- | ----: | -------: | ---------------- |
-| `(GC Root)`                   |    28 | 303.0 KB | ████████████████ |
-| `org.apache.spark.ui.SparkUI` |     1 |   4.0 KB | ▏                |
-
-**`jdk.internal.util.ReferencedKeySet`**
-
-| Holder Class                                                                                     | Count | Retained |                  |
-| ------------------------------------------------------------------------------------------------ | ----: | -------: | ---------------- |
-| `java.lang.Object[]`                                                                             | 5,148 |   1.5 MB | ████████████████ |
-| `java.lang.Class`                                                                                |     1 | 302.5 KB | ███▏             |
-|   ↳ `java.lang.Object[]`                                                                         | 5,148 |   1.5 MB | ████████████████ |
-|   ↳ `java.lang.invoke.DirectMethodHandle$Constructor`                                            |   847 |  45.3 KB | ▍                |
-|   ↳ `java.net.URLClassLoader`                                                                    |    10 |   9.4 KB | ▏                |
-|   ↳ `java.lang.invoke.MemberName`                                                                |   472 |   8.9 KB | ▏                |
-|   ↳ `java.lang.Class`                                                                            |    24 |    488 B | ▏                |
-|   ↳ `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                           |     1 |    200 B | ▏                |
-|   ↳ `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                   |     1 |    192 B | ▏                |
-|   ↳ `org.apache.spark.util.ByteBufferOutputStream$$Lambda+0x00007b0ac06ed578`                    |     1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac06696c0` |     1 |     48 B | ▏                |
-|   ↳ `com.fasterxml.jackson.module.scala.introspect.BeanIntrospector$$$Lambda+0x00007b0ac066b1a0` |     1 |     48 B | ▏                |
-| `java.lang.invoke.DirectMethodHandle$Constructor`                                                |   847 |  45.3 KB | ▍                |
-| `java.net.URLClassLoader`                                                                        |    10 |   9.4 KB | ▏                |
-| `java.lang.invoke.MemberName`                                                                    |   472 |   8.9 KB | ▏                |
-| `org.renaissance.apache.spark.GaussMix$$Lambda+0x00007b0ac07bd030`                               |     1 |    200 B | ▏                |
-| `org.apache.spark.util.collection.OpenHashSet$$$Lambda+0x00007b0ac0741f98`                       |     1 |    192 B | ▏                |
-| `breeze.generic.MMRegistry2$$Lambda+0x00007b0ac0991000`                                          |     1 |     48 B | ▏                |
-| `breeze.linalg.diag$$anon$2$$Lambda+0x00007b0ac099b738`                                          |     1 |     48 B | ▏                |
-| `breeze.linalg.support.TensorValues$$$Lambda+0x00007b0ac09d5000`                                 |     1 |     48 B | ▏                |
-
-**`jdk.internal.util.ReferencedKeyMap`**
-
-| Holder Class                         | Count | Retained |                  |
-| ------------------------------------ | ----: | -------: | ---------------- |
-| `java.lang.Class`                    |     1 | 302.5 KB | ████████████████ |
-| `jdk.internal.util.ReferencedKeySet` |     1 | 302.5 KB | ███████████████▉ |
-|   ↳ `java.lang.Class`                |     1 | 302.5 KB | ████████████████ |
-
-**`org.apache.spark.status.ElementTrackingStore`**
-
-| Holder Class | Count | Retained |                  |
-| ------------ | ----: | -------: | ---------------- |
-| `(GC Root)`  |     1 | 301.7 KB | ████████████████ |
-
-**`org.apache.spark.util.kvstore.InMemoryStore`**
-
-| Holder Class                                   | Count | Retained |                  |
-| ---------------------------------------------- | ----: | -------: | ---------------- |
-| `org.apache.spark.status.ElementTrackingStore` |     1 | 301.1 KB | ████████████████ |
-
-**`org.apache.spark.util.kvstore.InMemoryStore$InMemoryLists`**
-
-| Holder Class                                       | Count | Retained |                  |
-| -------------------------------------------------- | ----: | -------: | ---------------- |
-| `org.apache.spark.status.ElementTrackingStore`     |     1 | 301.1 KB | ████████████████ |
-| `org.apache.spark.util.kvstore.InMemoryStore`      |     1 | 301.1 KB | ███████████████▉ |
-|   ↳ `org.apache.spark.status.ElementTrackingStore` |     1 | 301.1 KB | ████████████████ |
-
-**`java.util.concurrent.locks.ReentrantLock$NonfairSync`**
-
-| Holder Class                                                                  | Count | Retained |                  |
-| ----------------------------------------------------------------------------- | ----: | -------: | ---------------- |
-| `io.netty.buffer.PoolSubpage`                                                 | 7,878 | 369.3 KB | ████████████████ |
-| `java.util.concurrent.locks.ReentrantLock`                                    | 8,119 | 253.8 KB | ██████████▉      |
-|   ↳ `io.netty.buffer.PoolSubpage`                                             | 7,878 | 369.3 KB | ████████████████ |
-|   ↳ `io.netty.buffer.PoolArena$HeapArena`                                     |   101 |   4.7 KB | ▏                |
-|   ↳ `io.netty.buffer.PoolArena$DirectArena`                                   |   101 |   4.7 KB | ▏                |
-|   ↳ `java.lang.ref.ReferenceQueue`                                            |   285 |   4.5 KB | ▏                |
-|   ↳ `com.fasterxml.jackson.databind.util.internal.PrivateMaxEntriesMap`       |    13 |    624 B | ▏                |
-|   ↳ `jdk.internal.misc.InternalLock`                                          |    12 |    576 B | ▏                |
-|   ↳ `java.util.concurrent.LinkedBlockingQueue`                                |    36 |    576 B | ▏                |
-|   ↳ `org.apache.logging.log4j.core.config.AwaitCompletionReliabilityStrategy` |    19 |    304 B | ▏                |
-|   ↳ `java.util.concurrent.ThreadPoolExecutor`                                 |    17 |    272 B | ▏                |
-|   ↳ `java.lang.Class`                                                         |     4 |    192 B | ▏                |
-| `java.lang.Object[]`                                                          | 1,014 |  71.3 KB | ███              |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                         |     1 |  32.4 KB | █▍               |
-| `org.sparkproject.guava.util.concurrent.Striped$PaddedLock`                   | 1,014 |  31.7 KB | █▎               |
-|   ↳ `java.lang.Object[]`                                                      | 1,014 |  71.3 KB | ███              |
-|   ↳ `org.apache.spark.storage.BlockInfoManager`                               |    10 |    400 B | ▏                |
-| `org.sparkproject.guava.collect.MapMakerInternalMap$Segment[]`                |    12 |  24.8 KB | █                |
-| `java.util.WeakHashMap`                                                       |   239 |  24.3 KB | █                |
-| `java.lang.ref.ReferenceQueue`                                                |   281 |   8.8 KB | ▍                |
-|   ↳ `java.util.WeakHashMap`                                                   |   239 |  24.3 KB | █                |
-|   ↳ `org.sparkproject.guava.collect.MapMakerInternalMap$Segment`              |    12 |   1.2 KB | ▏                |
-|   ↳ `org.sparkproject.guava.cache.LocalCache$Segment`                         |     4 |    416 B | ▏                |
-|   ↳ `java.lang.Class`                                                         |     3 |    312 B | ▏                |
-|   ↳ `java.lang.WeakPairMap`                                                   |     3 |    312 B | ▏                |
-|   ↳ `sun.util.locale.provider.LocaleResources`                                |     2 |    208 B | ▏                |
-|   ↳ `com.sun.jmx.mbeanserver.MBeanIntrospector$MBeanInfoMap`                  |     2 |    208 B | ▏                |
-|   ↳ `com.sun.jmx.mbeanserver.WeakIdentityHashMap`                             |     2 |    208 B | ▏                |
-|   ↳ `com.sun.jmx.mbeanserver.MBeanIntrospector$PerInterfaceMap`               |     2 |    208 B | ▏                |
-|   ↳ `java.lang.ClassValue$ClassValueMap`                                      |     1 |    104 B | ▏                |
-| `org.sparkproject.guava.cache.LocalCache$Segment[]`                           |    21 |   6.2 KB | ▎                |
-| `io.netty.buffer.PoolArena$DirectArena`                                       |   101 |   4.7 KB | ▏                |
-
-**`org.apache.spark.util.kvstore.InMemoryStore$InstanceList`**
-
-| Holder Class                                        |  Count | Retained |                  |
-| --------------------------------------------------- | -----: | -------: | ---------------- |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`     | 34,752 |   2.9 MB | ████████████████ |
-| `java.util.concurrent.ConcurrentHashMap$Node`       |     12 | 297.3 KB | █▌               |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node[]` | 34,752 |   2.9 MB | ████████████████ |
-|   ↳ `java.util.concurrent.ConcurrentHashMap$Node`   |  8,033 | 626.6 KB | ███▍             |
-
-**`org.apache.spark.mllib.linalg.Vector[]`**
-
-| Holder Class                                              | Count | Retained |                  |
-| --------------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.util.LinkedHashMap$Entry`                           |     7 | 937.9 KB | ████████████████ |
-| `org.apache.spark.storage.memory.DeserializedMemoryEntry` |     2 | 293.0 KB | ████▉            |
-|   ↳ `java.util.LinkedHashMap$Entry`                       |     7 | 937.9 KB | ████████████████ |
-
-**`java.lang.invoke.LambdaForm`**
-
-| Holder Class                                        | Count | Retained |                  |
-| --------------------------------------------------- | ----: | -------: | ---------------- |
-| `java.lang.Object[]`                                | 7,143 |   1.9 MB | ████████████████ |
-| `java.util.jar.JarFile`                             |    63 |   1.3 MB | ███████████▏     |
-| `(GC Root)`                                         |   417 | 214.1 KB | █▊               |
-| `java.lang.invoke.LambdaFormEditor$Transform`       |    80 |  93.3 KB | ▊                |
-|   ↳ `java.lang.invoke.LambdaForm`                   |    88 |  54.7 KB | ▍                |
-|   ↳ `java.lang.invoke.LambdaFormEditor$Transform[]` |    43 |  44.8 KB | ▎                |
-| `java.lang.ThreadLocal$ThreadLocalMap$Entry`        |     4 |  66.0 KB | ▌                |
-| `java.lang.ref.SoftReference[]`                     |   535 |  60.7 KB | ▍                |
-| `java.lang.invoke.LambdaForm`                       |    88 |  54.7 KB | ▍                |
-| `java.lang.invoke.DirectMethodHandle$Constructor`   |   858 |  46.4 KB | ▍                |
-| `java.lang.invoke.LambdaFormEditor$Transform[]`     |    43 |  44.8 KB | ▎                |
-| `sun.util.locale.BaseLocale$Key`                    | 1,044 |  40.8 KB | ▎                |
-
-**`org.sparkproject.jetty.servlet.ServletHandler`**
-
-| Holder Class                                           | Count | Retained |                  |
-| ------------------------------------------------------ | ----: | -------: | ---------------- |
-| `org.sparkproject.jetty.servlet.ServletContextHandler` |    29 | 251.2 KB | ████████████████ |
-|   ↳ `org.apache.spark.ui.SparkUI`                      |     1 |   4.0 KB | ▎                |
-| `org.apache.spark.ui.SparkUI`                          |     1 |   4.0 KB | ▎                |
-
-**`io.netty.channel.nio.NioEventLoop`**
-
-| Holder Class                                                 | Count | Retained |                  |
-| ------------------------------------------------------------ | ----: | -------: | ---------------- |
-| `io.netty.channel.nio.NioEventLoopGroup`                     |    16 | 225.9 KB | ████████████████ |
-|   ↳ `org.apache.spark.network.client.TransportClientFactory` |     2 | 114.1 KB | ████████         |
-| `org.apache.spark.network.client.TransportClientFactory`     |     2 | 114.1 KB | ████████         |
-| `(GC Root)`                                                  |     2 |  19.4 KB | █▎               |
-
-**`com.codahale.metrics.Timer`**
-
-| Holder Class | Count | Retained |                  |
-| ------------ | ----: | -------: | ---------------- |
-| `(GC Root)`  |     7 | 243.8 KB | ████████████████ |
-
-**`com.codahale.metrics.Histogram`**
-
-| Holder Class                 | Count | Retained |                  |
-| ---------------------------- | ----: | -------: | ---------------- |
-| `com.codahale.metrics.Timer` |     7 | 241.1 KB | ████████████████ |
-| `(GC Root)`                  |     4 |   1.3 KB | ▏                |
-
-**`com.codahale.metrics.ExponentiallyDecayingReservoir`**
-
-| Holder Class                     | Count | Retained |                  |
-| -------------------------------- | ----: | -------: | ---------------- |
-| `com.codahale.metrics.Histogram` |    11 | 241.8 KB | ████████████████ |
-|   ↳ `com.codahale.metrics.Timer` |     7 | 241.1 KB | ███████████████▉ |
-| `com.codahale.metrics.Timer`     |     7 | 241.1 KB | ███████████████▉ |
-
 ### Retained Size Distribution
 
 _Retained heap distributed across all 39,316 top-level dominators. The shape reveals whether a handful of large objects dominate the heap or memory is scattered across many small ones._
@@ -1633,15 +1079,15 @@ _Retained heap distributed across all 39,316 top-level dominators. The shape rev
 |      8 B |    242 | ▎                |
 |     16 B |    636 | ▋                |
 |     32 B |  4,429 | █████▏           |
-|     64 B | 12,514 | ██████████████▌  |
-|    128 B | 13,801 | ████████████████ |
-|    256 B |  3,279 | ███▊             |
-|    512 B |  1,541 | █▊               |
+|     64 B | 12,517 | ██████████████▌  |
+|    128 B | 13,798 | ████████████████ |
+|    256 B |  3,280 | ███▊             |
+|    512 B |  1,540 | █▊               |
 |   1.0 KB |    601 | ▋                |
 |   2.0 KB |    219 | ▎                |
 |   4.0 KB |    159 | ▏                |
-|   8.0 KB |    293 | ▎                |
-|  16.0 KB |     98 | ▏                |
+|   8.0 KB |    294 | ▎                |
+|  16.0 KB |     97 | ▏                |
 |  32.0 KB |     39 | ▏                |
 |  64.0 KB |     45 | ▏                |
 | 128.0 KB |     28 | ▏                |
@@ -1657,12 +1103,12 @@ _Retained heap aggregated by package prefix — only packages retaining ≥1% of
 
 | Package               | # Objects |  Shallow | Retained |                  |
 | --------------------- | --------: | -------: | -------: | ---------------- |
-| `java`                |    31,861 | 937.1 KB |  21.3 MB | ████████████████ |
-| ├─ `util`             |     2,570 |  88.9 KB |  14.2 MB | ██████████▌      |
+| `java`                |    31,861 | 935.6 KB |  21.3 MB | ████████████████ |
+| ├─ `util`             |     2,570 |  87.5 KB |  14.2 MB | ██████████▌      |
 | │  ├─ `zip`           |       970 |  41.5 KB |  12.5 MB | █████████▎       |
-| │  └─ `jar`           |       208 |  11.9 KB |   1.4 MB | █                |
+| │  └─ `jar`           |       208 |  10.5 KB |   1.4 MB | █                |
 | ├─ `lang`             |    27,966 | 804.0 KB |   4.1 MB | ███              |
-| │  └─ `invoke`        |     5,663 | 214.1 KB |   1.3 MB | ▉                |
+| │  └─ `invoke`        |     5,663 | 214.0 KB |   1.3 MB | ▉                |
 | └─ `net`              |       163 |   7.8 KB |   2.7 MB | ██               |
 | `org`                 |     2,606 |  59.7 KB |   5.1 MB | ███▊             |
 | ├─ `apache`           |     1,991 |  39.6 KB |   4.0 MB | ███              |
@@ -1673,19 +1119,19 @@ _Retained heap aggregated by package prefix — only packages retaining ≥1% of
 | │  └─ `hadoop`        |       211 |   4.0 KB | 359.2 KB | ▎                |
 | └─ `sparkproject`     |       523 |  19.1 KB |   1.1 MB | ▊                |
 | │  └─ `jetty`         |       432 |  18.3 KB |   1.1 MB | ▊                |
-| │     └─ `server`     |        48 |   1.0 KB | 504.5 KB | ▎                |
-| │        └─ `handler` |        21 |    416 B | 480.6 KB | ▎                |
+| │     └─ `server`     |        48 |   1.0 KB | 504.2 KB | ▎                |
+| │        └─ `handler` |        21 |    416 B | 480.3 KB | ▎                |
 | `scala`               |       469 |   5.6 KB |   2.5 MB | █▉               |
 | └─ `runtime`          |        37 |    232 B |   2.5 MB | █▊               |
 | `io`                  |       368 |  32.8 KB |   1.5 MB | █▏               |
 | └─ `netty`            |       368 |  32.8 KB |   1.5 MB | █▏               |
 | │  └─ `buffer`        |       222 |  30.4 KB |   1.4 MB | █                |
 | `jdk`                 |       963 |  31.7 KB |   1.1 MB | ▊                |
-| └─ `internal`         |       817 |  29.3 KB | 936.4 KB | ▋                |
-| │  └─ `loader`        |        45 |    664 B | 856.0 KB | ▋                |
-| `sun`                 |     1,567 |  45.0 KB | 713.8 KB | ▌                |
+| └─ `internal`         |       817 |  29.2 KB | 936.2 KB | ▋                |
+| │  └─ `loader`        |        45 |    664 B | 855.9 KB | ▋                |
+| `sun`                 |     1,567 |  44.7 KB | 713.6 KB | ▌                |
 | └─ `util`             |     1,153 |  34.6 KB | 484.8 KB | ▎                |
-| `com`                 |       779 |  13.6 KB | 642.6 KB | ▍                |
+| `com`                 |       779 |  13.6 KB | 642.5 KB | ▍                |
 
 ## Dominator Analysis
 
@@ -1702,13 +1148,13 @@ _Objects retaining far more than their largest single child — memory held dire
 | `java.util.LinkedHashMap`                                        | 270448 |      2.3 MB | `java.util.LinkedHashMap$Entry`                          |       322.4 KB |      2.0 MB | ████████████▉    |
 | `java.lang.Object[]`                                             | 540945 |      2.0 MB | `java.lang.Class`                                        |       178.9 KB |      1.8 MB | ███████████▍     |
 | `byte[]`                                                         |  64172 |      1.0 MB | —                                                        |            0 B |      1.0 MB | ██████▋          |
-| `java.net.URLClassLoader`                                        | 214390 |      2.6 MB | `java.util.ArrayList`                                    |         2.0 MB |    693.4 KB | ████▎            |
+| `java.net.URLClassLoader`                                        | 214390 |      2.6 MB | `java.util.ArrayList`                                    |         2.0 MB |    693.0 KB | ████▎            |
 | `java.lang.Thread`                                               |  64180 |    787.2 KB | `org.apache.xbean.asm9.ClassReader`                      |       200.4 KB |    586.8 KB | ███▋             |
 | `java.util.HashMap$Node[]`                                       |     ×2 |    577.2 KB | `java.util.HashMap$Node`                                 |         1000 B |    576.2 KB | ███▌             |
 | `byte[]`                                                         |  64170 |    530.7 KB | —                                                        |            0 B |    530.7 KB | ███▎             |
 | `byte[]`                                                         |  64174 |    513.3 KB | —                                                        |            0 B |    513.3 KB | ███▏             |
 | `byte[]`                                                         | 222178 |    474.9 KB | —                                                        |            0 B |    474.9 KB | ██▉              |
-| `org.sparkproject.jetty.server.handler.ContextHandlerCollection` | 267106 |    477.1 KB | `org.sparkproject.jetty.server.handler.gzip.GzipHandler` |        16.5 KB |    460.6 KB | ██▉              |
+| `org.sparkproject.jetty.server.handler.ContextHandlerCollection` | 267106 |    476.9 KB | `org.sparkproject.jetty.server.handler.gzip.GzipHandler` |        16.5 KB |    460.4 KB | ██▉              |
 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  | 447723 |    436.8 KB | `java.util.concurrent.ConcurrentHashMap$Node`            |          352 B |    436.5 KB | ██▋              |
 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  | 378130 |    409.2 KB | `java.util.concurrent.ConcurrentHashMap$Node`            |          256 B |    409.0 KB | ██▌              |
 | `java.util.concurrent.ConcurrentHashMap$Node[]`                  | 535672 |    385.7 KB | `java.util.concurrent.ConcurrentHashMap$Node`            |          240 B |    385.4 KB | ██▍              |
@@ -1719,7 +1165,7 @@ _Objects retaining far more than their largest single child — memory held dire
 | `java.util.zip.ZipFile$Source`                                   | 220003 |    533.4 KB | `byte[]`                                                 |       474.9 KB |     58.6 KB | ▎                |
 | `java.util.zip.ZipFile$Source`                                   | 221680 |    374.5 KB | `byte[]`                                                 |       334.2 KB |     40.3 KB | ▎                |
 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                | 621651 |    432.0 KB | `java.util.concurrent.ConcurrentHashMap`                 |       409.3 KB |     22.8 KB | ▏                |
-| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           | 621610 |    402.4 KB | `java.util.concurrent.ConcurrentHashMap`                 |       385.7 KB |     16.6 KB | ▏                |
+| `jdk.internal.loader.ClassLoaders$PlatformClassLoader`           | 621610 |    402.3 KB | `java.util.concurrent.ConcurrentHashMap`                 |       385.7 KB |     16.6 KB | ▏                |
 | `java.util.jar.Manifest`                                         | 185189 |    584.2 KB | `java.util.HashMap`                                      |       577.2 KB |      6.9 KB | ▏                |
 | **Total**                                                        |        | **25.2 MB** |                                                          |     **9.3 MB** | **15.9 MB** |                  |
 
@@ -1734,7 +1180,7 @@ _Each row shows one dominator class: how many other objects it immediately domin
 | `java.lang.Object[]`                                                       |        1,558 |     152,842 |          748.8 KB |            2.6 MB | ███▍             |
 | `java.lang.Class`                                                          |        8,886 |      19,244 |          131.4 KB |            1.6 MB | ██               |
 | `java.util.LinkedHashMap`                                                  |          302 |      18,039 |           18.9 KB |            1.5 MB | █▉               |
-| `(GC Root)`                                                                |            0 |      39,316 |               0 B |            1.2 MB | █▍               |
+| `(GC Root)`                                                                |            0 |      39,316 |               0 B |            1.1 MB | █▍               |
 | `java.util.concurrent.ConcurrentHashMap$Node[]`                            |          431 |      35,015 |          411.5 KB |            1.1 MB | █▍               |
 | `java.util.concurrent.ConcurrentHashMap$Node`                              |       33,138 |      41,685 |            1.0 MB |            1.0 MB | █▎               |
 | `breeze.linalg.Vector[]`                                                   |            2 |      15,000 |           58.6 KB |          585.9 KB | ▋                |
@@ -1750,7 +1196,7 @@ _Each row shows one dominator class: how many other objects it immediately domin
 | `io.netty.buffer.PoolArena$HeapArena`                                      |          101 |       1,717 |           15.0 KB |          209.1 KB | ▎                |
 | `io.netty.buffer.PoolArena$DirectArena`                                    |          101 |       1,717 |           15.0 KB |          209.1 KB | ▎                |
 | `java.util.concurrent.ConcurrentSkipListMap$Node`                          |        2,685 |       7,363 |           62.9 KB |          193.4 KB | ▏                |
-| `org.sparkproject.jetty.util.ArrayTrie`                                    |            9 |          33 |             360 B |          189.3 KB | ▏                |
+| `org.sparkproject.jetty.util.ArrayTrie`                                    |            9 |          33 |             288 B |          189.3 KB | ▏                |
 | `java.util.HashMap`                                                        |          720 |         823 |           33.8 KB |          148.9 KB | ▏                |
 | `java.lang.invoke.MethodType`                                              |        3,466 |       5,348 |          135.4 KB |          145.5 KB | ▏                |
 | `io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue` |           36 |          36 |           20.2 KB |          144.8 KB | ▏                |
@@ -1759,7 +1205,7 @@ _Each row shows one dominator class: how many other objects it immediately domin
 | `org.apache.spark.storage.memory.DeserializedMemoryEntry`                  |            7 |           7 |             224 B |          117.3 KB | ▏                |
 | `java.lang.invoke.MemberName`                                              |        3,477 |       6,301 |          135.8 KB |          115.9 KB | ▏                |
 | `java.lang.invoke.DirectMethodHandle$Constructor`                          |        1,071 |       4,064 |           50.2 KB |          106.8 KB | ▏                |
-| **Total**                                                                  |  **146,766** | **489,038** |        **5.5 MB** |       **30.2 MB** |                  |
+| **Total**                                                                  |  **146,766** | **489,038** |        **5.5 MB** |       **30.1 MB** |                  |
 
 ## Threads
 
@@ -1773,9 +1219,9 @@ _Name, shallow/retained heap, max single-local retained, TL root count, context 
 | ---------------------------------------------------------------------------------------------------------- | ------: | -------: | -----------------: | -------: | -------------------------------------------------------------- | ------ | -------: | ------------------------------------------------------ | ---------------- |
 | [main](#thread-1)                                                                                          |   104 B | 787.2 KB |             2.6 MB |      207 | `java/net/URLClassLoader @ 0x80f000a0`                         | No     |        5 | [alive, runnable]                                      | ████████████████ |
 | [Reference Handler](#thread-2)                                                                             |   104 B |    200 B |                0 B |        — | `—`                                                            | Yes    |       10 | [alive, runnable]                                      | ▏                |
-| [Finalizer](#thread-3)                                                                                     |   112 B |    208 B |               40 B |        7 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] | ▏                |
-| [Common-Cleaner](#thread-6)                                                                                |   112 B |    168 B |              128 B |       12 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         | ▏                |
-| [process reaper](#thread-7)                                                                                |   112 B |    168 B |              368 B |       16 | `—`                                                            | Yes    |       10 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [Finalizer](#thread-3)                                                                                     |   104 B |    200 B |               40 B |        7 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] | ▏                |
+| [Common-Cleaner](#thread-6)                                                                                |   104 B |    160 B |              128 B |       12 | `—`                                                            | Yes    |        8 | [alive, waiting, waiting with timeout, parked]         | ▏                |
+| [process reaper](#thread-7)                                                                                |   104 B |    160 B |              368 B |       16 | `—`                                                            | Yes    |       10 | [alive, waiting, waiting with timeout, parked]         | ▏                |
 | [rpc-boss-3-1](#thread-8)                                                                                  |   112 B |   1.9 KB |             9.7 KB |       15 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, runnable]                                      | ▏                |
 | [dispatcher-event-loop-0](#thread-9)                                                                       |   104 B |    600 B |              896 B |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
 | [dispatcher-event-loop-1](#thread-10)                                                                      |   104 B |    568 B |              896 B |       17 | `java/net/URLClassLoader @ 0x80f000a0`                         | Yes    |        5 | [alive, waiting, waiting indefinitely, parked]         | ▏                |
@@ -2113,7 +1559,7 @@ _Local roots: 7._
 | `java.lang.ref.NativeReferenceQueue$Lock` |    ×3 |    16 B |     16 B |
 | `java.lang.System$2`                      |     1 |    16 B |     16 B |
 
-_Frame percentages are of this thread's 208 B retained heap._
+_Frame percentages are of this thread's 200 B retained heap._
 
 - `java.lang.Object.wait (Object.java:366)`
   - `java.lang.ref.NativeReferenceQueue$Lock` retains 16 B (<0.1% of thread retained)
@@ -2146,7 +1592,7 @@ _Local roots: 12._
 | `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject` |    ×2 |    24 B |     24 B |
 | `jdk.internal.ref.CleanerImpl`                                          |    ×3 |    24 B |     24 B |
 
-_Frame percentages are of this thread's 168 B retained heap._
+_Frame percentages are of this thread's 160 B retained heap._
 
 - `java.util.concurrent.locks.LockSupport.parkNanos (LockSupport.java:269)`
   - `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject` retains 24 B (<0.1% of thread retained)
@@ -2187,7 +1633,7 @@ _Local roots: 16._
 | `java.util.concurrent.SynchronousQueue`             |    ×2 |    32 B |     32 B |
 | `java.util.concurrent.SynchronousQueue$Transferer`  |    ×3 |    24 B |     24 B |
 
-_Frame percentages are of this thread's 168 B retained heap._
+_Frame percentages are of this thread's 160 B retained heap._
 
 - `java.util.concurrent.LinkedTransferQueue$DualNode.await (LinkedTransferQueue.java:452)`
   - `java.util.concurrent.LinkedTransferQueue$DualNode` retains 32 B (<0.1% of thread retained)
@@ -2227,7 +1673,7 @@ _Local roots: 15._
 | ------------------------------------------------------ | ----: | ------: | -------: |
 | `io.netty.channel.nio.NioEventLoop`                    |    ×2 |   152 B |   9.7 KB |
 | `io.netty.channel.nio.SelectedSelectionKeySet`         |     1 |    24 B |   4.0 KB |
-| `sun.nio.ch.EPollSelectorImpl`                         |    ×4 |    88 B |    752 B |
+| `sun.nio.ch.EPollSelectorImpl`                         |    ×4 |    80 B |    744 B |
 | `java.lang.Class`                                      |    ×2 |    32 B |    128 B |
 | `io.netty.channel.nio.SelectedSelectionKeySetSelector` |     1 |    24 B |     24 B |
 | `io.netty.util.internal.ThreadExecutorMap$2`           |     1 |    24 B |     24 B |
@@ -2237,13 +1683,13 @@ _Local roots: 15._
 _Frame percentages are of this thread's 1.9 KB retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
   - `io.netty.channel.nio.SelectedSelectionKeySet` retains 4.0 KB (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `io.netty.channel.nio.SelectedSelectionKeySetSelector.select (SelectedSelectionKeySetSelector.java:68)`
   - `io.netty.channel.nio.SelectedSelectionKeySetSelector` retains 24 B (<0.1% of thread retained)
 - `io.netty.channel.nio.NioEventLoop.select (NioEventLoop.java:879)`
@@ -3014,9 +2460,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3026,21 +2472,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3072,9 +2518,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3084,21 +2530,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3130,9 +2576,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3142,21 +2588,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3188,9 +2634,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3200,21 +2646,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3246,9 +2692,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3258,21 +2704,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3304,9 +2750,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3316,21 +2762,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3362,9 +2808,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3374,21 +2820,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3420,9 +2866,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3432,21 +2878,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3478,9 +2924,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3490,21 +2936,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3536,9 +2982,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3548,21 +2994,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3594,9 +3040,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3606,21 +3052,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3652,9 +3098,9 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                 | Count | Shallow | Retained |
 | ---------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   120 B |  33.5 KB |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                  |     1 |   112 B |  33.5 KB |
 | `org.sparkproject.jetty.io.ManagedSelector`                            |    ×2 |    80 B |    688 B |
-| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    88 B |    512 B |
+| `sun.nio.ch.EPollSelectorImpl`                                         |    ×7 |    80 B |    504 B |
 | `org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill`           |    ×4 |    80 B |    448 B |
 | `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer`           |    ×2 |    24 B |     24 B |
 | `sun.nio.ch.Util$2`                                                    |     1 |    16 B |     16 B |
@@ -3664,21 +3110,21 @@ _Showing top 20 of 25 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 568 B retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `sun.nio.ch.Util$2` retains 16 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.nioSelect (ManagedSelector.java:183)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector.select (ManagedSelector.java:190)`
   - `org.sparkproject.jetty.io.ManagedSelector` retains 688 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.select (ManagedSelector.java:606)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 512 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 504 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer.produce (ManagedSelector.java:543)`
   - `org.sparkproject.jetty.io.ManagedSelector$SelectorProducer` retains 24 B (<0.1% of thread retained)
@@ -3710,9 +3156,9 @@ _Showing top 20 of 22 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                | Count | Shallow | Retained |
 | --------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   120 B |  33.5 KB |
-| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.1 KB |
-| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    96 B |    424 B |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   112 B |  33.5 KB |
+| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.0 KB |
+| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    88 B |    416 B |
 | `java.lang.Class`                                                     |     1 |    32 B |    128 B |
 | `java.lang.String`                                                    |     1 |    24 B |     56 B |
 | `java.io.FileDescriptor`                                              |     1 |    40 B |     40 B |
@@ -3735,12 +3181,12 @@ _Frame percentages are of this thread's 480 B retained heap._
 - `java.util.concurrent.locks.AbstractQueuedSynchronizer.acquire (AbstractQueuedSynchronizer.java:1024)`
   - `java.util.concurrent.locks.ReentrantLock$NonfairSync` retains 32 B (<0.1% of thread retained)
 - `sun.nio.ch.ServerSocketChannelImpl.accept (ServerSocketChannelImpl.java:393)`
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.net.SocketAddress[]` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.ServerConnector.accept (ServerConnector.java:388)`
-  - `org.sparkproject.jetty.server.ServerConnector` retains 20.1 KB (0.1% of thread retained)
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `org.sparkproject.jetty.server.ServerConnector` retains 20.0 KB (0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.AbstractConnector$Acceptor.run (AbstractConnector.java:704)`
   - `java.lang.String` retains 56 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.server.AbstractConnector$Acceptor` retains 24 B (<0.1% of thread retained)
@@ -3767,9 +3213,9 @@ _Showing top 20 of 21 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                       | Count | Shallow | Retained |
 | ------------------------------------------------------------ | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`        |     1 |   120 B |  33.5 KB |
-| `org.sparkproject.jetty.server.ServerConnector`              |     1 |   168 B |  20.1 KB |
-| `sun.nio.ch.ServerSocketChannelImpl`                         |    ×3 |    96 B |    424 B |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`        |     1 |   112 B |  33.5 KB |
+| `org.sparkproject.jetty.server.ServerConnector`              |     1 |   168 B |  20.0 KB |
+| `sun.nio.ch.ServerSocketChannelImpl`                         |    ×3 |    88 B |    416 B |
 | `java.lang.Class`                                            |     1 |    32 B |    128 B |
 | `java.lang.String`                                           |     1 |    24 B |     56 B |
 | `java.io.FileDescriptor`                                     |    ×3 |    40 B |     40 B |
@@ -3782,18 +3228,18 @@ _Showing top 20 of 21 by retained heap; retained sizes overlap, so totals may ex
 _Frame percentages are of this thread's 504 B retained heap._
 
 - `sun.nio.ch.ServerSocketChannelImpl.implAccept (ServerSocketChannelImpl.java:433)`
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.net.InetSocketAddress[]` retains 24 B (<0.1% of thread retained)
   - `java.net.SocketAddress[]` retains 24 B (<0.1% of thread retained)
 - `sun.nio.ch.ServerSocketChannelImpl.accept (ServerSocketChannelImpl.java:399)`
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.net.SocketAddress[]` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.ServerConnector.accept (ServerConnector.java:388)`
-  - `org.sparkproject.jetty.server.ServerConnector` retains 20.1 KB (0.1% of thread retained)
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `org.sparkproject.jetty.server.ServerConnector` retains 20.0 KB (0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.AbstractConnector$Acceptor.run (AbstractConnector.java:704)`
   - `java.lang.String` retains 56 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.server.AbstractConnector$Acceptor` retains 24 B (<0.1% of thread retained)
@@ -3822,9 +3268,9 @@ _Showing top 20 of 22 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                | Count | Shallow | Retained |
 | --------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   120 B |  33.5 KB |
-| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.1 KB |
-| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    96 B |    424 B |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   112 B |  33.5 KB |
+| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.0 KB |
+| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    88 B |    416 B |
 | `java.lang.Class`                                                     |     1 |    32 B |    128 B |
 | `java.lang.String`                                                    |     1 |    24 B |     56 B |
 | `java.io.FileDescriptor`                                              |     1 |    40 B |     40 B |
@@ -3847,12 +3293,12 @@ _Frame percentages are of this thread's 480 B retained heap._
 - `java.util.concurrent.locks.AbstractQueuedSynchronizer.acquire (AbstractQueuedSynchronizer.java:1024)`
   - `java.util.concurrent.locks.ReentrantLock$NonfairSync` retains 32 B (<0.1% of thread retained)
 - `sun.nio.ch.ServerSocketChannelImpl.accept (ServerSocketChannelImpl.java:393)`
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.net.SocketAddress[]` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.ServerConnector.accept (ServerConnector.java:388)`
-  - `org.sparkproject.jetty.server.ServerConnector` retains 20.1 KB (0.1% of thread retained)
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `org.sparkproject.jetty.server.ServerConnector` retains 20.0 KB (0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.AbstractConnector$Acceptor.run (AbstractConnector.java:704)`
   - `java.lang.String` retains 56 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.server.AbstractConnector$Acceptor` retains 24 B (<0.1% of thread retained)
@@ -3879,9 +3325,9 @@ _Showing top 20 of 22 by retained heap; retained sizes overlap, so totals may ex
 
 | Object                                                                | Count | Shallow | Retained |
 | --------------------------------------------------------------------- | ----: | ------: | -------: |
-| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   120 B |  33.5 KB |
-| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.1 KB |
-| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    96 B |    424 B |
+| `org.sparkproject.jetty.util.thread.QueuedThreadPool`                 |     1 |   112 B |  33.5 KB |
+| `org.sparkproject.jetty.server.ServerConnector`                       |     1 |   168 B |  20.0 KB |
+| `sun.nio.ch.ServerSocketChannelImpl`                                  |    ×2 |    88 B |    416 B |
 | `java.lang.Class`                                                     |     1 |    32 B |    128 B |
 | `java.lang.String`                                                    |     1 |    24 B |     56 B |
 | `java.io.FileDescriptor`                                              |     1 |    40 B |     40 B |
@@ -3904,12 +3350,12 @@ _Frame percentages are of this thread's 480 B retained heap._
 - `java.util.concurrent.locks.AbstractQueuedSynchronizer.acquire (AbstractQueuedSynchronizer.java:1024)`
   - `java.util.concurrent.locks.ReentrantLock$NonfairSync` retains 32 B (<0.1% of thread retained)
 - `sun.nio.ch.ServerSocketChannelImpl.accept (ServerSocketChannelImpl.java:393)`
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
   - `java.io.FileDescriptor` retains 40 B (<0.1% of thread retained)
   - `java.net.SocketAddress[]` retains 24 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.ServerConnector.accept (ServerConnector.java:388)`
-  - `org.sparkproject.jetty.server.ServerConnector` retains 20.1 KB (0.1% of thread retained)
-  - `sun.nio.ch.ServerSocketChannelImpl` retains 424 B (<0.1% of thread retained)
+  - `org.sparkproject.jetty.server.ServerConnector` retains 20.0 KB (0.1% of thread retained)
+  - `sun.nio.ch.ServerSocketChannelImpl` retains 416 B (<0.1% of thread retained)
 - `org.sparkproject.jetty.server.AbstractConnector$Acceptor.run (AbstractConnector.java:704)`
   - `java.lang.String` retains 56 B (<0.1% of thread retained)
   - `org.sparkproject.jetty.server.AbstractConnector$Acceptor` retains 24 B (<0.1% of thread retained)
@@ -4279,7 +3725,7 @@ _Local roots: 15._
 | ------------------------------------------------------ | ----: | ------: | -------: |
 | `io.netty.channel.nio.NioEventLoop`                    |    ×2 |   152 B |   9.7 KB |
 | `io.netty.channel.nio.SelectedSelectionKeySet`         |     1 |    24 B |   4.0 KB |
-| `sun.nio.ch.EPollSelectorImpl`                         |    ×4 |    88 B |    752 B |
+| `sun.nio.ch.EPollSelectorImpl`                         |    ×4 |    80 B |    744 B |
 | `java.lang.Class`                                      |    ×2 |    32 B |    128 B |
 | `io.netty.channel.nio.SelectedSelectionKeySetSelector` |     1 |    24 B |     24 B |
 | `io.netty.util.internal.ThreadExecutorMap$2`           |     1 |    24 B |     24 B |
@@ -4289,13 +3735,13 @@ _Local roots: 15._
 _Frame percentages are of this thread's 1.9 KB retained heap._
 
 - `sun.nio.ch.EPollSelectorImpl.doSelect (EPollSelectorImpl.java:121)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.lockAndDoSelect (SelectorImpl.java:130)`
   - `io.netty.channel.nio.SelectedSelectionKeySet` retains 4.0 KB (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `sun.nio.ch.SelectorImpl.select (SelectorImpl.java:147)`
-  - `sun.nio.ch.EPollSelectorImpl` retains 752 B (<0.1% of thread retained)
+  - `sun.nio.ch.EPollSelectorImpl` retains 744 B (<0.1% of thread retained)
 - `io.netty.channel.nio.SelectedSelectionKeySetSelector.select (SelectedSelectionKeySetSelector.java:68)`
   - `io.netty.channel.nio.SelectedSelectionKeySetSelector` retains 24 B (<0.1% of thread retained)
 - `io.netty.channel.nio.NioEventLoop.select (NioEventLoop.java:879)`
@@ -13667,7 +13113,7 @@ _Retained heap grouped by class loader (component). `% Heap` is the share of tot
 | ------------------------------------------------------ | -------: | -----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
 | `<boot>`                                               |  95.2 MB |  79.7% | `byte[]` (14.7 MB), `java.util.zip.ZipFile$Source` (12.3 MB), `java.lang.Class` (7.0 MB), `java.lang.Object[]` (6.3 MB), `java.lang.String` (4.4 MB)                                                                                                                                                      | ████████████████ |
 | `java/net/URLClassLoader`                              |  21.3 MB |  17.9% | `org.apache.spark.storage.memory.MemoryStore` (2.3 MB), `io.netty.buffer.PoolSubpage[]` (957.9 KB), `org.apache.spark.storage.memory.DeserializedMemoryEntry` (937.9 KB), `io.netty.buffer.PoolSubpage` (923.8 KB), `io.netty.buffer.PoolArena$DirectArena` (695.2 KB)                                    | ███▌             |
-| `java/net/URLClassLoader`                              |   2.6 MB |   2.2% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scopt.ORunner$` (8.1 KB), `scala.math.BigInt[]` (8.0 KB)                                                                                                                    | ▍                |
+| `java/net/URLClassLoader`                              |   2.6 MB |   2.2% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scala.math.BigInt[]` (8.0 KB), `scopt.ORunner$` (7.9 KB)                                                                                                                    | ▍                |
 | `jdk/internal/loader/ClassLoaders$AppClassLoader`      | 244.1 KB |   0.2% | `org.renaissance.core.ModuleLoader` (149.8 KB), `org.renaissance.core.BenchmarkSuite` (77.0 KB), `org.renaissance.core.BenchmarkDescriptor` (2.3 KB), `org.renaissance.core.Launcher` (1.6 KB), `org.renaissance.License` (1.2 KB)                                                                        | ▏                |
 | `jdk/internal/loader/ClassLoaders$PlatformClassLoader` |  11.6 KB |  <0.1% | `sun.util.resources.cldr.provider.CLDRLocaleDataMetaInfo` (7.4 KB), `com.sun.security.auth.UnixNumericGroupPrincipal` (840 B), `com.sun.security.auth.module.LdapLoginModule` (680 B), `com.sun.security.auth.module.UnixLoginModule` (584 B), `com.sun.security.auth.module.KeyStoreLoginModule` (448 B) | ▏                |
 | `sun/reflect/misc/MethodUtil`                          |   1.5 KB |  <0.1% | `sun.reflect.misc.Trampoline` (1.5 KB)                                                                                                                                                                                                                                                                    | ▏                |
@@ -13739,52 +13185,55 @@ _Collection fill ratios, map load factors, and constant-value primitive array gr
 
 ### Collections by Kind
 
-| Kind      |     Count | Total Elements | Max Elements | Total Shallow |                  |
-| --------- | --------: | -------------: | -----------: | ------------: | ---------------- |
-| list      |       995 |         10,231 |        6,641 |       23.4 KB | ███████▋         |
-| map       |     8,355 |         21,131 |        2,889 |      486.3 KB | ████████████████ |
-| tree      |       116 |            228 |           18 |        5.4 KB | ▏                |
-| **Total** | **9,466** |     **31,590** |              |  **515.2 KB** |                  |
+| Kind      |      Count | Total Elements | Max Elements | Total Shallow |                  |
+| --------- | ---------: | -------------: | -----------: | ------------: | ---------------- |
+| list      |        995 |         10,231 |        6,641 |       23.4 KB | ███████▌         |
+| map       |      8,776 |         21,651 |        2,889 |      508.0 KB | ████████████████ |
+| set       |        165 |          3,866 |        1,063 |        3.9 KB | ██▊              |
+| queue     |          1 |              4 |            4 |          32 B | ▏                |
+| tree      |        116 |            228 |           18 |        5.4 KB | ▏                |
+| **Total** | **10,053** |     **35,980** |              |  **540.8 KB** |                  |
 
 ### Collection Fill Ratio
 
-_Fraction of each collection's capacity in use — low fill wastes backing-array memory. 9,466 collections analyzed (3,113 non-empty tracked)._
+_Fraction of each collection's capacity in use — low fill wastes backing-array memory. 10,053 collections analyzed (4,008 non-empty tracked)._
 
 |      Fill % | Collections |      Shallow |       Wasted |                  |
 | ----------: | ----------: | -----------: | -----------: | ---------------- |
-|       0–10% |       1,456 |      66.4 KB |     179.1 KB | ████████████████ |
-|      10–20% |         568 |      23.5 KB |      46.5 KB | ██████▏          |
-|      20–30% |         115 |       5.4 KB |      62.4 KB | █▎               |
-|      30–40% |         124 |       6.7 KB |     417.2 KB | █▎               |
-|      40–50% |         280 |      14.9 KB |      69.6 KB | ███              |
-|      50–60% |          43 |       2.2 KB |      15.6 KB | ▍                |
-|      60–70% |         120 |       6.8 KB |      14.5 KB | █▎               |
-|      70–80% |         122 |       6.9 KB |      45.5 KB | █▎               |
+|       0–10% |       1,762 |      81.4 KB |     220.6 KB | ████████████████ |
+|      10–20% |         660 |      29.2 KB |      56.5 KB | █████▉           |
+|      20–30% |         119 |       5.6 KB |      62.5 KB | █                |
+|      30–40% |         130 |       7.0 KB |     417.9 KB | █▏               |
+|      40–50% |         455 |      19.2 KB |     104.7 KB | ████▏            |
+|      50–60% |          44 |       2.3 KB |      15.7 KB | ▍                |
+|      60–70% |         120 |       6.8 KB |      14.5 KB | █                |
+|      70–80% |         122 |       6.9 KB |      45.5 KB | █                |
 |      80–90% |           7 |        216 B |        848 B | ▏                |
 |     90–100% |           1 |         24 B |         16 B | ▏                |
-| 100% (full) |         277 |       6.5 KB |          0 B | ███              |
-|   **Total** |   **3,113** | **139.6 KB** | **851.3 KB** |                  |
+| 100% (full) |         588 |      13.9 KB |          0 B | █████▎           |
+|   **Total** |   **4,008** | **172.4 KB** | **938.8 KB** |                  |
 
 ### Collections by Size
 
-_Element-count distribution of collections, bucketed by size — 9,466 tracked; 6,686 empty._
+_Element-count distribution of collections, bucketed by size — 10,053 tracked; 6,889 empty._
 
 |    Size ≤ | Collections |      Shallow |                  |
 | --------: | ----------: | -----------: | ---------------- |
-|       ≤ 1 |       1,276 |      53.8 KB | ████████████████ |
-|       ≤ 2 |         447 |      18.9 KB | █████▌           |
-|       ≤ 4 |         339 |      15.0 KB | ████▎            |
-|       ≤ 8 |         458 |      16.5 KB | █████▋           |
-|      ≤ 16 |         123 |       5.8 KB | █▌               |
-|      ≤ 32 |          55 |       2.8 KB | ▋                |
-|      ≤ 64 |          43 |       2.0 KB | ▌                |
-|     ≤ 128 |          12 |        576 B | ▏                |
-|     ≤ 256 |          16 |        776 B | ▏                |
+|       ≤ 1 |       1,377 |      59.2 KB | ████████████████ |
+|       ≤ 2 |         535 |      24.3 KB | ██████▏          |
+|       ≤ 4 |         443 |      17.8 KB | █████▏           |
+|       ≤ 8 |         503 |      17.8 KB | █████▊           |
+|      ≤ 16 |         144 |       6.3 KB | █▋               |
+|      ≤ 32 |          67 |       3.1 KB | ▊                |
+|      ≤ 64 |          50 |       2.2 KB | ▌                |
+|     ≤ 128 |          15 |        648 B | ▏                |
+|     ≤ 256 |          17 |        800 B | ▏                |
 |     ≤ 512 |           4 |        168 B | ▏                |
 |   ≤ 1,024 |           4 |        192 B | ▏                |
+|   ≤ 2,048 |           2 |         48 B | ▏                |
 |   ≤ 4,096 |           2 |         96 B | ▏                |
 |   ≤ 8,192 |           1 |         24 B | ▏                |
-| **Total** |   **2,780** | **116.6 KB** |                  |
+| **Total** |   **3,164** | **132.7 KB** |                  |
 
 ### Array Fill Ratio
 
@@ -13807,22 +13256,22 @@ _Non-null element fraction of object arrays — low fill leaves most slots empty
 
 ### Map Load Factor
 
-_Load factor (occupied slots ÷ capacity) for 2,023 of 8,355 maps; high values (≥ 90%) signal dense packing and longer bucket chains per lookup._
+_Load factor (occupied slots ÷ capacity) for 2,450 of 8,776 maps; high values (≥ 90%) signal dense packing and longer bucket chains per lookup._
 
 |      Load % |      Maps |      Shallow |                  |
 | ----------: | --------: | -----------: | ---------------- |
-|       0–10% |       977 |      55.4 KB | ████████████████ |
-|      10–20% |       321 |      17.9 KB | █████▎           |
-|      20–30% |       103 |       5.8 KB | █▋               |
-|      30–40% |       176 |       9.7 KB | ██▉              |
-|      40–50% |       317 |      18.0 KB | █████▏           |
-|      50–60% |        58 |       3.0 KB | ▉                |
-|      60–70% |        67 |       4.1 KB | █                |
+|       0–10% |     1,279 |      70.3 KB | ████████████████ |
+|      10–20% |       416 |      23.6 KB | █████▏           |
+|      20–30% |       109 |       6.0 KB | █▎               |
+|      30–40% |       184 |      10.0 KB | ██▎              |
+|      40–50% |       325 |      18.3 KB | ████             |
+|      50–60% |        58 |       3.0 KB | ▋                |
+|      60–70% |        67 |       4.1 KB | ▊                |
 |      70–80% |         4 |        208 B | ▏                |
 |      80–90% |         0 |          0 B |                  |
 |     90–100% |         0 |          0 B |                  |
-| 100% (full) |         0 |          0 B |                  |
-|   **Total** | **2,023** | **114.0 KB** |                  |
+| 100% (full) |         8 |        320 B | ▏                |
+|   **Total** | **2,450** | **135.9 KB** |                  |
 
 ### Constant Primitive Arrays
 
@@ -13988,23 +13437,23 @@ _Combined ranking of `Class#field` references and stack-frame locals by retained
 | org.apache.spark.util.ClosureCleaner$#clean()                                      | Stack Frame |   2.6 MB |
 | java.util.concurrent.ThreadPoolExecutor#runWorker()                                | Stack Frame | 955.5 KB |
 | java.util.concurrent.ThreadPoolExecutor#getTask()                                  | Stack Frame | 930.7 KB |
-| org.sparkproject.jetty.util.thread.QueuedThreadPool#runJob()                       | Stack Frame | 536.4 KB |
+| org.sparkproject.jetty.util.thread.QueuedThreadPool#runJob()                       | Stack Frame | 536.3 KB |
 | org.apache.xbean.asm9.ClassReader#readCode()                                       | Stack Frame | 415.4 KB |
 | org.apache.xbean.asm9.ClassReader#accept()                                         | Stack Frame | 401.1 KB |
-| org.sparkproject.jetty.server.ServerConnector#accept()                             | Stack Frame |  81.9 KB |
+| org.sparkproject.jetty.server.ServerConnector#accept()                             | Stack Frame |  81.6 KB |
 | java.util.concurrent.LinkedBlockingQueue#poll()                                    | Stack Frame |  44.0 KB |
 | java.lang.Thread#runWith()                                                         | Stack Frame |  40.5 KB |
 | java.lang.Thread#run()                                                             | Stack Frame |  39.9 KB |
-| sun.nio.ch.SelectorImpl#lockAndDoSelect()                                          | Stack Frame |  23.2 KB |
+| sun.nio.ch.SelectorImpl#lockAndDoSelect()                                          | Stack Frame |  23.0 KB |
 | io.netty.channel.nio.NioEventLoop#run()                                            | Stack Frame |  19.4 KB |
 | io.netty.channel.nio.NioEventLoop#select()                                         | Stack Frame |  19.4 KB |
-| org.sparkproject.jetty.io.ManagedSelector#nioSelect()                              | Stack Frame |  14.1 KB |
-| org.sparkproject.jetty.io.ManagedSelector#select()                                 | Stack Frame |  14.1 KB |
+| org.sparkproject.jetty.io.ManagedSelector#nioSelect()                              | Stack Frame |  14.0 KB |
+| org.sparkproject.jetty.io.ManagedSelector#select()                                 | Stack Frame |  14.0 KB |
 | java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject#awaitNanos() | Stack Frame |  11.3 KB |
 | java.util.concurrent.ThreadPoolExecutor$Worker#run()                               | Stack Frame |  10.7 KB |
-| sun.nio.ch.EPollSelectorImpl#doSelect()                                            | Stack Frame |   7.5 KB |
-| sun.nio.ch.SelectorImpl#select()                                                   | Stack Frame |   7.5 KB |
-| org.sparkproject.jetty.io.ManagedSelector$SelectorProducer#select()                | Stack Frame |   6.3 KB |
+| sun.nio.ch.EPollSelectorImpl#doSelect()                                            | Stack Frame |   7.4 KB |
+| sun.nio.ch.SelectorImpl#select()                                                   | Stack Frame |   7.4 KB |
+| org.sparkproject.jetty.io.ManagedSelector$SelectorProducer#select()                | Stack Frame |   6.2 KB |
 | org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill#doProduce()             | Stack Frame |   5.2 KB |
 | org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill#produce()               | Stack Frame |   5.2 KB |
 | org.sparkproject.jetty.util.thread.strategy.EatWhatYouKill#produceTask()           | Stack Frame |   5.2 KB |
@@ -14078,17 +13527,17 @@ _6,039 reference instances. 177 instances have a null referent — referent coll
 | `java.util.logging.Logger`                                             |      65 |   3.6 KB |  21.8 KB | ▌                |
 | `java.lang.Module`                                                     |      53 |   2.5 KB | 302.7 KB | ████████▏        |
 | `javax.management.ImmutableDescriptor`                                 |      36 |    864 B |   4.2 KB | ▏                |
-| `com.sun.jmx.mbeanserver.DefaultMXBeanMappingFactory$IdentityMapping`  |      32 |    768 B |   2.1 KB | ▏                |
+| `com.sun.jmx.mbeanserver.DefaultMXBeanMappingFactory$IdentityMapping`  |      32 |    768 B |   2.0 KB | ▏                |
 | `jdk.internal.vm.SharedThreadContainer`                                |      28 |   1.1 KB |   3.6 KB | ▏                |
 | `com.sun.jmx.mbeanserver.PerInterface`                                 |      18 |    720 B |  74.0 KB | █▉               |
-| `java.lang.Class`                                                      |      18 |   1.3 KB | 114.5 KB | ███              |
+| `java.lang.Class`                                                      |      18 |   1.3 KB | 114.4 KB | ███              |
 | `java.lang.String`                                                     |      16 |    408 B |    904 B | ▏                |
 | `java.util.logging.LogManager$RootLogger`                              |      15 |    960 B |  19.9 KB | ▌                |
 | `scala.reflect.ClassTag$GenericClassTag`                               |      15 |    240 B |    240 B | ▏                |
 | `com.sun.jmx.mbeanserver.DefaultMXBeanMappingFactory$CompositeMapping` |      11 |    440 B |  23.2 KB | ▋                |
 | `java.util.logging.Level`                                              |       9 |    288 B |    288 B | ▏                |
 | `sun.management.MemoryPoolImpl`                                        |       9 |    456 B |   3.0 KB | ▏                |
-| `sun.net.www.protocol.jar.URLJarFile`                                  |       8 |    640 B |   2.6 KB | ▏                |
+| `sun.net.www.protocol.jar.URLJarFile`                                  |       8 |    576 B |   2.6 KB | ▏                |
 _… 167 more classes (314 objects, 32.6 KB shallow, 5.7 MB retained)._
 
 #### Only Weakly Retained
@@ -14109,10 +13558,10 @@ _586 reference instances. 4 instances have a null referent — referent collecte
 | --------------------------------------------------------------------- | ------: | ------: | -------: | ---------------- |
 | `java.util.zip.Inflater`                                              |     192 | 12.0 KB |  12.0 KB | ▏                |
 | `java.io.FileDescriptor`                                              |     183 |  7.1 KB |   7.1 KB | ▏                |
-| `java.util.jar.JarFile`                                               |     181 | 11.3 KB |   1.4 MB | ████▏            |
-| `sun.net.www.protocol.jar.URLJarFile`                                 |      12 |   960 B |   4.0 KB | ▏                |
+| `java.util.jar.JarFile`                                               |     181 |  9.9 KB |   1.4 MB | ████▏            |
+| `sun.net.www.protocol.jar.URLJarFile`                                 |      12 |   864 B |   3.9 KB | ▏                |
 | `sun.nio.fs.NativeBuffer`                                             |       5 |   160 B |    392 B | ▏                |
-| `java.nio.DirectByteBuffer`                                           |       3 |   216 B |    216 B | ▏                |
+| `java.nio.DirectByteBuffer`                                           |       3 |   192 B |    192 B | ▏                |
 | `java.net.URLClassLoader`                                             |       2 |   176 B |   5.3 MB | ████████████████ |
 | `java.util.Timer`                                                     |       2 |    48 B |     48 B | ▏                |
 | `java.lang.ref.Cleaner`                                               |       1 |    16 B |     16 B | ▏                |
@@ -14186,421 +13635,421 @@ _Top garbage-root subtrees by retained heap — unreachable objects with no reac
 
 4. **java.lang.ref.SoftReference** — 101.3 KB (1,988 objects in subtree) ███▏            
    └─ java.lang.Class$ReflectionData — 101.2 KB ███▏            
-        ├─ java.lang.reflect.Method[] — 98.7 KB ███             
-        │    ├─ java.lang.reflect.Method — 688 B ▏               
-        │    │    ├─ java.lang.String — 544 B ▏               
-        │    │    │    └─ byte[] — 520 B ▏               
-        │    │    └─ java.lang.Class[] — 56 B ▏               
-        │    ├─ java.lang.reflect.Method — 680 B ▏               
-        │    │    ├─ java.lang.String — 544 B ▏               
-        │    │    │    └─ byte[] — 520 B ▏               
-        │    │    └─ java.lang.Class[] — 48 B ▏               
-        │    ├─ java.lang.reflect.Method — 576 B ▏               
-        │    │    ├─ java.lang.String — 440 B ▏               
-        │    │    │    └─ byte[] — 416 B ▏               
-        │    │    └─ java.lang.Class[] — 48 B ▏               
-        │    ├─ java.lang.reflect.Method — 568 B ▏               
-        │    │    ├─ java.lang.String — 432 B ▏               
-        │    │    │    └─ byte[] — 408 B ▏               
-        │    │    └─ java.lang.Class[] — 48 B ▏               
-        │    ├─ java.lang.reflect.Method — 560 B ▏               
-        │    │    ├─ java.lang.String — 432 B ▏               
-        │    │    │    └─ byte[] — 408 B ▏               
-        │    │    └─ java.lang.Class[] — 40 B ▏               
-        │    ├─ java.lang.reflect.Method — 528 B ▏               
-        │    │    ├─ java.lang.String — 328 B ▏               
-        │    │    │    └─ byte[] — 304 B ▏               
-        │    │    ├─ java.lang.String — 72 B ▏               
-        │    │    │    └─ byte[] — 48 B ▏               
-        │    │    └─ java.lang.Class[] — 40 B ▏               
-        │    ├─ java.lang.reflect.Method — 480 B ▏               
-        │    │    ├─ java.lang.String — 296 B ▏               
-        │    │    │    └─ byte[] — 272 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    └─ java.lang.Class[] — 32 B ▏               
-        │    └─ java.lang.reflect.Method — 456 B ▏               
-        │         ├─ java.lang.String — 272 B ▏               
-        │         │    └─ byte[] — 248 B ▏               
-        │         ├─ java.lang.String — 64 B ▏               
-        │         │    └─ byte[] — 40 B ▏               
-        │         └─ java.lang.Class[] — 32 B ▏               
-        ├─ java.lang.reflect.Field[] — 1.5 KB ▏               
-        │    ├─ java.lang.reflect.Field — 208 B ▏               
-        │    │    └─ java.lang.String — 136 B ▏               
-        │    │         └─ byte[] — 112 B ▏               
-        │    ├─ java.lang.reflect.Field — 184 B ▏               
-        │    │    └─ java.lang.String — 112 B ▏               
-        │    │         └─ byte[] — 88 B ▏               
-        │    ├─ java.lang.reflect.Field — 176 B ▏               
-        │    │    └─ java.lang.String — 104 B ▏               
-        │    │         └─ byte[] — 80 B ▏               
-        │    ├─ java.lang.reflect.Field — 168 B ▏               
-        │    │    └─ java.lang.String — 96 B ▏               
-        │    │         └─ byte[] — 72 B ▏               
-        │    ├─ java.lang.reflect.Field — 160 B ▏               
-        │    │    └─ java.lang.String — 88 B ▏               
-        │    │         └─ byte[] — 64 B ▏               
-        │    ├─ java.lang.reflect.Field — 72 B ▏               
-        │    ├─ java.lang.reflect.Field — 72 B ▏               
-        │    └─ java.lang.reflect.Field — 72 B ▏               
-        ├─ java.lang.reflect.Constructor[] — 504 B ▏               
-        │    ├─ java.lang.reflect.Constructor — 280 B ▏               
-        │    │    ├─ java.lang.String — 176 B ▏               
-        │    │    │    └─ byte[] — 152 B ▏               
-        │    │    └─ java.lang.Class[] — 32 B ▏               
-        │    └─ java.lang.reflect.Constructor — 200 B ▏               
-        │         ├─ java.lang.String — 104 B ▏               
-        │         │    └─ byte[] — 80 B ▏               
-        │         └─ java.lang.Class[] — 24 B ▏               
-        ├─ java.lang.String — 64 B ▏               
-        │    └─ byte[] — 40 B ▏               
-        ├─ java.lang.String — 64 B ▏               
-        │    └─ byte[] — 40 B ▏               
-        ├─ java.lang.String — 56 B ▏               
-        │    └─ byte[] — 32 B ▏               
-        ├─ java.lang.String — 56 B ▏               
-        │    └─ byte[] — 32 B ▏               
-        └─ java.lang.String — 56 B ▏               
-             └─ byte[] — 32 B ▏               
+       ├─ java.lang.reflect.Method[] — 98.7 KB ███             
+       │   ├─ java.lang.reflect.Method — 688 B ▏               
+       │   │   ├─ java.lang.String — 544 B ▏               
+       │   │   │   └─ byte[] — 520 B ▏               
+       │   │   └─ java.lang.Class[] — 56 B ▏               
+       │   ├─ java.lang.reflect.Method — 680 B ▏               
+       │   │   ├─ java.lang.String — 544 B ▏               
+       │   │   │   └─ byte[] — 520 B ▏               
+       │   │   └─ java.lang.Class[] — 48 B ▏               
+       │   ├─ java.lang.reflect.Method — 576 B ▏               
+       │   │   ├─ java.lang.String — 440 B ▏               
+       │   │   │   └─ byte[] — 416 B ▏               
+       │   │   └─ java.lang.Class[] — 48 B ▏               
+       │   ├─ java.lang.reflect.Method — 568 B ▏               
+       │   │   ├─ java.lang.String — 432 B ▏               
+       │   │   │   └─ byte[] — 408 B ▏               
+       │   │   └─ java.lang.Class[] — 48 B ▏               
+       │   ├─ java.lang.reflect.Method — 560 B ▏               
+       │   │   ├─ java.lang.String — 432 B ▏               
+       │   │   │   └─ byte[] — 408 B ▏               
+       │   │   └─ java.lang.Class[] — 40 B ▏               
+       │   ├─ java.lang.reflect.Method — 528 B ▏               
+       │   │   ├─ java.lang.String — 328 B ▏               
+       │   │   │   └─ byte[] — 304 B ▏               
+       │   │   ├─ java.lang.String — 72 B ▏               
+       │   │   │   └─ byte[] — 48 B ▏               
+       │   │   └─ java.lang.Class[] — 40 B ▏               
+       │   ├─ java.lang.reflect.Method — 480 B ▏               
+       │   │   ├─ java.lang.String — 296 B ▏               
+       │   │   │   └─ byte[] — 272 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   └─ java.lang.Class[] — 32 B ▏               
+       │   └─ java.lang.reflect.Method — 456 B ▏               
+       │       ├─ java.lang.String — 272 B ▏               
+       │       │   └─ byte[] — 248 B ▏               
+       │       ├─ java.lang.String — 64 B ▏               
+       │       │   └─ byte[] — 40 B ▏               
+       │       └─ java.lang.Class[] — 32 B ▏               
+       ├─ java.lang.reflect.Field[] — 1.5 KB ▏               
+       │   ├─ java.lang.reflect.Field — 208 B ▏               
+       │   │   └─ java.lang.String — 136 B ▏               
+       │   │       └─ byte[] — 112 B ▏               
+       │   ├─ java.lang.reflect.Field — 184 B ▏               
+       │   │   └─ java.lang.String — 112 B ▏               
+       │   │       └─ byte[] — 88 B ▏               
+       │   ├─ java.lang.reflect.Field — 176 B ▏               
+       │   │   └─ java.lang.String — 104 B ▏               
+       │   │       └─ byte[] — 80 B ▏               
+       │   ├─ java.lang.reflect.Field — 168 B ▏               
+       │   │   └─ java.lang.String — 96 B ▏               
+       │   │       └─ byte[] — 72 B ▏               
+       │   ├─ java.lang.reflect.Field — 160 B ▏               
+       │   │   └─ java.lang.String — 88 B ▏               
+       │   │       └─ byte[] — 64 B ▏               
+       │   ├─ java.lang.reflect.Field — 72 B ▏               
+       │   ├─ java.lang.reflect.Field — 72 B ▏               
+       │   └─ java.lang.reflect.Field — 72 B ▏               
+       ├─ java.lang.reflect.Constructor[] — 504 B ▏               
+       │   ├─ java.lang.reflect.Constructor — 280 B ▏               
+       │   │   ├─ java.lang.String — 176 B ▏               
+       │   │   │   └─ byte[] — 152 B ▏               
+       │   │   └─ java.lang.Class[] — 32 B ▏               
+       │   └─ java.lang.reflect.Constructor — 200 B ▏               
+       │       ├─ java.lang.String — 104 B ▏               
+       │       │   └─ byte[] — 80 B ▏               
+       │       └─ java.lang.Class[] — 24 B ▏               
+       ├─ java.lang.String — 64 B ▏               
+       │   └─ byte[] — 40 B ▏               
+       ├─ java.lang.String — 64 B ▏               
+       │   └─ byte[] — 40 B ▏               
+       ├─ java.lang.String — 56 B ▏               
+       │   └─ byte[] — 32 B ▏               
+       ├─ java.lang.String — 56 B ▏               
+       │   └─ byte[] — 32 B ▏               
+       └─ java.lang.String — 56 B ▏               
+           └─ byte[] — 32 B ▏               
 
 5. **java.lang.ref.SoftReference** — 98.4 KB (1,995 objects in subtree) ███             
    └─ java.lang.Class$ReflectionData — 98.3 KB ███             
-        └─ java.lang.reflect.Method[] — 98.3 KB ███             
-             ├─ java.lang.reflect.Method — 560 B ▏               
-             │    ├─ java.lang.String — 376 B ▏               
-             │    │    └─ byte[] — 352 B ▏               
-             │    ├─ java.lang.String — 56 B ▏               
-             │    │    └─ byte[] — 32 B ▏               
-             │    └─ java.lang.Class[] — 40 B ▏               
-             ├─ java.lang.reflect.Method — 528 B ▏               
-             │    ├─ java.lang.String — 320 B ▏               
-             │    │    └─ byte[] — 296 B ▏               
-             │    ├─ java.lang.String — 64 B ▏               
-             │    │    └─ byte[] — 40 B ▏               
-             │    ├─ java.lang.Class[] — 32 B ▏               
-             │    └─ byte[] — 24 B ▏               
-             ├─ java.lang.reflect.Method — 480 B ▏               
-             │    ├─ java.lang.String — 352 B ▏               
-             │    │    └─ byte[] — 328 B ▏               
-             │    └─ java.lang.Class[] — 40 B ▏               
-             ├─ java.lang.reflect.Method — 472 B ▏               
-             │    ├─ java.lang.String — 296 B ▏               
-             │    │    └─ byte[] — 272 B ▏               
-             │    ├─ java.lang.String — 56 B ▏               
-             │    │    └─ byte[] — 32 B ▏               
-             │    └─ java.lang.Class[] — 32 B ▏               
-             ├─ java.lang.reflect.Method — 464 B ▏               
-             │    ├─ java.lang.String — 336 B ▏               
-             │    │    └─ byte[] — 312 B ▏               
-             │    └─ java.lang.Class[] — 40 B ▏               
-             ├─ java.lang.reflect.Method — 464 B ▏               
-             │    ├─ java.lang.String — 280 B ▏               
-             │    │    └─ byte[] — 256 B ▏               
-             │    ├─ java.lang.String — 56 B ▏               
-             │    │    └─ byte[] — 32 B ▏               
-             │    └─ java.lang.Class[] — 40 B ▏               
-             ├─ java.lang.reflect.Method — 440 B ▏               
-             │    ├─ java.lang.String — 312 B ▏               
-             │    │    └─ byte[] — 288 B ▏               
-             │    └─ java.lang.Class[] — 40 B ▏               
-             └─ java.lang.reflect.Method — 424 B ▏               
-                  ├─ java.lang.String — 296 B ▏               
-                  │    └─ byte[] — 272 B ▏               
-                  └─ java.lang.Class[] — 40 B ▏               
+       └─ java.lang.reflect.Method[] — 98.3 KB ███             
+           ├─ java.lang.reflect.Method — 560 B ▏               
+           │   ├─ java.lang.String — 376 B ▏               
+           │   │   └─ byte[] — 352 B ▏               
+           │   ├─ java.lang.String — 56 B ▏               
+           │   │   └─ byte[] — 32 B ▏               
+           │   └─ java.lang.Class[] — 40 B ▏               
+           ├─ java.lang.reflect.Method — 528 B ▏               
+           │   ├─ java.lang.String — 320 B ▏               
+           │   │   └─ byte[] — 296 B ▏               
+           │   ├─ java.lang.String — 64 B ▏               
+           │   │   └─ byte[] — 40 B ▏               
+           │   ├─ java.lang.Class[] — 32 B ▏               
+           │   └─ byte[] — 24 B ▏               
+           ├─ java.lang.reflect.Method — 480 B ▏               
+           │   ├─ java.lang.String — 352 B ▏               
+           │   │   └─ byte[] — 328 B ▏               
+           │   └─ java.lang.Class[] — 40 B ▏               
+           ├─ java.lang.reflect.Method — 472 B ▏               
+           │   ├─ java.lang.String — 296 B ▏               
+           │   │   └─ byte[] — 272 B ▏               
+           │   ├─ java.lang.String — 56 B ▏               
+           │   │   └─ byte[] — 32 B ▏               
+           │   └─ java.lang.Class[] — 32 B ▏               
+           ├─ java.lang.reflect.Method — 464 B ▏               
+           │   ├─ java.lang.String — 336 B ▏               
+           │   │   └─ byte[] — 312 B ▏               
+           │   └─ java.lang.Class[] — 40 B ▏               
+           ├─ java.lang.reflect.Method — 464 B ▏               
+           │   ├─ java.lang.String — 280 B ▏               
+           │   │   └─ byte[] — 256 B ▏               
+           │   ├─ java.lang.String — 56 B ▏               
+           │   │   └─ byte[] — 32 B ▏               
+           │   └─ java.lang.Class[] — 40 B ▏               
+           ├─ java.lang.reflect.Method — 440 B ▏               
+           │   ├─ java.lang.String — 312 B ▏               
+           │   │   └─ byte[] — 288 B ▏               
+           │   └─ java.lang.Class[] — 40 B ▏               
+           └─ java.lang.reflect.Method — 424 B ▏               
+               ├─ java.lang.String — 296 B ▏               
+               │   └─ byte[] — 272 B ▏               
+               └─ java.lang.Class[] — 40 B ▏               
 
 6. **java.lang.ref.SoftReference** — 74.9 KB (1,724 objects in subtree) ██▎             
    └─ java.lang.Class$ReflectionData — 74.9 KB ██▎             
-        └─ java.lang.reflect.Method[] — 74.8 KB ██▎             
-             ├─ java.lang.reflect.Method — 328 B ▏               
-             │    ├─ java.lang.String — 144 B ▏               
-             │    │    └─ byte[] — 120 B ▏               
-             │    ├─ java.lang.String — 56 B ▏               
-             │    │    └─ byte[] — 32 B ▏               
-             │    └─ java.lang.Class[] — 40 B ▏               
-             ├─ java.lang.reflect.Method — 296 B ▏               
-             │    ├─ java.lang.String — 88 B ▏               
-             │    │    └─ byte[] — 64 B ▏               
-             │    ├─ java.lang.String — 72 B ▏               
-             │    │    └─ byte[] — 48 B ▏               
-             │    ├─ java.lang.Class[] — 24 B ▏               
-             │    └─ byte[] — 24 B ▏               
-             ├─ java.lang.reflect.Method — 272 B ▏               
-             │    ├─ java.lang.String — 144 B ▏               
-             │    │    └─ byte[] — 120 B ▏               
-             │    └─ java.lang.Class[] — 40 B ▏               
-             ├─ java.lang.reflect.Method — 272 B ▏               
-             │    ├─ java.lang.String — 88 B ▏               
-             │    │    └─ byte[] — 64 B ▏               
-             │    ├─ java.lang.String — 72 B ▏               
-             │    │    └─ byte[] — 48 B ▏               
-             │    └─ java.lang.Class[] — 24 B ▏               
-             ├─ java.lang.reflect.Method — 264 B ▏               
-             │    ├─ java.lang.String — 88 B ▏               
-             │    │    └─ byte[] — 64 B ▏               
-             │    ├─ java.lang.String — 64 B ▏               
-             │    │    └─ byte[] — 40 B ▏               
-             │    └─ java.lang.Class[] — 24 B ▏               
-             ├─ java.lang.reflect.Method — 240 B ▏               
-             │    ├─ java.lang.String — 80 B ▏               
-             │    │    └─ byte[] — 56 B ▏               
-             │    ├─ java.lang.Class[] — 24 B ▏               
-             │    ├─ java.lang.Class[] — 24 B ▏               
-             │    └─ byte[] — 24 B ▏               
-             ├─ java.lang.reflect.Method — 240 B ▏               
-             │    ├─ java.lang.String — 64 B ▏               
-             │    │    └─ byte[] — 40 B ▏               
-             │    ├─ java.lang.String — 64 B ▏               
-             │    │    └─ byte[] — 40 B ▏               
-             │    └─ java.lang.Class[] — 24 B ▏               
-             └─ java.lang.reflect.Method — 240 B ▏               
-                  ├─ java.lang.String — 64 B ▏               
-                  │    └─ byte[] — 40 B ▏               
-                  ├─ java.lang.String — 64 B ▏               
-                  │    └─ byte[] — 40 B ▏               
-                  └─ java.lang.Class[] — 24 B ▏               
+       └─ java.lang.reflect.Method[] — 74.8 KB ██▎             
+           ├─ java.lang.reflect.Method — 328 B ▏               
+           │   ├─ java.lang.String — 144 B ▏               
+           │   │   └─ byte[] — 120 B ▏               
+           │   ├─ java.lang.String — 56 B ▏               
+           │   │   └─ byte[] — 32 B ▏               
+           │   └─ java.lang.Class[] — 40 B ▏               
+           ├─ java.lang.reflect.Method — 296 B ▏               
+           │   ├─ java.lang.String — 88 B ▏               
+           │   │   └─ byte[] — 64 B ▏               
+           │   ├─ java.lang.String — 72 B ▏               
+           │   │   └─ byte[] — 48 B ▏               
+           │   ├─ java.lang.Class[] — 24 B ▏               
+           │   └─ byte[] — 24 B ▏               
+           ├─ java.lang.reflect.Method — 272 B ▏               
+           │   ├─ java.lang.String — 144 B ▏               
+           │   │   └─ byte[] — 120 B ▏               
+           │   └─ java.lang.Class[] — 40 B ▏               
+           ├─ java.lang.reflect.Method — 272 B ▏               
+           │   ├─ java.lang.String — 88 B ▏               
+           │   │   └─ byte[] — 64 B ▏               
+           │   ├─ java.lang.String — 72 B ▏               
+           │   │   └─ byte[] — 48 B ▏               
+           │   └─ java.lang.Class[] — 24 B ▏               
+           ├─ java.lang.reflect.Method — 264 B ▏               
+           │   ├─ java.lang.String — 88 B ▏               
+           │   │   └─ byte[] — 64 B ▏               
+           │   ├─ java.lang.String — 64 B ▏               
+           │   │   └─ byte[] — 40 B ▏               
+           │   └─ java.lang.Class[] — 24 B ▏               
+           ├─ java.lang.reflect.Method — 240 B ▏               
+           │   ├─ java.lang.String — 80 B ▏               
+           │   │   └─ byte[] — 56 B ▏               
+           │   ├─ java.lang.Class[] — 24 B ▏               
+           │   ├─ java.lang.Class[] — 24 B ▏               
+           │   └─ byte[] — 24 B ▏               
+           ├─ java.lang.reflect.Method — 240 B ▏               
+           │   ├─ java.lang.String — 64 B ▏               
+           │   │   └─ byte[] — 40 B ▏               
+           │   ├─ java.lang.String — 64 B ▏               
+           │   │   └─ byte[] — 40 B ▏               
+           │   └─ java.lang.Class[] — 24 B ▏               
+           └─ java.lang.reflect.Method — 240 B ▏               
+               ├─ java.lang.String — 64 B ▏               
+               │   └─ byte[] — 40 B ▏               
+               ├─ java.lang.String — 64 B ▏               
+               │   └─ byte[] — 40 B ▏               
+               └─ java.lang.Class[] — 24 B ▏               
 
 7. **java.lang.ref.SoftReference** — 73.5 KB (1,206 objects in subtree) ██▎             
    └─ java.lang.Class$ReflectionData — 73.5 KB ██▎             
-        ├─ java.lang.reflect.Method[] — 72.5 KB ██▎             
-        │    ├─ java.lang.reflect.Method — 472 B ▏               
-        │    │    ├─ java.lang.String — 352 B ▏               
-        │    │    │    └─ byte[] — 328 B ▏               
-        │    │    └─ java.lang.Class[] — 32 B ▏               
-        │    ├─ java.lang.reflect.Method — 432 B ▏               
-        │    │    ├─ java.lang.String — 312 B ▏               
-        │    │    │    └─ byte[] — 288 B ▏               
-        │    │    └─ java.lang.Class[] — 32 B ▏               
-        │    ├─ java.lang.reflect.Method — 416 B ▏               
-        │    │    ├─ java.lang.String — 248 B ▏               
-        │    │    │    └─ byte[] — 224 B ▏               
-        │    │    ├─ java.lang.String — 56 B ▏               
-        │    │    │    └─ byte[] — 32 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 408 B ▏               
-        │    │    ├─ java.lang.String — 240 B ▏               
-        │    │    │    └─ byte[] — 216 B ▏               
-        │    │    ├─ java.lang.String — 56 B ▏               
-        │    │    │    └─ byte[] — 32 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 408 B ▏               
-        │    │    ├─ java.lang.String — 240 B ▏               
-        │    │    │    └─ byte[] — 216 B ▏               
-        │    │    ├─ java.lang.String — 56 B ▏               
-        │    │    │    └─ byte[] — 32 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 408 B ▏               
-        │    │    ├─ java.lang.String — 240 B ▏               
-        │    │    │    └─ byte[] — 216 B ▏               
-        │    │    ├─ java.lang.String — 56 B ▏               
-        │    │    │    └─ byte[] — 32 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 408 B ▏               
-        │    │    ├─ java.lang.String — 240 B ▏               
-        │    │    │    └─ byte[] — 216 B ▏               
-        │    │    ├─ java.lang.String — 56 B ▏               
-        │    │    │    └─ byte[] — 32 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    └─ java.lang.reflect.Method — 400 B ▏               
-        │         ├─ java.lang.String — 232 B ▏               
-        │         │    └─ byte[] — 208 B ▏               
-        │         ├─ java.lang.String — 56 B ▏               
-        │         │    └─ byte[] — 32 B ▏               
-        │         └─ java.lang.Class[] — 24 B ▏               
-        ├─ java.lang.reflect.Constructor[] — 696 B ▏               
-        │    ├─ java.lang.reflect.Constructor — 176 B ▏               
-        │    │    ├─ java.lang.String — 80 B ▏               
-        │    │    │    └─ byte[] — 56 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Constructor — 168 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    └─ java.lang.Class[] — 32 B ▏               
-        │    ├─ java.lang.reflect.Constructor — 160 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    └─ java.lang.reflect.Constructor — 160 B ▏               
-        │         ├─ java.lang.String — 64 B ▏               
-        │         │    └─ byte[] — 40 B ▏               
-        │         └─ java.lang.Class[] — 24 B ▏               
-        ├─ java.lang.reflect.Field[] — 240 B ▏               
-        │    └─ java.lang.reflect.Field — 200 B ▏               
-        │         └─ jdk.internal.reflect.MethodHandleLongFieldAccessorImpl — 128 B ▏               
-        │              └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B ▏               
-        └─ java.lang.Class[] — 24 B ▏               
+       ├─ java.lang.reflect.Method[] — 72.5 KB ██▎             
+       │   ├─ java.lang.reflect.Method — 472 B ▏               
+       │   │   ├─ java.lang.String — 352 B ▏               
+       │   │   │   └─ byte[] — 328 B ▏               
+       │   │   └─ java.lang.Class[] — 32 B ▏               
+       │   ├─ java.lang.reflect.Method — 432 B ▏               
+       │   │   ├─ java.lang.String — 312 B ▏               
+       │   │   │   └─ byte[] — 288 B ▏               
+       │   │   └─ java.lang.Class[] — 32 B ▏               
+       │   ├─ java.lang.reflect.Method — 416 B ▏               
+       │   │   ├─ java.lang.String — 248 B ▏               
+       │   │   │   └─ byte[] — 224 B ▏               
+       │   │   ├─ java.lang.String — 56 B ▏               
+       │   │   │   └─ byte[] — 32 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 408 B ▏               
+       │   │   ├─ java.lang.String — 240 B ▏               
+       │   │   │   └─ byte[] — 216 B ▏               
+       │   │   ├─ java.lang.String — 56 B ▏               
+       │   │   │   └─ byte[] — 32 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 408 B ▏               
+       │   │   ├─ java.lang.String — 240 B ▏               
+       │   │   │   └─ byte[] — 216 B ▏               
+       │   │   ├─ java.lang.String — 56 B ▏               
+       │   │   │   └─ byte[] — 32 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 408 B ▏               
+       │   │   ├─ java.lang.String — 240 B ▏               
+       │   │   │   └─ byte[] — 216 B ▏               
+       │   │   ├─ java.lang.String — 56 B ▏               
+       │   │   │   └─ byte[] — 32 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 408 B ▏               
+       │   │   ├─ java.lang.String — 240 B ▏               
+       │   │   │   └─ byte[] — 216 B ▏               
+       │   │   ├─ java.lang.String — 56 B ▏               
+       │   │   │   └─ byte[] — 32 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   └─ java.lang.reflect.Method — 400 B ▏               
+       │       ├─ java.lang.String — 232 B ▏               
+       │       │   └─ byte[] — 208 B ▏               
+       │       ├─ java.lang.String — 56 B ▏               
+       │       │   └─ byte[] — 32 B ▏               
+       │       └─ java.lang.Class[] — 24 B ▏               
+       ├─ java.lang.reflect.Constructor[] — 696 B ▏               
+       │   ├─ java.lang.reflect.Constructor — 176 B ▏               
+       │   │   ├─ java.lang.String — 80 B ▏               
+       │   │   │   └─ byte[] — 56 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Constructor — 168 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   └─ java.lang.Class[] — 32 B ▏               
+       │   ├─ java.lang.reflect.Constructor — 160 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   └─ java.lang.reflect.Constructor — 160 B ▏               
+       │       ├─ java.lang.String — 64 B ▏               
+       │       │   └─ byte[] — 40 B ▏               
+       │       └─ java.lang.Class[] — 24 B ▏               
+       ├─ java.lang.reflect.Field[] — 240 B ▏               
+       │   └─ java.lang.reflect.Field — 200 B ▏               
+       │       └─ jdk.internal.reflect.MethodHandleLongFieldAccessorImpl — 128 B ▏               
+       │           └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B ▏               
+       └─ java.lang.Class[] — 24 B ▏               
 
 8. **java.lang.ref.SoftReference** — 61.6 KB (946 objects in subtree) █▉              
    └─ java.lang.Class$ReflectionData — 61.5 KB █▉              
-        ├─ java.lang.reflect.Method[] — 60.3 KB █▉              
-        │    ├─ java.lang.reflect.Method — 496 B ▏               
-        │    │    ├─ java.lang.String — 368 B ▏               
-        │    │    │    └─ byte[] — 344 B ▏               
-        │    │    └─ java.lang.Class[] — 40 B ▏               
-        │    ├─ java.lang.reflect.Method — 472 B ▏               
-        │    │    ├─ java.lang.String — 352 B ▏               
-        │    │    │    └─ byte[] — 328 B ▏               
-        │    │    └─ java.lang.Class[] — 32 B ▏               
-        │    ├─ java.lang.reflect.Method — 432 B ▏               
-        │    │    ├─ java.lang.String — 312 B ▏               
-        │    │    │    └─ byte[] — 288 B ▏               
-        │    │    └─ java.lang.Class[] — 32 B ▏               
-        │    ├─ java.lang.reflect.Method — 424 B ▏               
-        │    │    ├─ java.lang.String — 312 B ▏               
-        │    │    │    └─ byte[] — 288 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 424 B ▏               
-        │    │    ├─ java.lang.String — 312 B ▏               
-        │    │    │    └─ byte[] — 288 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 392 B ▏               
-        │    │    ├─ java.lang.String — 264 B ▏               
-        │    │    │    └─ byte[] — 240 B ▏               
-        │    │    └─ java.lang.Class[] — 40 B ▏               
-        │    ├─ java.lang.reflect.Method — 392 B ▏               
-        │    │    ├─ java.lang.String — 280 B ▏               
-        │    │    │    └─ byte[] — 256 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    └─ java.lang.reflect.Method — 392 B ▏               
-        │         ├─ java.lang.String — 280 B ▏               
-        │         │    └─ byte[] — 256 B ▏               
-        │         └─ java.lang.Class[] — 24 B ▏               
-        ├─ java.lang.reflect.Constructor[] — 912 B ▏               
-        │    ├─ java.lang.reflect.Constructor — 184 B ▏               
-        │    │    ├─ java.lang.String — 80 B ▏               
-        │    │    │    └─ byte[] — 56 B ▏               
-        │    │    └─ java.lang.Class[] — 32 B ▏               
-        │    ├─ java.lang.reflect.Constructor — 184 B ▏               
-        │    │    ├─ java.lang.String — 72 B ▏               
-        │    │    │    └─ byte[] — 48 B ▏               
-        │    │    └─ java.lang.Class[] — 40 B ▏               
-        │    ├─ java.lang.reflect.Constructor — 168 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    └─ java.lang.Class[] — 32 B ▏               
-        │    ├─ java.lang.reflect.Constructor — 168 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    └─ java.lang.Class[] — 32 B ▏               
-        │    └─ java.lang.reflect.Constructor — 168 B ▏               
-        │         ├─ java.lang.String — 64 B ▏               
-        │         │    └─ byte[] — 40 B ▏               
-        │         └─ java.lang.Class[] — 32 B ▏               
-        ├─ java.lang.reflect.Field[] — 248 B ▏               
-        │    └─ java.lang.reflect.Field — 200 B ▏               
-        │         └─ jdk.internal.reflect.MethodHandleLongFieldAccessorImpl — 128 B ▏               
-        │              └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B ▏               
-        └─ java.lang.Class[] — 24 B ▏               
+       ├─ java.lang.reflect.Method[] — 60.3 KB █▉              
+       │   ├─ java.lang.reflect.Method — 496 B ▏               
+       │   │   ├─ java.lang.String — 368 B ▏               
+       │   │   │   └─ byte[] — 344 B ▏               
+       │   │   └─ java.lang.Class[] — 40 B ▏               
+       │   ├─ java.lang.reflect.Method — 472 B ▏               
+       │   │   ├─ java.lang.String — 352 B ▏               
+       │   │   │   └─ byte[] — 328 B ▏               
+       │   │   └─ java.lang.Class[] — 32 B ▏               
+       │   ├─ java.lang.reflect.Method — 432 B ▏               
+       │   │   ├─ java.lang.String — 312 B ▏               
+       │   │   │   └─ byte[] — 288 B ▏               
+       │   │   └─ java.lang.Class[] — 32 B ▏               
+       │   ├─ java.lang.reflect.Method — 424 B ▏               
+       │   │   ├─ java.lang.String — 312 B ▏               
+       │   │   │   └─ byte[] — 288 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 424 B ▏               
+       │   │   ├─ java.lang.String — 312 B ▏               
+       │   │   │   └─ byte[] — 288 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 392 B ▏               
+       │   │   ├─ java.lang.String — 264 B ▏               
+       │   │   │   └─ byte[] — 240 B ▏               
+       │   │   └─ java.lang.Class[] — 40 B ▏               
+       │   ├─ java.lang.reflect.Method — 392 B ▏               
+       │   │   ├─ java.lang.String — 280 B ▏               
+       │   │   │   └─ byte[] — 256 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   └─ java.lang.reflect.Method — 392 B ▏               
+       │       ├─ java.lang.String — 280 B ▏               
+       │       │   └─ byte[] — 256 B ▏               
+       │       └─ java.lang.Class[] — 24 B ▏               
+       ├─ java.lang.reflect.Constructor[] — 912 B ▏               
+       │   ├─ java.lang.reflect.Constructor — 184 B ▏               
+       │   │   ├─ java.lang.String — 80 B ▏               
+       │   │   │   └─ byte[] — 56 B ▏               
+       │   │   └─ java.lang.Class[] — 32 B ▏               
+       │   ├─ java.lang.reflect.Constructor — 184 B ▏               
+       │   │   ├─ java.lang.String — 72 B ▏               
+       │   │   │   └─ byte[] — 48 B ▏               
+       │   │   └─ java.lang.Class[] — 40 B ▏               
+       │   ├─ java.lang.reflect.Constructor — 168 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   └─ java.lang.Class[] — 32 B ▏               
+       │   ├─ java.lang.reflect.Constructor — 168 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   └─ java.lang.Class[] — 32 B ▏               
+       │   └─ java.lang.reflect.Constructor — 168 B ▏               
+       │       ├─ java.lang.String — 64 B ▏               
+       │       │   └─ byte[] — 40 B ▏               
+       │       └─ java.lang.Class[] — 32 B ▏               
+       ├─ java.lang.reflect.Field[] — 248 B ▏               
+       │   └─ java.lang.reflect.Field — 200 B ▏               
+       │       └─ jdk.internal.reflect.MethodHandleLongFieldAccessorImpl — 128 B ▏               
+       │           └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B ▏               
+       └─ java.lang.Class[] — 24 B ▏               
 
 9. **java.lang.ref.SoftReference** — 28.5 KB (618 objects in subtree) ▉               
    └─ java.lang.Class$ReflectionData — 28.4 KB ▉               
-        ├─ java.lang.reflect.Method[] — 12.5 KB ▍               
-        │    ├─ java.lang.reflect.Method — 240 B ▏               
-        │    │    ├─ java.lang.String — 80 B ▏               
-        │    │    │    └─ byte[] — 56 B ▏               
-        │    │    ├─ java.lang.Class[] — 24 B ▏               
-        │    │    ├─ java.lang.Class[] — 24 B ▏               
-        │    │    └─ byte[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 216 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    ├─ byte[] — 40 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 216 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    ├─ byte[] — 40 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 200 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    ├─ java.lang.Class[] — 24 B ▏               
-        │    │    └─ byte[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 200 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    ├─ java.lang.Class[] — 24 B ▏               
-        │    │    └─ byte[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 152 B ▏               
-        │    │    ├─ java.lang.Class[] — 40 B ▏               
-        │    │    └─ byte[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 144 B ▏               
-        │    │    ├─ java.lang.Class[] — 32 B ▏               
-        │    │    └─ byte[] — 24 B ▏               
-        │    └─ java.lang.reflect.Method — 144 B ▏               
-        │         ├─ java.lang.Class[] — 32 B ▏               
-        │         └─ byte[] — 24 B ▏               
-        ├─ java.lang.reflect.Method[] — 12.5 KB ▍               
-        │    ├─ java.lang.reflect.Method — 240 B ▏               
-        │    │    ├─ java.lang.String — 80 B ▏               
-        │    │    │    └─ byte[] — 56 B ▏               
-        │    │    ├─ java.lang.Class[] — 24 B ▏               
-        │    │    ├─ java.lang.Class[] — 24 B ▏               
-        │    │    └─ byte[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 216 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    ├─ byte[] — 40 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 216 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    ├─ byte[] — 40 B ▏               
-        │    │    └─ java.lang.Class[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 200 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    ├─ java.lang.Class[] — 24 B ▏               
-        │    │    └─ byte[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 200 B ▏               
-        │    │    ├─ java.lang.String — 64 B ▏               
-        │    │    │    └─ byte[] — 40 B ▏               
-        │    │    ├─ java.lang.Class[] — 24 B ▏               
-        │    │    └─ byte[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 152 B ▏               
-        │    │    ├─ java.lang.Class[] — 40 B ▏               
-        │    │    └─ byte[] — 24 B ▏               
-        │    ├─ java.lang.reflect.Method — 144 B ▏               
-        │    │    ├─ java.lang.Class[] — 32 B ▏               
-        │    │    └─ byte[] — 24 B ▏               
-        │    └─ java.lang.reflect.Method — 144 B ▏               
-        │         ├─ java.lang.Class[] — 32 B ▏               
-        │         └─ byte[] — 24 B ▏               
-        ├─ java.lang.reflect.Field[] — 3.1 KB ▏               
-        │    ├─ java.lang.reflect.Field — 200 B ▏               
-        │    │    └─ jdk.internal.reflect.MethodHandleObjectFieldAccessorImpl — 128 B ▏               
-        │    │         └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B ▏               
-        │    ├─ java.lang.reflect.Field — 144 B ▏               
-        │    │    └─ java.lang.String — 72 B ▏               
-        │    │         └─ byte[] — 48 B ▏               
-        │    ├─ java.lang.reflect.Field — 144 B ▏               
-        │    │    └─ java.lang.String — 72 B ▏               
-        │    │         └─ byte[] — 48 B ▏               
-        │    ├─ java.lang.reflect.Field — 136 B ▏               
-        │    │    └─ java.lang.String — 64 B ▏               
-        │    │         └─ byte[] — 40 B ▏               
-        │    ├─ java.lang.reflect.Field — 136 B ▏               
-        │    │    └─ java.lang.String — 64 B ▏               
-        │    │         └─ byte[] — 40 B ▏               
-        │    ├─ java.lang.reflect.Field — 136 B ▏               
-        │    │    └─ java.lang.String — 64 B ▏               
-        │    │         └─ byte[] — 40 B ▏               
-        │    ├─ java.lang.reflect.Field — 136 B ▏               
-        │    │    └─ java.lang.String — 64 B ▏               
-        │    │         └─ byte[] — 40 B ▏               
-        │    └─ java.lang.reflect.Field — 136 B ▏               
-        │         └─ java.lang.String — 64 B ▏               
-        │              └─ byte[] — 40 B ▏               
-        ├─ java.lang.String — 64 B ▏               
-        │    └─ byte[] — 40 B ▏               
-        ├─ java.lang.String — 64 B ▏               
-        │    └─ byte[] — 40 B ▏               
-        ├─ java.lang.String — 64 B ▏               
-        │    └─ byte[] — 40 B ▏               
-        ├─ java.lang.String — 56 B ▏               
-        │    └─ byte[] — 32 B ▏               
-        └─ java.lang.String — 56 B ▏               
-             └─ byte[] — 32 B ▏               
+       ├─ java.lang.reflect.Method[] — 12.5 KB ▍               
+       │   ├─ java.lang.reflect.Method — 240 B ▏               
+       │   │   ├─ java.lang.String — 80 B ▏               
+       │   │   │   └─ byte[] — 56 B ▏               
+       │   │   ├─ java.lang.Class[] — 24 B ▏               
+       │   │   ├─ java.lang.Class[] — 24 B ▏               
+       │   │   └─ byte[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 216 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   ├─ byte[] — 40 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 216 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   ├─ byte[] — 40 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 200 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   ├─ java.lang.Class[] — 24 B ▏               
+       │   │   └─ byte[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 200 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   ├─ java.lang.Class[] — 24 B ▏               
+       │   │   └─ byte[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 152 B ▏               
+       │   │   ├─ java.lang.Class[] — 40 B ▏               
+       │   │   └─ byte[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 144 B ▏               
+       │   │   ├─ java.lang.Class[] — 32 B ▏               
+       │   │   └─ byte[] — 24 B ▏               
+       │   └─ java.lang.reflect.Method — 144 B ▏               
+       │       ├─ java.lang.Class[] — 32 B ▏               
+       │       └─ byte[] — 24 B ▏               
+       ├─ java.lang.reflect.Method[] — 12.5 KB ▍               
+       │   ├─ java.lang.reflect.Method — 240 B ▏               
+       │   │   ├─ java.lang.String — 80 B ▏               
+       │   │   │   └─ byte[] — 56 B ▏               
+       │   │   ├─ java.lang.Class[] — 24 B ▏               
+       │   │   ├─ java.lang.Class[] — 24 B ▏               
+       │   │   └─ byte[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 216 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   ├─ byte[] — 40 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 216 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   ├─ byte[] — 40 B ▏               
+       │   │   └─ java.lang.Class[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 200 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   ├─ java.lang.Class[] — 24 B ▏               
+       │   │   └─ byte[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 200 B ▏               
+       │   │   ├─ java.lang.String — 64 B ▏               
+       │   │   │   └─ byte[] — 40 B ▏               
+       │   │   ├─ java.lang.Class[] — 24 B ▏               
+       │   │   └─ byte[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 152 B ▏               
+       │   │   ├─ java.lang.Class[] — 40 B ▏               
+       │   │   └─ byte[] — 24 B ▏               
+       │   ├─ java.lang.reflect.Method — 144 B ▏               
+       │   │   ├─ java.lang.Class[] — 32 B ▏               
+       │   │   └─ byte[] — 24 B ▏               
+       │   └─ java.lang.reflect.Method — 144 B ▏               
+       │       ├─ java.lang.Class[] — 32 B ▏               
+       │       └─ byte[] — 24 B ▏               
+       ├─ java.lang.reflect.Field[] — 3.1 KB ▏               
+       │   ├─ java.lang.reflect.Field — 200 B ▏               
+       │   │   └─ jdk.internal.reflect.MethodHandleObjectFieldAccessorImpl — 128 B ▏               
+       │   │       └─ java.lang.invoke.DirectMethodHandle$StaticAccessor — 96 B ▏               
+       │   ├─ java.lang.reflect.Field — 144 B ▏               
+       │   │   └─ java.lang.String — 72 B ▏               
+       │   │       └─ byte[] — 48 B ▏               
+       │   ├─ java.lang.reflect.Field — 144 B ▏               
+       │   │   └─ java.lang.String — 72 B ▏               
+       │   │       └─ byte[] — 48 B ▏               
+       │   ├─ java.lang.reflect.Field — 136 B ▏               
+       │   │   └─ java.lang.String — 64 B ▏               
+       │   │       └─ byte[] — 40 B ▏               
+       │   ├─ java.lang.reflect.Field — 136 B ▏               
+       │   │   └─ java.lang.String — 64 B ▏               
+       │   │       └─ byte[] — 40 B ▏               
+       │   ├─ java.lang.reflect.Field — 136 B ▏               
+       │   │   └─ java.lang.String — 64 B ▏               
+       │   │       └─ byte[] — 40 B ▏               
+       │   ├─ java.lang.reflect.Field — 136 B ▏               
+       │   │   └─ java.lang.String — 64 B ▏               
+       │   │       └─ byte[] — 40 B ▏               
+       │   └─ java.lang.reflect.Field — 136 B ▏               
+       │       └─ java.lang.String — 64 B ▏               
+       │           └─ byte[] — 40 B ▏               
+       ├─ java.lang.String — 64 B ▏               
+       │   └─ byte[] — 40 B ▏               
+       ├─ java.lang.String — 64 B ▏               
+       │   └─ byte[] — 40 B ▏               
+       ├─ java.lang.String — 64 B ▏               
+       │   └─ byte[] — 40 B ▏               
+       ├─ java.lang.String — 56 B ▏               
+       │   └─ byte[] — 32 B ▏               
+       └─ java.lang.String — 56 B ▏               
+           └─ byte[] — 32 B ▏               
 
 10. **int[]** — 27.1 KB (1 object in subtree) ▊               
 
@@ -14691,6 +14140,21 @@ _Point-in-time counts for known Java leak patterns. Non-zero values are not alwa
 | ------------------------------------ | -------: | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Anonymous/generated classes          |    2,064 | High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by `$` to find the biggest offenders. |
 | `DirectByteBuffer` off-heap capacity | 134.4 MB | Native memory, excluded from JVM heap totals. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.           |
+
+**Top DirectByteBuffer owners:**
+
+| Capacity | Buffer object                       | Owner (root → … → buffer)                                                         |
+| -------: | ----------------------------------- | --------------------------------------------------------------------------------- |
+| 134.3 MB | `java.nio.DirectByteBuffer` @97191  | `java.nio.DirectByteBuffer` → `jdk.internal.jimage.ImageReader$SharedImageReader` |
+|  32.0 KB | `java.nio.DirectByteBuffer` @487386 | `java.nio.DirectByteBuffer`                                                       |
+|  16.0 KB | `java.nio.DirectByteBuffer` @391841 | `java.nio.DirectByteBuffer`                                                       |
+|      8 B | `java.nio.DirectByteBuffer` @163201 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      8 B | `java.nio.DirectByteBuffer` @163204 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      8 B | `java.nio.DirectByteBuffer` @178769 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      8 B | `java.nio.DirectByteBuffer` @178771 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      8 B | `java.nio.DirectByteBuffer` @178773 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      8 B | `java.nio.DirectByteBuffer` @178778 | `java.nio.DirectByteBuffer` → … → `java.lang.Class`                               |
+|      0 B | `java.nio.DirectByteBuffer` @318956 | `java.nio.DirectByteBuffer`                                                       |
 
 ## Glossary
 
