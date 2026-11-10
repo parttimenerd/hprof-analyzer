@@ -3213,16 +3213,15 @@ mod tests {
             .expect("supported method in WHERE must plan");
     }
 
-    // MAT gap #5: a bad quoted FROM regex must be an actionable plan-time error.
+    // MAT gap #5: a quoted FROM that is an invalid regex now falls back to a
+    // literal match instead of a hard plan-time error. "[" matches the literal
+    // class name "[" (after regex::escape).
     #[test]
-    fn bad_from_regex_rejected_at_plan_time() {
+    fn bad_from_regex_falls_back_to_literal_at_plan_time() {
         let q = parse(r#"SELECT * FROM "[""#).expect("parses; regex is validated at plan");
-        let err = pq(&q).expect_err("bad regex must be rejected at plan time");
-        assert!(
-            err.0.contains("invalid regex") && err.0.contains('['),
-            "plan error must name the regex problem; got: {}",
-            err.0
-        );
+        let plan = pq(&q).expect("invalid regex falls back to literal match — no plan error");
+        // The plan is a histogram-only check (no instances to scan for class "[").
+        let _ = plan;
     }
 
     // A valid quoted FROM regex plans cleanly (as a histogram-only aggregate).

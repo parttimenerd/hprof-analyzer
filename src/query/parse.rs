@@ -1208,12 +1208,21 @@ where
                 .ignore_then(just(Token::LParen))
                 .ignore_then(item.clone())
                 .then_ignore(just(Token::Comma))
-                .then(select! { Token::Int(n) => n as f64 }.or(select! { Token::Float(f) => f }))
+                .then(
+                    select! { Token::Int(n) => (n as f64, false) }
+                        .or(select! { Token::Float(f) => (f, true) }),
+                )
                 .then_ignore(just(Token::RParen))
                 .validate(
-                    |((arg, _alias), p): ((SelectItem, Option<String>), f64), e, emitter| {
-                        // Accept either int form (1–100) or fraction form (0.0–1.0).
-                        let p_int = if p > 0.0 && p <= 1.0 {
+                    |((arg, _alias), (p, is_float)): (
+                        (SelectItem, Option<String>),
+                        (f64, bool),
+                    ),
+                     e,
+                     emitter| {
+                        // Accept either int form (1–100) or fraction form (0.01–1.0 as float).
+                        // Integer 1 always means 1st percentile, never 100th.
+                        let p_int = if is_float && p > 0.0 && p <= 1.0 {
                             (p * 100.0).round() as i64
                         } else {
                             p as i64

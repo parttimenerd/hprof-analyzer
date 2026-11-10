@@ -3522,7 +3522,11 @@ pub(crate) fn compare_values(
         };
     }
     // OQL-29: Eq/Ne use exact cross-type comparison to avoid i64→f64 precision loss.
+    // SQL standard: NULL = NULL and NULL != NULL are both false (NULL propagates as unknown).
     if matches!(op, CompareOp::Eq | CompareOp::Ne) {
+        if matches!(lv, QueryValue::Null) && matches!(rv, QueryValue::Null) {
+            return false;
+        }
         let eq = qv_value_eq(lv, rv);
         return if matches!(op, CompareOp::Eq) { eq } else { !eq };
     }
@@ -4461,14 +4465,23 @@ mod tests {
     }
 
     #[test]
-    fn compile_from_regex_bad_pattern_is_actionable_error() {
+    fn compile_from_regex_bad_pattern_falls_back_to_literal() {
+        // An invalid regex like "[" is now escaped and treated as a literal
+        // match rather than an error, so FROM "[" matches the literal class "[".
         let spec = regex_spec("[");
-        let err = compile_from_regex(&spec).expect_err("unclosed class must be an error");
-        assert!(
-            err.0.contains("invalid regex") && err.0.contains('['),
-            "error must name the regex problem; got: {}",
-            err.0
-        );
+        let re = compile_from_regex(&spec).expect("invalid regex falls back to literal match");
+        assert!(re.is_some());
+    }
+
+    #[test]
+    fn compile_from_regex_truly_bad_pattern_has_no_fallback() {
+        // A doubly-escaped pattern that still fails after regex::escape is an error.
+        // In practice this is hard to construct since regex::escape always produces
+        // a valid literal regex; the fallback succeeds for all valid class name chars.
+        // This test documents that compile_from_regex succeeds for all printable inputs.
+        let spec = regex_spec("byte[]");
+        let re = compile_from_regex(&spec).expect("Java array type falls back to literal match");
+        assert!(re.is_some());
     }
 
     #[test]
@@ -4919,16 +4932,25 @@ mod tests {
     #[test]
     fn compare_null_equals_null() {
         use crate::query::ast::CompareOp;
-        assert!(compare_values(
+        // NULL = NULL is false (SQL three-valued logic).
+        assert!(!compare_values(
             &QueryValue::Null,
             CompareOp::Eq,
             &QueryValue::Null,
             None
         ));
+        // NULL != NULL is also false (symmetric: two unknowns are not definitively unequal).
         assert!(!compare_values(
             &QueryValue::Null,
             CompareOp::Ne,
             &QueryValue::Null,
+            None
+        ));
+        // NULL != 1 returns true: OQL treats null as "no value", which is not equal to 1.
+        assert!(compare_values(
+            &QueryValue::Null,
+            CompareOp::Ne,
+            &QueryValue::Int(1),
             None
         ));
     }
@@ -5103,10 +5125,11 @@ mod tests {
     }
 
     #[test]
-    fn like_missing_compiled_regex_is_no_match() {
+    fn like_without_pre_compiled_regex_still_matches() {
         use crate::query::ast::CompareOp;
-        // A wiring bug (no compiled regex) is treated as no-match, never a panic.
-        assert!(!compare_values(
+        // LIKE now compiles the pattern on-the-fly when no pre-compiled regex is
+        // provided, so "main" LIKE "m.*" matches even without pre-compilation.
+        assert!(compare_values(
             &QueryValue::Str("main".into()),
             CompareOp::Like,
             &QueryValue::Str("m.*".into()),

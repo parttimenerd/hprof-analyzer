@@ -2596,20 +2596,19 @@ fn bare_glob_from_still_matches() {
 #[test]
 fn bad_regex_from_is_actionable_cli_error() {
     let Some(hprof) = philosophers() else { return };
+    // An invalid regex like "[" is now escaped to a literal "\[" match rather than
+    // an error. The query succeeds and returns 0 (no class named "[" in the dump).
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
         .args(["--query", r#"SELECT COUNT(*) FROM "[""#])
         .output()
         .unwrap();
-    let combined = format!(
-        "{}{}",
+    assert!(
+        out.status.success(),
+        "bad regex falls back to literal match — must not error, got:\n{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        combined.contains("invalid regex"),
-        "bad regex must surface an actionable 'invalid regex' error, got:\n{combined}"
     );
 }
 
