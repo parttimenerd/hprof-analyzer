@@ -1375,11 +1375,24 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         .collect();
 
     // Apply WHERE filtering.
+    // Pre-materialize IN subquery sets so each row filter doesn't re-execute them.
     let filtered: Vec<&Vec<QueryValue>> = if let Some(pred) = &q.where_ {
-        qv_rows
-            .iter()
-            .filter(|row| eval_pred_on_row(pred, col_names, row))
-            .collect()
+        let mut in_sets: Vec<std::collections::HashSet<String>> = Vec::new();
+        materialize_in_subquery_sets(pred, &mut in_sets);
+        if in_sets.is_empty() {
+            qv_rows
+                .iter()
+                .filter(|row| eval_pred_on_row(pred, col_names, row))
+                .collect()
+        } else {
+            qv_rows
+                .iter()
+                .filter(|row| {
+                    let mut cursor = 0usize;
+                    eval_pred_on_row_with_sets(pred, col_names, row, &in_sets, &mut cursor)
+                })
+                .collect()
+        }
     } else {
         qv_rows.iter().collect()
     };
@@ -1869,6 +1882,126 @@ fn eval_method_on_qv(
     }
 }
 
+/// Walk a predicate tree in DFS order and materialize each `InSubquery` inner
+/// by planning and executing the inner query inline. Returns one `HashSet<String>`
+/// per `InSubquery` node (in DFS encounter order), keyed by the first column's
+/// canonical string representation. Used by `execute_values_query` so that
+/// `WHERE id IN (SELECT ...)` filters correctly even on a pure VALUES source.
+fn materialize_in_subquery_sets(
+    pred: &crate::query::ast::Predicate,
+    out: &mut Vec<std::collections::HashSet<String>>,
+) {
+    use crate::query::ast::Predicate;
+    match pred {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            materialize_in_subquery_sets(a, out);
+            materialize_in_subquery_sets(b, out);
+        }
+        Predicate::Not(inner) => materialize_in_subquery_sets(inner, out),
+        Predicate::InSubquery { inner, .. } => {
+            // Plan and execute the inner query as a VALUES or heap query.
+            let inner_result = match crate::query::plan::plan_query(inner, 1) {
+                Ok(inner_plan) => {
+                    if matches!(inner.from, crate::query::ast::FromSource::Values { .. }) {
+                        execute_values_query(inner, &inner_plan)
+                    } else {
+                        // Inner is a heap query — can't execute without a dump path;
+                        // return an empty set (no rows will match). The caller already
+                        // falls through to the heap-scan path for heap IN subqueries.
+                        crate::query::model::QueryResult {
+                            name: String::new(),
+                            oql: String::new(),
+                            columns: Vec::new(),
+                            rows: Vec::new(),
+                            row_count: 0,
+                            truncated: false,
+                            error: None,
+                            note: None,
+                            viz: None,
+                            elapsed_ms: None,
+                        }
+                    }
+                }
+                Err(_) => crate::query::model::QueryResult {
+                    name: String::new(),
+                    oql: String::new(),
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                    row_count: 0,
+                    truncated: false,
+                    error: None,
+                    note: None,
+                    viz: None,
+                    elapsed_ms: None,
+                },
+            };
+            let set: std::collections::HashSet<String> = inner_result
+                .rows
+                .iter()
+                .filter_map(|row| row.first())
+                .map(crate::query::execute::canonical_distinct_key_pub)
+                .collect();
+            out.push(set);
+        }
+        _ => {}
+    }
+}
+
+/// Evaluate a predicate against a VALUES row using precomputed IN-subquery sets.
+/// `in_sets` is a slice of sets (one per `InSubquery` node, DFS order).
+/// `in_cursor` is a mutable index into `in_sets`.
+fn eval_pred_on_row_with_sets(
+    pred: &crate::query::ast::Predicate,
+    col_names: &[String],
+    row: &[crate::query::model::QueryValue],
+    in_sets: &[std::collections::HashSet<String>],
+    in_cursor: &mut usize,
+) -> bool {
+    use crate::query::ast::{Attr, Predicate};
+    use crate::query::execute::{canonical_distinct_key_pub as canonical_key, compare_values};
+    match pred {
+        Predicate::And(a, b) => {
+            eval_pred_on_row_with_sets(a, col_names, row, in_sets, in_cursor)
+                && eval_pred_on_row_with_sets(b, col_names, row, in_sets, in_cursor)
+        }
+        Predicate::Or(a, b) => {
+            eval_pred_on_row_with_sets(a, col_names, row, in_sets, in_cursor)
+                || eval_pred_on_row_with_sets(b, col_names, row, in_sets, in_cursor)
+        }
+        Predicate::Not(inner) => {
+            !eval_pred_on_row_with_sets(inner, col_names, row, in_sets, in_cursor)
+        }
+        Predicate::Compare { lhs, op, rhs } => {
+            let lv = eval_expr_on_row(lhs, col_names, row);
+            let rv = eval_expr_on_row(rhs, col_names, row);
+            compare_values(&lv, *op, &rv, None)
+        }
+        Predicate::InSubquery { lhs, .. } => {
+            let idx = *in_cursor;
+            *in_cursor += 1;
+            let Some(set) = in_sets.get(idx) else {
+                return true; // conservative: include row if set missing
+            };
+            // Resolve the LHS column value.
+            let lhs_val = match lhs {
+                Attr::Field(f) => {
+                    let bare = f.rsplit_once('.').map(|(_, c)| c).unwrap_or(f.as_str());
+                    col_names
+                        .iter()
+                        .position(|c| c == bare)
+                        .and_then(|i| row.get(i))
+                        .cloned()
+                        .unwrap_or(crate::query::model::QueryValue::Null)
+                }
+                _ => crate::query::model::QueryValue::Null,
+            };
+            set.contains(&canonical_key(&lhs_val))
+        }
+        // Conservative: include row for unsupported predicate types.
+        _ => true,
+    }
+}
+
 /// Evaluate a predicate against a VALUES row. Returns true when the row passes.
 /// Unsupported predicate types (InstanceOf, InSubquery, Exists) always return true
 /// (conservative: include the row).
@@ -2222,15 +2355,51 @@ pub fn run_single_dump(
     reachable_only: bool,
 ) -> std::io::Result<Vec<QueryResult>> {
     // Short-circuit VALUES-only batches: no HPROF scan needed.
-    if queries
-        .iter()
-        .all(|(q, _)| matches!(q.from, crate::query::ast::FromSource::Values { .. }))
-    {
-        let results = queries
+    // Check if ALL queries (including all UNION/INTERSECT/EXCEPT branches) have
+    // FromSource::Values so the heap scan is never needed.
+    fn is_all_values(q: &Query) -> bool {
+        matches!(q.from, crate::query::ast::FromSource::Values { .. })
+            && q.union_branches.iter().all(is_all_values)
+            && q.intersect_branches.iter().all(is_all_values)
+            && q.except_branches.iter().all(is_all_values)
+    }
+    if queries.iter().all(|(q, _)| is_all_values(q)) {
+        let has_set_ops = queries.iter().any(|(q, _)| {
+            !q.union_branches.is_empty()
+                || !q.intersect_branches.is_empty()
+                || !q.except_branches.is_empty()
+        });
+        if !has_set_ops {
+            // Simple case: no UNION/INTERSECT/EXCEPT branches.
+            // Execute each query directly so execute_values_query handles LIMIT/OFFSET.
+            let results = queries
+                .iter()
+                .map(|(q, plan)| execute_values_query(q, plan))
+                .collect();
+            return Ok(results);
+        }
+        // Has set-operation branches: expand/collapse is needed so all branches run.
+        // Strip LIMIT/OFFSET from head-query flat slots so collapse_union_results is
+        // the single applier (it reads them from the UnionGroup).
+        let (flat, groups) = expand_union_queries(queries);
+        let flat_results: Vec<QueryResult> = flat
             .iter()
-            .map(|(q, plan)| execute_values_query(q, plan))
+            .enumerate()
+            .map(|(i, (q, plan))| {
+                // Only clear LIMIT/OFFSET on the head slot of each group (index == group.head).
+                // Branch slots never carry them, but clear defensively.
+                let is_group_head = groups.iter().any(|g| g.head == i);
+                if is_group_head {
+                    let mut q_no_limit = q.clone();
+                    q_no_limit.limit = None;
+                    q_no_limit.offset = None;
+                    execute_values_query(&q_no_limit, plan)
+                } else {
+                    execute_values_query(q, plan)
+                }
+            })
             .collect();
-        return Ok(results);
+        return Ok(collapse_union_results(flat_results, &groups));
     }
     let (flat, groups) = expand_union_queries(queries);
     // Propagate reachable-only into the scan so pass2 arms the per-row
