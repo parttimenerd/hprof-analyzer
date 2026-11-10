@@ -7397,10 +7397,12 @@ fn heap_join_values_lookup_filters_correctly() {
     // If rows are present, there must be exactly 2 columns (name + label),
     // not 3 (name + name + label) as was the case before the projection fix.
     if !out.contains("(0 rows)") {
-        let header = out
-            .lines()
-            .find(|l| l.contains("name") || l.contains("label"));
-        if let Some(header) = header {
+        let lines: Vec<&str> = out.lines().collect();
+        let sep_idx = lines
+            .iter()
+            .position(|l| l.contains("---") && l.contains('+'));
+        if let Some(sep) = sep_idx.and_then(|i| i.checked_sub(1)) {
+            let header = lines[sep];
             let cols: Vec<&str> = header
                 .split('|')
                 .map(|c| c.trim())
@@ -7447,11 +7449,14 @@ fn heap_join_values_no_duplicate_columns() {
         &hprof,
         r#"SELECT t.name, v.label FROM java.lang.Thread t LEFT JOIN (VALUES ("x", "lbl")) AS v(tname, label) ON t.name = v.tname LIMIT 1"#,
     );
-    // Find the header row (the one containing "name" and "label").
-    let header = out
-        .lines()
-        .find(|l| l.contains("name") && l.contains("label"));
-    if let Some(header) = header {
+    // Find the table header row: the line immediately before the "---+---" separator.
+    // We can't just search for lines containing "name" since the SELECT text also contains it.
+    let lines: Vec<&str> = out.lines().collect();
+    let sep_idx = lines
+        .iter()
+        .position(|l| l.contains("---") && l.contains('+'));
+    if let Some(sep) = sep_idx.and_then(|i| i.checked_sub(1)) {
+        let header = lines[sep];
         let cols: Vec<&str> = header
             .split('|')
             .map(|c| c.trim())
@@ -7462,6 +7467,17 @@ fn heap_join_values_no_duplicate_columns() {
             2,
             "SELECT t.name, v.label must produce exactly 2 columns, got {}: {:?}\nfull output:\n{out}",
             cols.len(),
+            cols
+        );
+        // Verify the two columns are "name" and "label" (not "v.label")
+        assert!(
+            cols.contains(&"name"),
+            "expected 'name' column in header {:?}\nfull output:\n{out}",
+            cols
+        );
+        assert!(
+            cols.contains(&"label"),
+            "expected 'label' column (not 'v.label') in header {:?}\nfull output:\n{out}",
             cols
         );
     }

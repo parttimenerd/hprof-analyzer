@@ -1392,38 +1392,18 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
 
     let is_star = q.select.len() == 1 && matches!(q.select[0], crate::query::ast::SelectItem::Star);
 
-    // Determine output columns.
+    // Determine output columns.  For SELECT *, expand to all source columns; for
+    // an explicit SELECT list use query_columns() so naming is consistent with all
+    // other code paths (in particular: single-hop table-qualified refs like `v.label`
+    // strip the table prefix and become just `label`).
     let out_cols: Vec<QueryColumn> = if is_star {
         col_names
             .iter()
             .map(|c| QueryColumn { name: c.clone() })
             .collect()
     } else {
-        q.select_aliases
-            .iter()
-            .zip(q.select.iter())
-            .enumerate()
-            .map(|(i, (alias, item))| {
-                let name = alias.clone().unwrap_or_else(|| match item {
-                    SelectItem::Attr(crate::query::ast::Attr::Field(f)) => f.clone(),
-                    SelectItem::Aggregate { func, arg, .. } => {
-                        let func_name = format!("{func:?}").to_lowercase();
-                        let arg_str = match arg.as_ref() {
-                            SelectItem::Star => "*".to_string(),
-                            SelectItem::Attr(a) => format!("{a:?}"),
-                            _ => "?".to_string(),
-                        };
-                        format!("{func_name}({arg_str})")
-                    }
-                    SelectItem::Expr(expr) => format!("{expr:?}"),
-                    _ => col_names
-                        .get(i)
-                        .cloned()
-                        .unwrap_or_else(|| format!("col{i}")),
-                });
-                QueryColumn { name }
-            })
-            .collect()
+        use crate::query::execute::query_columns;
+        query_columns(q)
     };
 
     // Project a single row according to the SELECT list (non-aggregate path).
