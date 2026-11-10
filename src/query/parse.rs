@@ -187,7 +187,23 @@ pub fn tokenize_spanned(src: &str) -> Result<Vec<(Token, SimpleSpan)>, String> {
     while let Some(res) = lex.next() {
         let span = lex.span();
         match res {
-            Ok(tok) => out.push((tok, (span.start..span.end).into())),
+            Ok(tok) => {
+                // Split `ident*` (no dot) into `Ident(ident)` + `Star` so that
+                // `n*2` parses as multiplication rather than a glob field name.
+                // Dotted patterns like `java.lang.*` are left intact — they can only
+                // appear as class names in FROM/INSTANCEOF/path() contexts where
+                // any_ident() is called explicitly.
+                if let Token::Ident(ref s) = tok {
+                    if s.ends_with('*') && !s.contains('.') && s.len() > 1 {
+                        let base = s[..s.len() - 1].to_string();
+                        let star_pos = span.end - 1;
+                        out.push((Token::Ident(base), (span.start..star_pos).into()));
+                        out.push((Token::Star, (star_pos..span.end).into()));
+                        continue;
+                    }
+                }
+                out.push((tok, (span.start..span.end).into()));
+            }
             Err(()) => {
                 let slice = &src[span.clone()];
                 if slice.starts_with('\'') {
@@ -721,8 +737,14 @@ where
             .map(|i| i.is_some())
             .then(
                 any_ident()
+                    .then(just(Token::Star).or_not())
+                    .map(|(mut name, star): (String, _)| {
+                        if star.is_some() {
+                            name.push('*');
+                        }
+                        (name, false)
+                    })
                     .labelled("class name")
-                    .map(|name| (name, false))
                     .or(select! { Token::Str(s) => (s, true) }.labelled("class regex")),
             )
             .validate(|(instanceof, (class_name, is_regex)), e, emitter| {
@@ -1171,13 +1193,19 @@ where
                     )
                 });
 
-            let path_operand = any_ident().map(|s: String| {
-                if s.contains('.') || s.contains('*') {
-                    PathOperand::Class(s)
-                } else {
-                    PathOperand::Alias(s)
-                }
-            });
+            let path_operand =
+                any_ident()
+                    .then(just(Token::Star).or_not())
+                    .map(|(mut s, star): (String, _)| {
+                        if star.is_some() {
+                            s.push('*');
+                        }
+                        if s.contains('.') || s.contains('*') {
+                            PathOperand::Class(s)
+                        } else {
+                            PathOperand::Alias(s)
+                        }
+                    });
             let path_item = ident_ci("path")
                 .ignore_then(just(Token::LParen))
                 .ignore_then(path_operand.clone())
@@ -1520,8 +1548,14 @@ where
                     .ignore_then(ident_ci("CLASS"))
                     .ignore_then(
                         any_ident()
+                            .then(just(Token::Star).or_not())
+                            .map(|(mut name, star): (String, _)| {
+                                if star.is_some() {
+                                    name.push('*');
+                                }
+                                (name, false)
+                            })
                             .labelled("class name")
-                            .map(|name| (name, false))
                             .or(select! { Token::Str(s) => (s, true) }.labelled("class regex")),
                     )
                     .map(|(class_name, is_regex)| {
@@ -2979,8 +3013,10 @@ mod tests {
             ("\"a b c\"", vec![Token::Str("a b c".into())]),
             // 15: @attr with dot/dollar in name
             ("@a.b$c", vec![Token::At("a.b$c".into())]),
-            // 16: bare star vs glob-ident disambiguation
-            ("* x*", vec![Token::Star, id("x*")]),
+            // 16: bare star vs glob-ident disambiguation; dotted glob stays intact,
+            //     but a bare `x*` (no dot) is now split into Ident + Star so that
+            //     `n*2` parses as multiplication rather than a glob field.
+            ("* x*", vec![Token::Star, id("x"), Token::Star]),
             // 17: whitespace (tabs/newlines) skipped
             (
                 "SELECT\t*\nFROM\rC",
@@ -5717,6 +5753,33 @@ mod tests {
         assert!(super::parse("SELECT 0xFF + 1 FROM java.lang.String").is_ok());
         assert!(super::parse("SELECT 2 * 1.5D FROM java.lang.String").is_ok());
         assert!(super::parse("SELECT -0144 FROM java.lang.String").is_ok());
+    }
+
+    #[test]
+    fn ident_star_literal_parses_as_multiplication() {
+        // `n*2` must parse as n * 2, not as a glob field named "n*".
+        // Previously `n*` was lexed as a single Ident token, causing null.
+        let q = super::parse("SELECT n*2 FROM java.lang.String").unwrap();
+        match &q.select[0] {
+            SelectItem::Expr(e) => match e.as_ref() {
+                Expr::Binary {
+                    op: ArithOp::Mul,
+                    lhs,
+                    rhs,
+                } => {
+                    assert!(
+                        matches!(lhs.as_ref(), Expr::Attr(Attr::Field(f)) if f == "n"),
+                        "lhs must be field n"
+                    );
+                    assert!(
+                        matches!(rhs.as_ref(), Expr::Lit(Value::Int(2))),
+                        "rhs must be Int(2)"
+                    );
+                }
+                other => panic!("expected Binary Mul, got {other:?}"),
+            },
+            other => panic!("expected Expr SelectItem, got {other:?}"),
+        }
     }
 
     #[test]

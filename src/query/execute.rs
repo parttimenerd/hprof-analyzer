@@ -3268,7 +3268,9 @@ pub(crate) fn apply_window_functions(
             })
             .collect();
 
-        // Resolve arg to column index (for LAG/LEAD)
+        // OQL-41: resolve arg by column index for bare Attr (fast path), or fall
+        // back to expression evaluation per row. Non-attr args (e.g. @objectId + 1)
+        // were silently returning NULL before this fix.
         let arg_col_idx: Option<usize> = arg.and_then(|a| {
             if let Expr::Attr(attr) = a {
                 let name = attr_name(attr);
@@ -3356,19 +3358,23 @@ pub(crate) fn apply_window_functions(
                         match source_pos {
                             Some(sp) => {
                                 let source_row = partition[sp];
+                                // OQL-41: if arg resolved to a column index, use it;
+                                // otherwise evaluate the arg expression against the source row.
                                 arg_col_idx
                                     .and_then(|ci| rows[source_row].get(ci))
                                     .cloned()
+                                    .or_else(|| {
+                                        arg.map(|a| {
+                                            eval_expr_from_row(a, &rows[source_row], columns)
+                                        })
+                                    })
                                     .unwrap_or(QueryValue::Null)
                             }
                             None => default_val
                                 .as_ref()
-                                .and_then(|e| {
-                                    if let Expr::Lit(v) = e.as_ref() {
-                                        Some(value_to_qv(v))
-                                    } else {
-                                        None
-                                    }
+                                .map(|e| {
+                                    // OQL-42: evaluate any default expression, not just literals.
+                                    eval_expr_from_row(e, &rows[row_idx], columns)
                                 })
                                 .unwrap_or(QueryValue::Null),
                         }
@@ -3386,19 +3392,22 @@ pub(crate) fn apply_window_functions(
                         match source_pos {
                             Some(sp) => {
                                 let source_row = partition[sp];
+                                // OQL-41: same as LAG — evaluate arg expr if no column index.
                                 arg_col_idx
                                     .and_then(|ci| rows[source_row].get(ci))
                                     .cloned()
+                                    .or_else(|| {
+                                        arg.map(|a| {
+                                            eval_expr_from_row(a, &rows[source_row], columns)
+                                        })
+                                    })
                                     .unwrap_or(QueryValue::Null)
                             }
                             None => default_val
                                 .as_ref()
-                                .and_then(|e| {
-                                    if let Expr::Lit(v) = e.as_ref() {
-                                        Some(value_to_qv(v))
-                                    } else {
-                                        None
-                                    }
+                                .map(|e| {
+                                    // OQL-42: evaluate any default expression, not just literals.
+                                    eval_expr_from_row(e, &rows[row_idx], columns)
                                 })
                                 .unwrap_or(QueryValue::Null),
                         }
@@ -3407,6 +3416,31 @@ pub(crate) fn apply_window_functions(
                 rows[row_idx][col_idx] = value;
             }
         }
+    }
+}
+
+/// Evaluate a simple expression against a result row (for LAG/LEAD arg and default_val).
+/// OQL-41/42: supports literals, column lookups, and binary arithmetic.
+/// Returns Null for unsupported forms (e.g. aggregate functions).
+fn eval_expr_from_row(e: &Expr, row: &[QueryValue], columns: &[QueryColumn]) -> QueryValue {
+    match e {
+        Expr::Lit(v) => value_to_qv(v),
+        Expr::Attr(attr) => {
+            let name = attr_name(attr);
+            columns
+                .iter()
+                .position(|c| c.name == name)
+                .and_then(|i| row.get(i))
+                .cloned()
+                .unwrap_or(QueryValue::Null)
+        }
+        Expr::Binary { op, lhs, rhs } => {
+            let l = eval_expr_from_row(lhs, row, columns);
+            let r = eval_expr_from_row(rhs, row, columns);
+            arith(&l, *op, &r)
+        }
+        Expr::Unary { op, arg } => unary(*op, &eval_expr_from_row(arg, row, columns)),
+        _ => QueryValue::Null,
     }
 }
 

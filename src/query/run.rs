@@ -1489,154 +1489,250 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
     };
 
     let rows: Vec<Vec<QueryValue>> = if is_aggregate {
-        let agg_row: Vec<QueryValue> = q
-            .select
-            .iter()
-            .map(|item| match item {
-                SelectItem::Aggregate { func, arg, filter } => {
-                    // Apply per-aggregate FILTER if present.
-                    let vals: Vec<QueryValue> = filtered
-                        .iter()
-                        .filter(|row| {
-                            filter
-                                .as_ref()
-                                .map(|p| eval_pred_on_row(p, col_names, row))
-                                .unwrap_or(true)
-                        })
-                        .map(|row| agg_arg_value(arg, row))
-                        .filter(|v| !matches!(v, QueryValue::Null))
-                        .collect();
-                    match func {
-                        AggFunc::Count => QueryValue::Int(vals.len() as i64),
-                        AggFunc::CountDistinct => {
-                            let mut seen: HashSet<String> = HashSet::new();
-                            let n = vals
-                                .iter()
-                                .filter(|v| seen.insert(canonical_key(v)))
-                                .count();
-                            QueryValue::Int(n as i64)
-                        }
-                        AggFunc::Sum => {
-                            // E-04: preserve Int type when all operands are Int.
-                            let all_int = vals.iter().all(|v| matches!(v, QueryValue::Int(_)));
-                            if all_int {
-                                let sum: i64 = vals
+        // Compute aggregate row for a specific group of rows.
+        // `group_key` is the pre-evaluated GROUP BY key for this group (parallel to q.group_by).
+        let compute_agg_for_group = |group_rows: &[&Vec<QueryValue>],
+                                     group_key: &[QueryValue]|
+         -> Vec<QueryValue> {
+            q.select
+                .iter()
+                .map(|item| match item {
+                    SelectItem::Aggregate { func, arg, filter } => {
+                        // Apply per-aggregate FILTER if present.
+                        let vals: Vec<QueryValue> = group_rows
+                            .iter()
+                            .filter(|row| {
+                                filter
+                                    .as_ref()
+                                    .map(|p| eval_pred_on_row(p, col_names, row))
+                                    .unwrap_or(true)
+                            })
+                            .map(|row| agg_arg_value(arg, row))
+                            .filter(|v| !matches!(v, QueryValue::Null))
+                            .collect();
+                        match func {
+                            AggFunc::Count => QueryValue::Int(vals.len() as i64),
+                            AggFunc::CountDistinct => {
+                                let mut seen: HashSet<String> = HashSet::new();
+                                let n = vals
                                     .iter()
-                                    .filter_map(|v| {
-                                        if let QueryValue::Int(n) = v {
-                                            Some(*n)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .fold(0i64, i64::saturating_add);
-                                QueryValue::Int(sum)
-                            } else {
-                                let sum = vals.iter().fold(0.0f64, |acc, v| match v {
-                                    QueryValue::Int(n) => acc + *n as f64,
-                                    QueryValue::Float(f) => acc + f,
-                                    _ => acc,
-                                });
-                                QueryValue::Float(sum)
+                                    .filter(|v| seen.insert(canonical_key(v)))
+                                    .count();
+                                QueryValue::Int(n as i64)
                             }
-                        }
-                        AggFunc::Min => vals
-                            .iter()
-                            .min_by(|a, b| {
-                                use std::cmp::Ordering;
-                                let af = match a {
-                                    QueryValue::Int(n) => *n as f64,
-                                    QueryValue::Float(f) => *f,
-                                    _ => f64::NAN,
-                                };
-                                let bf = match b {
-                                    QueryValue::Int(n) => *n as f64,
-                                    QueryValue::Float(f) => *f,
-                                    _ => f64::NAN,
-                                };
-                                af.partial_cmp(&bf).unwrap_or(Ordering::Equal)
-                            })
-                            .cloned()
-                            .unwrap_or(QueryValue::Null),
-                        AggFunc::Max => vals
-                            .iter()
-                            .max_by(|a, b| {
-                                use std::cmp::Ordering;
-                                let af = match a {
-                                    QueryValue::Int(n) => *n as f64,
-                                    QueryValue::Float(f) => *f,
-                                    _ => f64::NAN,
-                                };
-                                let bf = match b {
-                                    QueryValue::Int(n) => *n as f64,
-                                    QueryValue::Float(f) => *f,
-                                    _ => f64::NAN,
-                                };
-                                af.partial_cmp(&bf).unwrap_or(Ordering::Equal)
-                            })
-                            .cloned()
-                            .unwrap_or(QueryValue::Null),
-                        AggFunc::Avg => {
-                            if vals.is_empty() {
-                                QueryValue::Null
-                            } else {
-                                let sum = vals.iter().fold(0.0f64, |acc, v| match v {
-                                    QueryValue::Int(n) => acc + *n as f64,
-                                    QueryValue::Float(f) => acc + *f,
-                                    _ => acc,
-                                });
-                                QueryValue::Float(sum / vals.len() as f64)
-                            }
-                        }
-                        AggFunc::Percentile(_) | AggFunc::Median => {
-                            // OQL-50: MEDIAN with even n averages the two middle values.
-                            let p_val: u8 = match func {
-                                AggFunc::Percentile(p) => *p,
-                                _ => 50,
-                            };
-                            let mut fvals: Vec<f64> = vals
-                                .iter()
-                                .filter_map(|v| match v {
-                                    QueryValue::Int(n) => Some(*n as f64),
-                                    QueryValue::Float(f) => Some(*f),
-                                    _ => None,
-                                })
-                                .collect();
-                            if fvals.is_empty() {
-                                QueryValue::Null
-                            } else {
-                                fvals.sort_by(|a, b| a.total_cmp(b));
-                                let n = fvals.len();
-                                if p_val == 50 && n % 2 == 0 {
-                                    let mid = n / 2;
-                                    QueryValue::Float((fvals[mid - 1] + fvals[mid]) / 2.0)
+                            AggFunc::Sum => {
+                                // E-04: preserve Int type when all operands are Int.
+                                let all_int = vals.iter().all(|v| matches!(v, QueryValue::Int(_)));
+                                if all_int {
+                                    let sum: i64 = vals
+                                        .iter()
+                                        .filter_map(|v| {
+                                            if let QueryValue::Int(n) = v {
+                                                Some(*n)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .fold(0i64, i64::saturating_add);
+                                    QueryValue::Int(sum)
                                 } else {
-                                    let rank = ((p_val as f64 / 100.0) * n as f64).ceil() as usize;
-                                    let idx = rank.saturating_sub(1).min(n - 1);
-                                    QueryValue::Float(fvals[idx])
+                                    let sum = vals.iter().fold(0.0f64, |acc, v| match v {
+                                        QueryValue::Int(n) => acc + *n as f64,
+                                        QueryValue::Float(f) => acc + f,
+                                        _ => acc,
+                                    });
+                                    QueryValue::Float(sum)
+                                }
+                            }
+                            AggFunc::Min => vals
+                                .iter()
+                                .min_by(|a, b| {
+                                    use std::cmp::Ordering;
+                                    let af = match a {
+                                        QueryValue::Int(n) => *n as f64,
+                                        QueryValue::Float(f) => *f,
+                                        _ => f64::NAN,
+                                    };
+                                    let bf = match b {
+                                        QueryValue::Int(n) => *n as f64,
+                                        QueryValue::Float(f) => *f,
+                                        _ => f64::NAN,
+                                    };
+                                    af.partial_cmp(&bf).unwrap_or(Ordering::Equal)
+                                })
+                                .cloned()
+                                .unwrap_or(QueryValue::Null),
+                            AggFunc::Max => vals
+                                .iter()
+                                .max_by(|a, b| {
+                                    use std::cmp::Ordering;
+                                    let af = match a {
+                                        QueryValue::Int(n) => *n as f64,
+                                        QueryValue::Float(f) => *f,
+                                        _ => f64::NAN,
+                                    };
+                                    let bf = match b {
+                                        QueryValue::Int(n) => *n as f64,
+                                        QueryValue::Float(f) => *f,
+                                        _ => f64::NAN,
+                                    };
+                                    af.partial_cmp(&bf).unwrap_or(Ordering::Equal)
+                                })
+                                .cloned()
+                                .unwrap_or(QueryValue::Null),
+                            AggFunc::Avg => {
+                                if vals.is_empty() {
+                                    QueryValue::Null
+                                } else {
+                                    let sum = vals.iter().fold(0.0f64, |acc, v| match v {
+                                        QueryValue::Int(n) => acc + *n as f64,
+                                        QueryValue::Float(f) => acc + *f,
+                                        _ => acc,
+                                    });
+                                    QueryValue::Float(sum / vals.len() as f64)
+                                }
+                            }
+                            AggFunc::Percentile(_) | AggFunc::Median => {
+                                let p_val: u8 = match func {
+                                    AggFunc::Percentile(p) => *p,
+                                    _ => 50,
+                                };
+                                let mut fvals: Vec<f64> = vals
+                                    .iter()
+                                    .filter_map(|v| match v {
+                                        QueryValue::Int(n) => Some(*n as f64),
+                                        QueryValue::Float(f) => Some(*f),
+                                        _ => None,
+                                    })
+                                    .collect();
+                                if fvals.is_empty() {
+                                    QueryValue::Null
+                                } else {
+                                    fvals.sort_by(|a, b| a.total_cmp(b));
+                                    let n = fvals.len();
+                                    if p_val == 50 && n % 2 == 0 {
+                                        let mid = n / 2;
+                                        QueryValue::Float((fvals[mid - 1] + fvals[mid]) / 2.0)
+                                    } else {
+                                        let rank =
+                                            ((p_val as f64 / 100.0) * n as f64).ceil() as usize;
+                                        let idx = rank.saturating_sub(1).min(n - 1);
+                                        QueryValue::Float(fvals[idx])
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                // Non-aggregate item in aggregate query.
-                SelectItem::Attr(crate::query::ast::Attr::Field(f)) => filtered
-                    .first()
-                    .and_then(|row| {
-                        col_names
-                            .iter()
-                            .position(|c| c == f)
-                            .and_then(|pos| row.get(pos))
-                            .cloned()
-                    })
-                    .unwrap_or(QueryValue::Null),
-                _ => QueryValue::Null,
-            })
-            .collect();
-        if plan.limit == Some(0) {
-            vec![]
+                    // Non-aggregate item in aggregate query: resolve from group key or row.
+                    // Check if this select position aligns with a GROUP BY key.
+                    SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
+                        // First try GROUP BY key alignment by matching the field name.
+                        let key_val =
+                            q.group_by
+                                .iter()
+                                .zip(group_key.iter())
+                                .find_map(|(gexpr, kv)| {
+                                    if let crate::query::ast::Expr::Attr(
+                                        crate::query::ast::Attr::Field(gf),
+                                    ) = gexpr
+                                    {
+                                        if gf == f {
+                                            return Some(kv.clone());
+                                        }
+                                    }
+                                    None
+                                });
+                        if let Some(v) = key_val {
+                            v
+                        } else {
+                            group_rows
+                                .first()
+                                .and_then(|row| {
+                                    col_names
+                                        .iter()
+                                        .position(|c| c == f)
+                                        .and_then(|pos| row.get(pos))
+                                        .cloned()
+                                })
+                                .unwrap_or(QueryValue::Null)
+                        }
+                    }
+                    SelectItem::Expr(expr) => {
+                        // Check if this expression matches any GROUP BY key exactly.
+                        let key_val =
+                            q.group_by
+                                .iter()
+                                .zip(group_key.iter())
+                                .find_map(|(gexpr, kv)| {
+                                    if gexpr == expr.as_ref() {
+                                        Some(kv.clone())
+                                    } else {
+                                        None
+                                    }
+                                });
+                        if let Some(v) = key_val {
+                            v
+                        } else {
+                            group_rows
+                                .first()
+                                .map(|row| eval_expr_on_row(expr, col_names, row))
+                                .unwrap_or(QueryValue::Null)
+                        }
+                    }
+                    _ => QueryValue::Null,
+                })
+                .collect()
+        };
+
+        if q.group_by.is_empty() {
+            // No GROUP BY: aggregate all filtered rows into a single output row.
+            let agg_row = compute_agg_for_group(&filtered, &[]);
+            if plan.limit == Some(0) {
+                vec![]
+            } else {
+                vec![agg_row]
+            }
         } else {
-            vec![agg_row]
+            // GROUP BY: partition filtered rows by key, then aggregate each group.
+            // Use Vec<(String, ...)> to preserve insertion order.
+            type GroupEntry<'a> = (String, Vec<QueryValue>, Vec<&'a Vec<QueryValue>>);
+            let mut groups: Vec<GroupEntry> = Vec::new();
+            let mut key_index: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for row in &filtered {
+                let row: &Vec<QueryValue> = row;
+                let key_vals: Vec<QueryValue> = q
+                    .group_by
+                    .iter()
+                    .map(|e| eval_expr_on_row(e, col_names, row))
+                    .collect();
+                let key_str: String = key_vals
+                    .iter()
+                    .map(canonical_key)
+                    .collect::<Vec<_>>()
+                    .join("\x00");
+                if let Some(&idx) = key_index.get(&key_str) {
+                    groups[idx].2.push(row);
+                } else {
+                    let idx = groups.len();
+                    key_index.insert(key_str, idx);
+                    groups.push((String::new(), key_vals, vec![row]));
+                }
+            }
+            let mut result_rows: Vec<Vec<QueryValue>> = Vec::new();
+            for (_, key_vals, group_rows) in &groups {
+                let agg_row = compute_agg_for_group(group_rows, key_vals);
+                // Apply HAVING filter if present.
+                if let Some(having) = &q.having {
+                    use crate::query::execute::eval_having_term;
+                    let like_regexes = std::collections::HashMap::new();
+                    if !eval_having_term(having, &agg_row, key_vals, q, &out_cols, &like_regexes) {
+                        continue;
+                    }
+                }
+                result_rows.push(agg_row);
+            }
+            result_rows
         }
     } else {
         // Non-aggregate: project each filtered row.
@@ -1875,6 +1971,23 @@ fn eval_method_on_qv(
                     QueryValue::Str(pat) => QueryValue::Bool(s.ends_with(pat.as_str())),
                     _ => QueryValue::Null,
                 }
+            }
+            "concat" if !args.is_empty() => {
+                let mut result = s.clone();
+                for arg_expr in args {
+                    match eval_expr_on_row(arg_expr, col_names, row) {
+                        QueryValue::Str(other) => result.push_str(&other),
+                        QueryValue::Int(n) => result.push_str(&n.to_string()),
+                        QueryValue::Float(f) => result.push_str(&f.to_string()),
+                        QueryValue::Bool(b) => result.push_str(if b { "true" } else { "false" }),
+                        QueryValue::Null => {}
+                        other => {
+                            let s = format!("{other:?}");
+                            result.push_str(&s);
+                        }
+                    }
+                }
+                QueryValue::Str(result)
             }
             _ => QueryValue::Null,
         },

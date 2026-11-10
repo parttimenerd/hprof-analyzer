@@ -8482,3 +8482,65 @@ fn oql66_coalesce_in_join_on_evaluates() {
         data_rows.len()
     );
 }
+
+/// OQL-69: CONCAT in a VALUES query must concatenate all args, not return NULL.
+#[test]
+fn oql69_concat_in_values_query() {
+    // CONCAT with all literal args — receiver is first arg, rest are method args.
+    let out =
+        run_values_query(r#"SELECT CONCAT("hello", " ", "world") AS s FROM (VALUES (1)) AS t(x)"#);
+    assert!(
+        out.contains("hello world"),
+        "CONCAT should return 'hello world', got:\n{out}"
+    );
+}
+
+/// OQL-69b: CONCAT with a column variable as first arg must concatenate correctly.
+#[test]
+fn oql69b_concat_column_arg_in_values_query() {
+    let out = run_values_query(
+        r#"SELECT CONCAT(prefix, "world") AS s FROM (VALUES ("hello ")) AS t(prefix)"#,
+    );
+    assert!(
+        out.contains("hello world"),
+        "CONCAT(col, 'world') should return 'hello world', got:\n{out}"
+    );
+}
+
+/// OQL-70: Arithmetic expression with column variable on the left must evaluate correctly.
+#[test]
+fn oql70_column_times_constant_in_values_query() {
+    let out = run_values_query(r#"SELECT n*2 AS doubled FROM (VALUES (5)) AS t(n)"#);
+    assert!(out.contains("10"), "n*2 should yield 10, got:\n{out}");
+}
+
+/// OQL-70b: GROUP BY in a VALUES query must partition rows, not aggregate all into one.
+#[test]
+fn oql70b_group_by_in_values_query() {
+    let out = run_values_query(
+        r#"SELECT cat, COUNT(*) AS n FROM (VALUES ("a", 1), ("a", 2), ("b", 3)) AS t(cat, val) GROUP BY cat ORDER BY cat"#,
+    );
+    // Should have two rows: cat=a n=2, cat=b n=1
+    assert!(
+        out.contains("(2 rows)"),
+        "GROUP BY cat should give 2 groups:\n{out}"
+    );
+    // Data rows contain 'a' and 'b' category values.
+    assert!(out.contains(" a "), "missing group 'a':\n{out}");
+    assert!(out.contains(" b "), "missing group 'b':\n{out}");
+    // Check that both counts appear (2 for "a", 1 for "b").
+    let data = extract_data_rows(&out);
+    assert_eq!(data.len(), 2, "expected 2 data rows:\n{out}");
+    let a_row = data.iter().find(|r| r.contains(" a ") || r.contains("| a"));
+    let b_row = data.iter().find(|r| r.contains(" b ") || r.contains("| b"));
+    assert!(a_row.is_some(), "missing group 'a' in data rows:\n{out}");
+    assert!(b_row.is_some(), "missing group 'b' in data rows:\n{out}");
+    assert!(
+        a_row.unwrap().contains('2'),
+        "group 'a' should have count 2:\n{out}"
+    );
+    assert!(
+        b_row.unwrap().contains('1'),
+        "group 'b' should have count 1:\n{out}"
+    );
+}
