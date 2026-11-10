@@ -572,6 +572,27 @@ pub(crate) fn run_oql_escalated(
         }
     }
 
+    // Apply JOIN clauses (INNER JOIN / LEFT JOIN) to each flat result, then
+    // re-project to the query's SELECT list. The scan path cannot do this inline
+    // since the RHS (VALUES / virtual-table) is evaluated post-scan.
+    let flat_results: Vec<_> = flat_results
+        .into_iter()
+        .enumerate()
+        .map(|(slot, result)| {
+            if let Some((q, plan)) = flat.get(slot) {
+                if !plan.join_plans.is_empty() {
+                    return query::run::apply_joins_and_project(
+                        result,
+                        q,
+                        &plan.join_plans,
+                        Some(&g),
+                    );
+                }
+            }
+            result
+        })
+        .collect();
+
     let results = query::run::collapse_union_results(flat_results, union_groups);
 
     Ok(results)

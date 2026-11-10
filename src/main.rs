@@ -3483,6 +3483,27 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
             &class_names,
         );
 
+        // Apply JOIN clauses to each flat result, then re-project to the query's
+        // SELECT list (the scan path cannot apply JOINs inline; RHS columns are
+        // appended by apply_joins_to_result; projection restores the expected shape).
+        let flat_results: Vec<_> = flat_results
+            .into_iter()
+            .enumerate()
+            .map(|(slot, result)| {
+                if let Some((q, plan)) = flat.get(slot) {
+                    if !plan.join_plans.is_empty() {
+                        return query::run::apply_joins_and_project(
+                            result,
+                            q,
+                            &plan.join_plans,
+                            Some(&g),
+                        );
+                    }
+                }
+                result
+            })
+            .collect();
+
         query::run::collapse_union_results(flat_results, &union_groups)
     };
 

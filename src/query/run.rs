@@ -1074,15 +1074,16 @@ pub fn run_resident_only(
         &flat,
         Some(cache as &dyn crate::query::jsonify::JsonifySession),
     );
-    // Apply JOIN clauses. Virtual-table sources need a Graph (not available
-    // in the resident-only path); VALUES-source JOINs work with graph=None.
+    // Apply JOIN clauses and re-project to the query's SELECT list.
+    // Virtual-table sources need a Graph (not available in the resident-only path);
+    // VALUES-source JOINs work with graph=None.
     let flat_results: Vec<_> = flat_results
         .into_iter()
         .enumerate()
         .map(|(slot, result)| {
-            if let Some((_, plan)) = flat.get(slot) {
+            if let Some((q, plan)) = flat.get(slot) {
                 if !plan.join_plans.is_empty() {
-                    return apply_joins_to_result(result, &plan.join_plans, None);
+                    return apply_joins_and_project(result, q, &plan.join_plans, None);
                 }
             }
             result
@@ -1190,14 +1191,15 @@ pub fn run_resident_with_retained(
         &flat,
         Some(cache as &dyn crate::query::jsonify::JsonifySession),
     );
-    // Apply JOIN clauses (virtual-table sources need a Graph; not available here).
+    // Apply JOIN clauses and re-project to the query's SELECT list.
+    // (Virtual-table sources need a Graph; not available here.)
     let flat_results: Vec<_> = flat_results
         .into_iter()
         .enumerate()
         .map(|(slot, result)| {
-            if let Some((_, plan)) = flat.get(slot) {
+            if let Some((q, plan)) = flat.get(slot) {
                 if !plan.join_plans.is_empty() {
-                    return apply_joins_to_result(result, &plan.join_plans, None);
+                    return apply_joins_and_project(result, q, &plan.join_plans, None);
                 }
             }
             result
@@ -2161,6 +2163,79 @@ pub fn apply_joins_to_result(
     result
 }
 
+/// Apply JOINs and then re-project to the query's SELECT column list.
+///
+/// Heap-scan queries project their LHS columns at scan time but leave the RHS
+/// columns appended after JOIN; calling this mirrors the post-JOIN projection
+/// step that `execute_values_query` applies.
+pub fn apply_joins_and_project(
+    result: crate::query::model::QueryResult,
+    q: &Query,
+    joins: &[crate::query::plan::JoinPlan],
+    graph: Option<&crate::pass2::Graph>,
+) -> crate::query::model::QueryResult {
+    use crate::query::execute::query_columns;
+    use crate::query::model::{QueryColumn, QueryValue};
+
+    let mut joined = apply_joins_to_result(result, joins, graph);
+    if joins.is_empty() {
+        return joined;
+    }
+
+    let is_star = q.select.len() == 1 && matches!(q.select[0], crate::query::ast::SelectItem::Star);
+    if is_star {
+        return joined;
+    }
+
+    let out_cols: Vec<QueryColumn> = query_columns(q);
+    let all_col_names: Vec<String> = joined.columns.iter().map(|c| c.name.clone()).collect();
+
+    let project_row = |row: &[QueryValue]| -> Vec<QueryValue> {
+        q.select
+            .iter()
+            .map(|item| match item {
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
+                    let bare = f.rsplit_once('.').map(|(_, col)| col).unwrap_or(f.as_str());
+                    let pos = all_col_names.iter().position(|c| c == f).or_else(|| {
+                        if bare != f {
+                            all_col_names.iter().position(|c| c == bare)
+                        } else {
+                            None
+                        }
+                    });
+                    pos.and_then(|p| row.get(p))
+                        .cloned()
+                        .unwrap_or(QueryValue::Null)
+                }
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::RefPath {
+                    hops,
+                    tail,
+                    role: crate::query::ast::RefRole::ProjectionOnly,
+                }) if hops.len() == 1 => {
+                    if let crate::query::ast::Attr::Field(col) = tail.as_ref() {
+                        all_col_names
+                            .iter()
+                            .position(|c| c == col)
+                            .and_then(|p| row.get(p))
+                            .cloned()
+                            .unwrap_or(QueryValue::Null)
+                    } else {
+                        QueryValue::Null
+                    }
+                }
+                crate::query::ast::SelectItem::Expr(expr) => {
+                    eval_expr_on_row(expr, &all_col_names, row)
+                }
+                _ => QueryValue::Null,
+            })
+            .collect()
+    };
+
+    joined.rows = joined.rows.iter().map(|row| project_row(row)).collect();
+    joined.columns = out_cols;
+    joined
+}
+
 pub fn run_single_dump(
     path: &str,
     queries: &[(Query, QueryPlan)],
@@ -2268,14 +2343,16 @@ pub fn run_single_dump(
         // makes every jsonify cell say exactly that instead of coming back as a
         // bare ObjRef — see `jsonify::NO_SESSION_NOTE`.
         crate::query::jsonify::expand_results(&mut flat_results, &flat, None);
-        // Apply JOIN clauses to each flat result using the Graph from this scan.
+        // Apply JOIN clauses to each flat result using the Graph from this scan,
+        // then re-project to the query's SELECT list (RHS columns are appended
+        // by apply_joins_to_result; projection restores the expected output shape).
         let flat_results: Vec<_> = flat_results
             .into_iter()
             .enumerate()
             .map(|(slot, result)| {
-                if let Some((_, plan)) = flat.get(slot) {
+                if let Some((q, plan)) = flat.get(slot) {
                     if !plan.join_plans.is_empty() {
-                        return apply_joins_to_result(result, &plan.join_plans, Some(&g));
+                        return apply_joins_and_project(result, q, &plan.join_plans, Some(&g));
                     }
                 }
                 result
@@ -2491,6 +2568,30 @@ pub fn run_single_dump(
             }
         }
     }
+    // CountFromSubquery slots produce no executor in pass2 (nothing to scan), so
+    // they never enter outer_state and resume_with_string_values would produce a
+    // Vec shorter than flat.len(), causing an out-of-bounds panic when slot-indexed
+    // later. Push an empty finished result for each such slot so resume produces
+    // a correctly-sized Vec.
+    for (slot, (_, plan)) in flat.iter().enumerate() {
+        if plan.kind == crate::query::plan::StageKind::CountFromSubquery {
+            outer_state.push_finished(
+                slot,
+                QueryResult {
+                    name: String::new(),
+                    oql: String::new(),
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                    row_count: 0,
+                    truncated: false,
+                    error: None,
+                    note: None,
+                    viz: None,
+                    elapsed_ms: None,
+                },
+            );
+        }
+    }
     let mut flat_results = resume_with_string_values(
         outer_state,
         &flat,
@@ -2568,14 +2669,15 @@ pub fn run_single_dump(
     // expands rows that actually survive into the result. It degrades loudly: the
     // scan path has no pass-1 tables to decode with (see `jsonify::NO_SESSION_NOTE`).
     crate::query::jsonify::expand_results(&mut flat_results, &flat, None);
-    // Apply JOIN clauses to each flat result using the outer scan's Graph.
+    // Apply JOIN clauses to each flat result using the outer scan's Graph, then
+    // re-project to the query's SELECT list.
     let flat_results: Vec<_> = flat_results
         .into_iter()
         .enumerate()
         .map(|(slot, result)| {
-            if let Some((_, plan)) = flat.get(slot) {
+            if let Some((q, plan)) = flat.get(slot) {
                 if !plan.join_plans.is_empty() {
-                    return apply_joins_to_result(result, &plan.join_plans, Some(&outer_g));
+                    return apply_joins_and_project(result, q, &plan.join_plans, Some(&outer_g));
                 }
             }
             result

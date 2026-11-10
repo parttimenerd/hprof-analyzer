@@ -7394,6 +7394,26 @@ fn heap_join_values_lookup_filters_correctly() {
         r#"SELECT t.name, v.label FROM java.lang.Thread t INNER JOIN (VALUES ("main", "primary"), ("Finalizer", "gc")) AS v(tname, label) ON t.name = v.tname"#,
     );
     // The result may be empty (thread names may differ), but must not error.
+    // If rows are present, there must be exactly 2 columns (name + label),
+    // not 3 (name + name + label) as was the case before the projection fix.
+    if !out.contains("(0 rows)") {
+        let header = out
+            .lines()
+            .find(|l| l.contains("name") || l.contains("label"));
+        if let Some(header) = header {
+            let cols: Vec<&str> = header
+                .split('|')
+                .map(|c| c.trim())
+                .filter(|c| !c.is_empty())
+                .collect();
+            assert!(
+                cols.len() <= 2,
+                "SELECT t.name, v.label must produce ≤ 2 columns, got {}: {:?}\nfull output:\n{out}",
+                cols.len(),
+                cols
+            );
+        }
+    }
     assert!(
         out.contains("label") || out.contains("(0 rows)"),
         "expected label column or (0 rows):\n{out}"
@@ -7412,6 +7432,43 @@ fn heap_left_join_values_keeps_all_rows() {
     assert!(
         out.to_lowercase().contains("null") || out.contains("(0 rows)") || out.contains("row"),
         "expected rows with null or (0 rows):\n{out}"
+    );
+}
+
+/// Heap scan + VALUES JOIN must produce exactly the SELECTed columns, not
+/// duplicate columns from both sides (OQL-68 regression on heap-scan path).
+#[test]
+fn heap_join_values_no_duplicate_columns() {
+    let Some(hprof) = philosophers() else { return };
+    // SELECT two columns (name, label) from a heap scan + VALUES JOIN.
+    // Before the fix, the output had 3 columns (name | name | label) because
+    // the heap-scan paths didn't re-project after apply_joins_to_result.
+    let out = run_query_stdout(
+        &hprof,
+        r#"SELECT t.name, v.label FROM java.lang.Thread t LEFT JOIN (VALUES ("x", "lbl")) AS v(tname, label) ON t.name = v.tname LIMIT 1"#,
+    );
+    // Find the header row (the one containing "name" and "label").
+    let header = out
+        .lines()
+        .find(|l| l.contains("name") && l.contains("label"));
+    if let Some(header) = header {
+        let cols: Vec<&str> = header
+            .split('|')
+            .map(|c| c.trim())
+            .filter(|c| !c.is_empty())
+            .collect();
+        assert_eq!(
+            cols.len(),
+            2,
+            "SELECT t.name, v.label must produce exactly 2 columns, got {}: {:?}\nfull output:\n{out}",
+            cols.len(),
+            cols
+        );
+    }
+    // If there's no header, the query errored — that's also a failure.
+    assert!(
+        out.contains("name") || out.contains("(0 rows)"),
+        "expected name column or (0 rows), got:\n{out}"
     );
 }
 
