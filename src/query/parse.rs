@@ -1840,7 +1840,16 @@ where
 /// Only touches the query's own clauses — subqueries are normalized when they
 /// are themselves parsed.
 fn normalize_query_ref_paths(q: &mut Query) {
-    let alias = q.alias.clone();
+    // For VALUES sources the table alias lives inside FromSource::Values, not in
+    // q.alias (which is the heap-scan alias set by `FROM <class> <alias>`). Fall
+    // back to the Values alias so `WHERE t.col > x` normalises correctly.
+    let alias: Option<String> = q.alias.clone().or_else(|| {
+        if let crate::query::ast::FromSource::Values { alias, .. } = &q.from {
+            Some(alias.clone())
+        } else {
+            None
+        }
+    });
     for item in &mut q.select {
         normalize_select_item(item, alias.as_deref());
     }
