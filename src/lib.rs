@@ -640,6 +640,13 @@ pub fn run_oql_query(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.0))?;
     let plan = query::optimize::optimize(plan, &q, &query::optimize::SchemaStats::default());
     let flat_plans = vec![(q, plan)];
+    // VALUES-only queries (e.g. `SELECT * FROM (VALUES (1,"a"),(2,"b")) AS t(id,name)`)
+    // have no heap FROM source. Short-circuit them here so the escalated path
+    // doesn't scan the whole heap and return garbage (all-null, one-row-per-object)
+    // results for what should be a tiny inline table.
+    if let Some(results) = query::run::run_values_only_shortcircuit(&flat_plans) {
+        return Ok(results);
+    }
     let (flat, union_groups) = query::run::expand_union_queries(&flat_plans);
     // `reachable_only` travels two ways: as its own argument, and — for the
     // scan — as `opts.reachable_only`, which arms the per-row source-index

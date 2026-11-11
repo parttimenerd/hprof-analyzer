@@ -2497,57 +2497,69 @@ pub fn apply_joins_and_project(
     joined
 }
 
-pub fn run_single_dump(
-    path: &str,
+/// If every query (and all its set-operation branches) reads only from a
+/// `VALUES` inline table — no heap FROM source — execute them without a heap
+/// scan and return the results. Returns `None` when a heap scan is required.
+/// Mirrors the short-circuit `run_single_dump` used to rely on; extracted so the
+/// escalated `run_oql_query` path (CLI `heap query` / MCP `query`) applies the
+/// same logic instead of scanning the whole heap and returning garbage rows.
+pub(crate) fn run_values_only_shortcircuit(
     queries: &[(Query, QueryPlan)],
-    reachable_only: bool,
-) -> std::io::Result<Vec<QueryResult>> {
-    // Short-circuit VALUES-only batches: no HPROF scan needed.
-    // Check if ALL queries (including all UNION/INTERSECT/EXCEPT branches) have
-    // FromSource::Values so the heap scan is never needed.
+) -> Option<Vec<QueryResult>> {
     fn is_all_values(q: &Query) -> bool {
         matches!(q.from, crate::query::ast::FromSource::Values { .. })
             && q.union_branches.iter().all(is_all_values)
             && q.intersect_branches.iter().all(is_all_values)
             && q.except_branches.iter().all(is_all_values)
     }
-    if queries.iter().all(|(q, _)| is_all_values(q)) {
-        let has_set_ops = queries.iter().any(|(q, _)| {
-            !q.union_branches.is_empty()
-                || !q.intersect_branches.is_empty()
-                || !q.except_branches.is_empty()
-        });
-        if !has_set_ops {
-            // Simple case: no UNION/INTERSECT/EXCEPT branches.
-            // Execute each query directly so execute_values_query handles LIMIT/OFFSET.
-            let results = queries
-                .iter()
-                .map(|(q, plan)| execute_values_query(q, plan))
-                .collect();
-            return Ok(results);
-        }
-        // Has set-operation branches: expand/collapse is needed so all branches run.
-        // Strip LIMIT/OFFSET from head-query flat slots so collapse_union_results is
-        // the single applier (it reads them from the UnionGroup).
-        let (flat, groups) = expand_union_queries(queries);
-        let flat_results: Vec<QueryResult> = flat
+    if !queries.iter().all(|(q, _)| is_all_values(q)) {
+        return None;
+    }
+    let has_set_ops = queries.iter().any(|(q, _)| {
+        !q.union_branches.is_empty()
+            || !q.intersect_branches.is_empty()
+            || !q.except_branches.is_empty()
+    });
+    if !has_set_ops {
+        // Simple case: no UNION/INTERSECT/EXCEPT branches.
+        // Execute each query directly so execute_values_query handles LIMIT/OFFSET.
+        let results = queries
             .iter()
-            .enumerate()
-            .map(|(i, (q, plan))| {
-                // Only clear LIMIT/OFFSET on the head slot of each group (index == group.head).
-                // Branch slots never carry them, but clear defensively.
-                let is_group_head = groups.iter().any(|g| g.head == i);
-                if is_group_head {
-                    let mut q_no_limit = q.clone();
-                    q_no_limit.limit = None;
-                    q_no_limit.offset = None;
-                    execute_values_query(&q_no_limit, plan)
-                } else {
-                    execute_values_query(q, plan)
-                }
-            })
+            .map(|(q, plan)| execute_values_query(q, plan))
             .collect();
-        return Ok(collapse_union_results(flat_results, &groups));
+        return Some(results);
+    }
+    // Has set-operation branches: expand/collapse is needed so all branches run.
+    // Strip LIMIT/OFFSET from head-query flat slots so collapse_union_results is
+    // the single applier (it reads them from the UnionGroup).
+    let (flat, groups) = expand_union_queries(queries);
+    let flat_results: Vec<QueryResult> = flat
+        .iter()
+        .enumerate()
+        .map(|(i, (q, plan))| {
+            // Only clear LIMIT/OFFSET on the head slot of each group (index == group.head).
+            // Branch slots never carry them, but clear defensively.
+            let is_group_head = groups.iter().any(|g| g.head == i);
+            if is_group_head {
+                let mut q_no_limit = q.clone();
+                q_no_limit.limit = None;
+                q_no_limit.offset = None;
+                execute_values_query(&q_no_limit, plan)
+            } else {
+                execute_values_query(q, plan)
+            }
+        })
+        .collect();
+    Some(collapse_union_results(flat_results, &groups))
+}
+
+pub fn run_single_dump(
+    path: &str,
+    queries: &[(Query, QueryPlan)],
+    reachable_only: bool,
+) -> std::io::Result<Vec<QueryResult>> {
+    if let Some(results) = run_values_only_shortcircuit(queries) {
+        return Ok(results);
     }
     let (flat, groups) = expand_union_queries(queries);
     // Propagate reachable-only into the scan so pass2 arms the per-row
