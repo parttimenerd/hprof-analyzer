@@ -342,6 +342,33 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
                         }
                     }
                 }
+                if ex.plan().needs.fill_ratio {
+                    // `@fillRatio` resolves a collection's backing array via
+                    // compute_fill_ratio (ctx.field_id) and counts non-null array
+                    // slots, which requires BOTH the backing-array field edge AND
+                    // the array→element edges. Intern the backing-array / nested-map
+                    // field names of EVERY built-in collection descriptor so the
+                    // field edge is captured, and flag array-element capture so the
+                    // fill count can be derived.
+                    needs_array_elements = true;
+                    let coll_descs = crate::collections::builtin_coll_descs();
+                    let mut extra: Vec<String> = Vec::new();
+                    for d in &coll_descs {
+                        if let Some((ref f, _)) = d.array_field {
+                            if !extra.iter().any(|x| x == f) {
+                                extra.push(f.clone());
+                            }
+                        }
+                        if let Some((ref f, _)) = d.nested_map_field {
+                            if !extra.iter().any(|x| x == f) {
+                                extra.push(f.clone());
+                            }
+                        }
+                    }
+                    if !extra.is_empty() {
+                        per_query_hops.push(extra);
+                    }
+                }
             }
         }
         if per_query_hops.is_empty() && !needs_array_elements {
@@ -823,15 +850,17 @@ pub(crate) fn resume_with_string_values(
                 });
         let is_refwalk = needs_only_refwalk;
         let is_array_index = needs_only_array_index;
-        // GROUP BY @displayName / @classOf queries: `finalize_at = P2`, `late_ops` is
-        // empty (the plan comment says "No extra late op"), `kind = GroupBy`, and
-        // `needs.instance_string = true`. They call `join_retained_group_by` via
-        // `run_entry_pub` → `join_retained` dispatch, which resolves class names from
-        // `ctx.class_idx` / `ctx.class_names`. Route them here only when those arrays
-        // are populated (caller passes them); otherwise fall through to the error path.
+        // GROUP BY @displayName / @classOf / classof(x) queries: `finalize_at = P2`,
+        // `late_ops` is empty (the plan comment says "No extra late op"),
+        // `kind = GroupBy`, and `needs.instance_string` (displayName) or
+        // `needs.runtime_type` (classof) is set. They call `join_retained_group_by`
+        // via `run_entry_pub` → `join_retained` dispatch, which resolves class names
+        // from `ctx.class_idx` / `ctx.class_names`. Route them here only when those
+        // arrays are populated (caller passes them); otherwise fall through to the
+        // error path.
         let is_group_by_instance_string =
             entry.plan.kind == crate::query::plan::StageKind::GroupBy
-                && entry.plan.needs.instance_string
+                && (entry.plan.needs.instance_string || entry.plan.needs.runtime_type)
                 && !entry.plan.needs.retained
                 && !entry.plan.needs.dominator_children
                 && !entry.plan.needs.gc_roots
@@ -933,6 +962,31 @@ pub(crate) fn resume_with_string_values(
             }
         }
     }
+
+    // Re-apply deferred window functions now that rows are pruned to reachable
+    // objects. The scan skipped apply_window_functions when reachability capture
+    // was armed (window functions must rank over the reachable subset, not the
+    // raw scan), so ROW_NUMBER/RANK/LAG/LEAD columns are still Null placeholders.
+    if dfn.is_some() {
+        for (slot, r) in slotted.iter_mut() {
+            if let Some((q, _)) = flat.get(*slot) {
+                let has_window = q
+                    .select
+                    .iter()
+                    .any(|it| matches!(it, crate::query::ast::SelectItem::Window { .. }));
+                if has_window {
+                    crate::query::execute::apply_window_functions(
+                        &mut r.rows,
+                        &r.columns,
+                        q,
+                        0,
+                        &[],
+                    );
+                }
+            }
+        }
+    }
+
     slotted.into_iter().map(|(_, r)| r).collect()
 }
 
@@ -1773,8 +1827,14 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         elapsed_ms: None,
     };
 
-    // Apply JOIN clauses (expands columns by appending RHS columns).
-    let mut joined = apply_joins_to_result(intermediate, &plan.join_plans, None);
+    // Apply JOIN clauses (expands columns by appending RHS columns). VALUES-only
+    // queries have no heap attributes, so the LHS attribute-alias map is empty.
+    let mut joined = apply_joins_to_result(
+        intermediate,
+        &plan.join_plans,
+        None,
+        &std::collections::HashMap::new(),
+    );
 
     // OQL-68: now that all columns from both sides are in `joined`, apply the SELECT
     // projection so that only the requested columns appear in the output.
@@ -1849,6 +1909,69 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
 /// Evaluate an `Expr` against a VALUES row. Handles literals, field refs,
 /// unary ops, binary arith, comparisons, and string methods. Returns `Null`
 /// for unsupported expression types (e.g. heap attrs, subqueries).
+/// True if `expr` references a column qualified by `alias` (e.g. `v.id` when
+/// `alias == "v"`). Used to detect a JOIN `ON` written with the JOIN-side on the
+/// LEFT (`ON v.id = 1`) so the sides can be swapped to the conventional
+/// `<from-side> = <join-side>` orientation.
+fn expr_references_alias(expr: &crate::query::ast::Expr, alias: &str) -> bool {
+    use crate::query::ast::{Attr, Expr};
+    match expr {
+        Expr::Attr(Attr::Field(f)) => {
+            f == alias
+                || f.strip_prefix(alias)
+                    .is_some_and(|rest| rest.starts_with('.'))
+        }
+        Expr::Attr(Attr::RefPath { hops, .. }) => hops.first().is_some_and(|h| h == alias),
+        Expr::Unary { arg, .. } => expr_references_alias(arg, alias),
+        Expr::Binary { lhs, rhs, .. } => {
+            expr_references_alias(lhs, alias) || expr_references_alias(rhs, alias)
+        }
+        Expr::Method { receiver, args, .. } => {
+            expr_references_alias(receiver, alias)
+                || args.iter().any(|a| expr_references_alias(a, alias))
+        }
+        Expr::Coalesce(args) => args.iter().any(|a| expr_references_alias(a, alias)),
+        Expr::NullIf { lhs, rhs } => {
+            expr_references_alias(lhs, alias) || expr_references_alias(rhs, alias)
+        }
+        Expr::Cast { expr, .. } => expr_references_alias(expr, alias),
+        Expr::Case { branches, else_ } => {
+            branches
+                .iter()
+                .any(|(_, t)| expr_references_alias(t, alias))
+                || else_
+                    .as_ref()
+                    .is_some_and(|e| expr_references_alias(e, alias))
+        }
+        _ => false,
+    }
+}
+
+/// Resolve the LEFT side of a JOIN `ON` condition against a LHS row. A bare
+/// heap attribute (`@objectId`, `@usedHeapSize`, …) referenced in `ON` does not
+/// have a matching projected column name when the SELECT list aliases it (e.g.
+/// `SELECT s.@objectId AS id … ON s.@objectId = v.id`), so it is resolved here
+/// via the alias map built from the SELECT list before falling back to the
+/// generic name lookup. Everything else delegates to [`eval_expr_on_row`].
+fn resolve_join_lhs(
+    expr: &crate::query::ast::Expr,
+    col_names: &[String],
+    row: &[crate::query::model::QueryValue],
+    attr_map: &std::collections::HashMap<String, usize>,
+) -> crate::query::model::QueryValue {
+    if let crate::query::ast::Expr::Attr(attr) = expr {
+        if !matches!(attr, crate::query::ast::Attr::Field(_)) {
+            let name = crate::query::execute::attr_name(attr);
+            if let Some(&pos) = attr_map.get(&name) {
+                if let Some(v) = row.get(pos) {
+                    return v.clone();
+                }
+            }
+        }
+    }
+    eval_expr_on_row(expr, col_names, row)
+}
+
 fn eval_expr_on_row(
     expr: &crate::query::ast::Expr,
     col_names: &[String],
@@ -2297,6 +2420,7 @@ pub fn apply_joins_to_result(
     mut result: crate::query::model::QueryResult,
     joins: &[crate::query::plan::JoinPlan],
     graph: Option<&crate::pass2::Graph>,
+    lhs_attr_map: &std::collections::HashMap<String, usize>,
 ) -> crate::query::model::QueryResult {
     use crate::query::model::{QueryColumn, QueryValue};
     if joins.is_empty() {
@@ -2322,6 +2446,17 @@ pub fn apply_joins_to_result(
         // Get current LHS column names (for ON evaluation).
         let lhs_col_names: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
 
+        // A JOIN `ON` is conventionally written `<from-side> = <join-side>`. If the
+        // user wrote it reversed (`ON v.id = 1` — the JOIN alias on the LEFT), swap
+        // the two sides so the LHS expression still evaluates against the FROM-side
+        // row and the RHS against the JOIN-side row.
+        let join_alias = join_plan.source.alias().to_string();
+        let (on_lhs, on_rhs) = if expr_references_alias(&join_plan.on.lhs, &join_alias) {
+            (&join_plan.on.rhs, &join_plan.on.lhs)
+        } else {
+            (&join_plan.on.lhs, &join_plan.on.rhs)
+        };
+
         // Build hash map: rhs_key_string → Vec<rhs_row>
         // We use a string representation of the key value (instead of QueryValue directly)
         // since f64 doesn't implement Hash.
@@ -2341,11 +2476,7 @@ pub fn apply_joins_to_result(
         > = std::collections::HashMap::new();
         for rhs_row in &rhs_rows {
             // NULL keys are excluded: they cannot match under SQL join semantics.
-            if let Some(key) = qv_to_key(&eval_expr_on_row(
-                &join_plan.on.rhs,
-                &rhs_col_names,
-                rhs_row,
-            )) {
+            if let Some(key) = qv_to_key(&eval_expr_on_row(on_rhs, &rhs_col_names, rhs_row)) {
                 rhs_map.entry(key).or_default().push(rhs_row.clone());
             }
         }
@@ -2360,10 +2491,11 @@ pub fn apply_joins_to_result(
         // Join each LHS row.
         let mut new_rows: Vec<Vec<QueryValue>> = Vec::new();
         for lhs_row in &result.rows {
-            let lhs_key = qv_to_key(&eval_expr_on_row(
-                &join_plan.on.lhs,
+            let lhs_key = qv_to_key(&resolve_join_lhs(
+                on_lhs,
                 &lhs_col_names,
                 lhs_row,
+                lhs_attr_map,
             ));
             // NULL key on LHS never matches (SQL NULL semantics).
             if let Some(lhs_key) = lhs_key {
@@ -2418,7 +2550,22 @@ pub fn apply_joins_and_project(
     use crate::query::execute::query_columns;
     use crate::query::model::{QueryColumn, QueryValue};
 
-    let mut joined = apply_joins_to_result(result, joins, graph);
+    // Map each LHS select item's raw attribute name AND its AS alias to the
+    // projected column index. Used by `resolve_join_lhs` so a JOIN `ON` that
+    // references a heap attribute (e.g. `s.@objectId`) resolves even when the
+    // SELECT list aliases it (`@objectId AS id`).
+    let mut lhs_attr_map: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for (i, item) in q.select.iter().enumerate() {
+        if let crate::query::ast::SelectItem::Attr(a) = item {
+            lhs_attr_map.insert(crate::query::execute::attr_name(a), i);
+        }
+        if let Some(alias) = q.select_aliases.get(i).and_then(|a| a.as_deref()) {
+            lhs_attr_map.insert(alias.to_string(), i);
+        }
+    }
+
+    let mut joined = apply_joins_to_result(result, joins, graph, &lhs_attr_map);
     if joins.is_empty() {
         return joined;
     }
@@ -2451,10 +2598,17 @@ pub fn apply_joins_and_project(
         .collect();
     let all_col_names: Vec<String> = joined.columns.iter().map(|c| c.name.clone()).collect();
 
+    // Output column names for each select item (aliases applied, join alias
+    // stripped). Used by the general fallback below so attributes like
+    // `@objectId AS idx` or `classof(s) AS c` — which the scan already
+    // projected under this name — resolve by name instead of dropping to NULL.
+    let out_names: Vec<String> = out_cols.iter().map(|c| c.name.clone()).collect();
+
     let project_row = |row: &[QueryValue]| -> Vec<QueryValue> {
         q.select
             .iter()
-            .map(|item| match item {
+            .enumerate()
+            .map(|(i, item)| match item {
                 crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::Field(f)) => {
                     let bare = f.rsplit_once('.').map(|(_, col)| col).unwrap_or(f.as_str());
                     let pos = all_col_names.iter().position(|c| c == f).or_else(|| {
@@ -2487,7 +2641,19 @@ pub fn apply_joins_and_project(
                 crate::query::ast::SelectItem::Expr(expr) => {
                     eval_expr_on_row(expr, &all_col_names, row)
                 }
-                _ => QueryValue::Null,
+                // General case: @objectId/@usedHeapSize/classof()/toString()/
+                // aggregates/window columns/etc. were already projected by the
+                // scan under their output name; look that name up in the joined
+                // columns rather than dropping them to NULL.
+                _ => {
+                    let name = out_names.get(i).map(String::as_str).unwrap_or("");
+                    all_col_names
+                        .iter()
+                        .position(|c| c == name)
+                        .and_then(|p| row.get(p))
+                        .cloned()
+                        .unwrap_or(QueryValue::Null)
+                }
             })
             .collect()
     };
@@ -3435,9 +3601,11 @@ pub fn collapse_union_results(
             }
         }
 
-        // LIMIT: re-apply the user LIMIT after OFFSET (when OFFSET is present the
-        // scan may have collected more rows than limit to account for skipping).
-        if g.offset.is_some() {
+        // LIMIT: re-apply the user LIMIT after OFFSET and set ops. When OFFSET is
+        // present the scan may have collected more rows than limit to account for
+        // skipping; for INTERSECT/EXCEPT the LIMIT was deferred from the scan so
+        // the set operation sees all rows and the cap applies to the final result.
+        if g.offset.is_some() || g.intersect_count > 0 || g.except_count > 0 {
             if let Some(n) = g.limit {
                 let n = n as usize;
                 if result.rows.len() > n {

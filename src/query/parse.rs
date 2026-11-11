@@ -1683,12 +1683,18 @@ where
                             }),
                     )
                     .or(
-                        // Virtual table: __name__ AS alias (double-underscore delimited)
+                        // Virtual table: `__name__ AS alias` (double-underscore
+                        // delimited). Strip the `__` delimiters so the stored name
+                        // matches `materialise_join_source`'s keys ("classes",
+                        // "gc_roots", "threads", …).
                         any_ident()
                             .filter(|s: &String| s.starts_with("__") && s.ends_with("__"))
                             .then_ignore(ident_ci("AS").or_not())
                             .then(any_ident())
-                            .map(|(name, alias)| JoinSource::VirtualTable { name, alias }),
+                            .map(|(name, alias)| JoinSource::VirtualTable {
+                                name: name.trim_matches('_').to_string(),
+                                alias,
+                            }),
                     );
                 // ON condition: expr = expr (equality only for now)
                 let join_on = ident_ci("ON")
@@ -1926,6 +1932,31 @@ where
                 }
                 head.intersect_branches = intersects;
                 head.except_branches = excepts;
+                // Lift a trailing LIMIT/OFFSET/ORDER BY swallowed by the last
+                // INTERSECT/EXCEPT branch up to the head, so it binds to the whole
+                // set-op result (not the last branch). The bare `base_query` in the
+                // INTERSECT/EXCEPT tail greedily absorbs a trailing `LIMIT n` /
+                // `OFFSET n` / `ORDER BY`, which for a set operation must apply to
+                // the final combined result instead. (INTERSECT/EXCEPT branches have
+                // no parenthesized form, so any swallowed LIMIT is always trailing.)
+                if head.union_branches.is_empty() {
+                    let last_branch = if !head.except_branches.is_empty() {
+                        head.except_branches.last_mut()
+                    } else {
+                        head.intersect_branches.last_mut()
+                    };
+                    if let Some(last) = last_branch {
+                        if let Some(n) = last.limit.take() {
+                            head.limit = Some(n);
+                        }
+                        if let Some(o) = last.offset.take() {
+                            head.offset = Some(o);
+                        }
+                        if last.order_by.is_some() {
+                            head.order_by = last.order_by.take();
+                        }
+                    }
+                }
                 head
             },
         )

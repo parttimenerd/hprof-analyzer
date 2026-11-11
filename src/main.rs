@@ -361,8 +361,8 @@ enum Cmd {
     ///
     /// EXAMPLES:
     ///   hprof-analyzer query dump.hprof --query "SELECT @displayName, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY 2 DESC LIMIT 10"
-    ///   hprof-analyzer query dump.hprof --query "SELECT * FROM VALUES (1,'a'),(2,'b') AS t(id,name)"
-    ///   hprof-analyzer query dump.hprof --query "SELECT t.name, v.label FROM java.lang.Thread t INNER JOIN VALUES ('main','primary') AS v(name,label) ON t.name = v.name"
+    ///   hprof-analyzer query dump.hprof --query "SELECT * FROM (VALUES (1,\"a\"),(2,\"b\")) AS t(id,name)"
+    ///   hprof-analyzer query dump.hprof --query "SELECT t.name, v.label FROM java.lang.Thread t INNER JOIN (VALUES (\"main\",\"primary\")) AS v(name,label) ON t.name = v.name"
     #[command(
         after_help = "For the full OQL grammar, see `docs/OQL.md` or run `hprof-analyzer query dump.hprof --server` and GET /help."
     )]
@@ -1979,7 +1979,7 @@ fn run_heap_cmd(
                     for (src, cls, sh, ret) in &ib.refs {
                         println!(
                             "    #{src}  {cls}  shallow={sh}  retained={}",
-                            hprof_analyzer::report::format_bytes(*ret as u64)
+                            hprof_analyzer::report::format_bytes(*ret)
                         );
                     }
                 } else if !graph_cached {
@@ -2080,7 +2080,7 @@ fn run_heap_cmd(
                 for (src, cls, sh, ret) in &shown {
                     println!(
                         "  #{src}  {cls}  shallow={sh}  retained={}",
-                        hprof_analyzer::report::format_bytes(*ret as u64)
+                        hprof_analyzer::report::format_bytes(*ret)
                     );
                 }
                 if total > limit {
@@ -3595,6 +3595,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
             || p.needs.dominator_children
             || p.needs.ref_walk
             || p.needs.gc_roots
+            || p.needs.fill_ratio
     });
 
     // OQL-55: VALUES-only batches and subquery batches both route through

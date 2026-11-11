@@ -43,6 +43,11 @@ pub struct QueryNeeds {
     /// CSR; the P2 window resolves these as Null until a scan-capture pass is
     /// added for array element data.
     pub array_index: bool,
+    /// Arms `@fillRatio`: resolves via the forward-reference graph (the backing
+    /// array's fill) plus the collection descriptors. Needs the full pipeline
+    /// (auto-escalates). Distinct from `ref_walk` so `eliminate_dead_needs` can
+    /// preserve the forward CSR even though `@fillRatio` emits no late op.
+    pub fill_ratio: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -1566,7 +1571,16 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // scan; prune_cross_phase_reachable then removes unreachable indices before
     // join_retained_group_by re-computes the groups at the late stage where the full
     // LateCtx (including class_idx / class_names) is available.
-    if kind == StageKind::GroupBy && needs.instance_string && finalize_at == Phase::P1 {
+    //
+    // GROUP BY classof(x) (runtime_type) needs the same P2 treatment: `classof`
+    // resolves to the RUNTIME class (via class_idx), not the scan-time static
+    // class_id, so the key cannot be computed correctly during the scan. Forcing
+    // P2 also routes the group through prune_cross_phase_reachable so the counts
+    // reflect the reachable-only population, matching plain COUNT(*).
+    if kind == StageKind::GroupBy
+        && (needs.instance_string || needs.runtime_type)
+        && finalize_at == Phase::P1
+    {
         finalize_at = Phase::P2;
         // No extra late op: join_retained / join_retained_group_by is always called
         // at the end of run_entry when the op list is exhausted.
@@ -1761,9 +1775,16 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         finalize_at,
         carry: CarryLayout::IndexOnly,
         late_ops,
-        // For DISTINCT queries, defer the LIMIT to the dedup choke point so all
-        // matching rows flow through for dedup before the cap is applied.
-        limit: if q.distinct { None } else { scan_limit(q) },
+        // For DISTINCT and INTERSECT/EXCEPT queries, defer the LIMIT to the
+        // post-scan choke point (dedup / set-op) so all matching rows flow
+        // through before the cap is applied. The head scan must NOT truncate
+        // early, or a trailing `LIMIT n` would cap a single branch instead of
+        // the final combined result.
+        limit: if q.distinct || !q.intersect_branches.is_empty() || !q.except_branches.is_empty() {
+            None
+        } else {
+            scan_limit(q)
+        },
         scan_limit: None,
         order_sensitive: q.order_by.is_some(),
         select_arity,
@@ -2132,6 +2153,25 @@ pub(crate) fn pred_uses_retained(p: &Predicate) -> bool {
         Predicate::Compare { lhs, rhs, .. } => {
             expr_any_attr(lhs, |a| matches!(a, Attr::RetainedHeapSize))
                 || expr_any_attr(rhs, |a| matches!(a, Attr::RetainedHeapSize))
+        }
+        _ => false,
+    }
+}
+
+/// True if any comparison in the predicate tree references `@fillRatio`.
+/// `@fillRatio` is resolved in the late phase (it traverses the forward
+/// reference graph), so a carry-mode scan must SKIP these terms and defer them
+/// to the late phase — otherwise the scan compares `@fillRatio` against `Null`
+/// and drops every row before the late window can re-filter.
+pub(crate) fn pred_uses_fill_ratio(p: &Predicate) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_uses_fill_ratio(a) || pred_uses_fill_ratio(b)
+        }
+        Predicate::Not(a) => pred_uses_fill_ratio(a),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_any_attr(lhs, |a| matches!(a, Attr::FillRatio))
+                || expr_any_attr(rhs, |a| matches!(a, Attr::FillRatio))
         }
         _ => false,
     }
@@ -2663,7 +2703,10 @@ fn note_attr_need_attr(a: &Attr, needs: &mut QueryNeeds) {
             needs.array_index = true;
         }
         // @fillRatio requires the forward reference graph to traverse backing arrays.
-        Attr::FillRatio => needs.ref_walk = true,
+        Attr::FillRatio => {
+            needs.ref_walk = true;
+            needs.fill_ratio = true;
+        }
         _ => {}
     }
 }
@@ -2723,7 +2766,12 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
                     Attr::ClassOf => needs.runtime_type = true,
                     // toString(s) in WHERE arms the string-values side table.
                     Attr::ToString(_) => needs.string_values = true,
-                    _ => {}
+                    // Other attrs (e.g. @fillRatio, @GCRoots, array index/slice)
+                    // must have their needs noted so the corresponding late-phase
+                    // structure is armed. Without this, a WHERE-only `@fillRatio`
+                    // (e.g. `SELECT COUNT(*) ... WHERE @fillRatio > 0.5`) never
+                    // sets needs.ref_walk and the fill ratio resolves to Null.
+                    _ => note_attr_need_attr(a, needs),
                 }
             } else {
                 // Arithmetic lhs: note every attr leaf's need (numeric context).

@@ -286,6 +286,37 @@ pub struct FindIncomingRefsByClassParams {
     pub limit: Option<usize>,
 }
 
+/// Parameters for `get_dominator_path` — walk idom[] up to the GC root.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetDominatorPathParams {
+    /// Dense object index to start from. Obtain from: (a) @objectId column in a
+    /// query result, (b) 'index' field in browse_dominators output.
+    pub object_index: u64,
+}
+
+/// Parameters for `get_outbound_references` — forward CSR edges for one object.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetOutboundReferencesParams {
+    /// Dense object index to look up outbound references for.
+    pub object_index: u64,
+    /// Max references to return (default 50, max 200).
+    pub limit: Option<usize>,
+}
+
+/// Parameters for `get_retained_set` — DFS dominator subtree enumeration.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetRetainedSetParams {
+    /// Dense object index whose retained set to enumerate.
+    pub object_index: u64,
+    /// Optional class name filter (substring match). Only objects whose class
+    /// name contains this string are included in the results.
+    pub class_filter: Option<String>,
+    /// Max objects to return (default 50, max 500). The traversal visits
+    /// children sorted by retained size descending, so the most significant
+    /// objects are returned first.
+    pub limit: Option<usize>,
+}
+
 /// Parameters for `compare_dumps` — cross-dump regression detection.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CompareDumpsParams {
@@ -1754,6 +1785,419 @@ impl HprofMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
+    /// Walk the dominator tree upward from an object to the GC root.
+    #[tool(
+        description = "Walk the immediate-dominator chain from an object up to the GC root. \
+                       Returns an array of objects from the starting object to the virtual root, \
+                       each with class name and sizes. This is the retention chain: every object \
+                       in the path dominates the starting object, meaning ALL references to the \
+                       starting object pass through every node in this chain. \
+                       Use this to answer 'why is this object retained?' — the chain shows each \
+                       object that must be collected before this one can be freed. \
+                       Typical workflow: find a suspect with query/browse_dominators, then call \
+                       get_dominator_path to see the full chain to the GC root."
+    )]
+    async fn get_dominator_path(
+        &self,
+        Parameters(p): Parameters<GetDominatorPathParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let guard = self.session.lock().await;
+        let sess = guard.as_ref().ok_or_else(|| {
+            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
+        })?;
+
+        let idom = sess
+            .cache
+            .read_idom()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::internal_error("idom missing from cache".to_string(), None))?;
+        let retained = sess
+            .cache
+            .read_retained()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("retained missing from cache".to_string(), None)
+            })?;
+        let shallow = sess
+            .cache
+            .read_shallow()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("shallow missing from cache".to_string(), None)
+            })?;
+        let class_idx = sess
+            .cache
+            .read_class_idx()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("class_idx missing from cache".to_string(), None)
+            })?;
+
+        let n = shallow.len();
+        let idx = p.object_index as usize;
+        if idx >= n {
+            return Err(McpError::invalid_params(
+                format!("object_index {idx} out of range (heap has {n} objects)"),
+                None,
+            ));
+        }
+
+        // Walk idom[] upward.  Virtual root = n, UNDEFINED = u32::MAX.
+        let vroot = n as u32;
+        let mut path: Vec<serde_json::Value> = Vec::new();
+        let mut cur = idx as u32;
+        let max_steps = 1000; // safety cap
+        for _ in 0..max_steps {
+            let i = cur as usize;
+            let (class, sh, ret) = if i < n {
+                let cidx = class_idx[i] as usize;
+                let cname = sess
+                    .class_names
+                    .get(cidx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("<unknown>");
+                (cname.to_string(), shallow[i], retained[i])
+            } else {
+                ("<GC Root>".to_string(), 0u32, 0u64)
+            };
+            path.push(serde_json::json!({
+                "index": i,
+                "class": class,
+                "shallow_bytes": sh,
+                "retained_bytes": ret,
+            }));
+            if cur == vroot || cur == u32::MAX || i >= n {
+                break;
+            }
+            cur = idom[i];
+        }
+
+        let result = serde_json::json!({
+            "object_index": p.object_index,
+            "path_length": path.len(),
+            "path": path,
+            "_hint": "Path goes from the queried object (index 0) up to the GC root (last entry). \
+                      Each node dominates the starting object — every path from a GC root to the \
+                      starting object passes through every node in this chain. \
+                      Use inspect_object on any node for field details, or browse_dominators to \
+                      see its other children (siblings of the next node in the chain).",
+        });
+
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// List the objects that a given object directly references (outbound edges).
+    #[tool(
+        description = "List all objects that the specified object directly references \
+                       (MAT's 'List Objects with outgoing References'). \
+                       Requires that the dump was loaded with load_dump({with_graph: true}); \
+                       returns an error with instructions otherwise. \
+                       Each result row has: target_index (dense index of the referenced object), \
+                       target_class, target_shallow, target_retained. \
+                       Use this to understand what an object HOLDS — complements \
+                       find_incoming_references (what holds IT). \
+                       Typical workflow: inspect_object to see fields, then get_outbound_references \
+                       to see where each reference field actually points."
+    )]
+    async fn get_outbound_references(
+        &self,
+        Parameters(p): Parameters<GetOutboundReferencesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let guard = self.session.lock().await;
+        let sess = guard.as_ref().ok_or_else(|| {
+            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
+        })?;
+
+        if sess.mode != CacheMode::Graph {
+            return Err(McpError::invalid_params(
+                "Forward reference data not available — the dump was not loaded with with_graph=true. \
+                 Reload with load_dump({\"path\": \"<same path>\", \"with_graph\": true}) to enable this tool.",
+                None,
+            ));
+        }
+
+        let (fwd_off, fwd_tgt) = sess
+            .cache
+            .read_forward_edges()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("graph.bin missing from cache".to_string(), None)
+            })?;
+
+        let retained = sess
+            .cache
+            .read_retained()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::internal_error("retained missing".to_string(), None))?;
+        let shallow = sess
+            .cache
+            .read_shallow()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::internal_error("shallow missing".to_string(), None))?;
+        let class_idx = sess
+            .cache
+            .read_class_idx()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::internal_error("class_idx missing".to_string(), None))?;
+
+        let idx = p.object_index as usize;
+        let n = shallow.len();
+        if idx >= n {
+            return Err(McpError::invalid_params(
+                format!("object_index {idx} out of range (heap has {n} objects)"),
+                None,
+            ));
+        }
+        if idx + 1 >= fwd_off.len() {
+            return Err(McpError::invalid_params(
+                format!("object_index {idx} has no forward edge data in graph.bin"),
+                None,
+            ));
+        }
+
+        let limit = p.limit.unwrap_or(50).min(200);
+        let start = fwd_off[idx] as usize;
+        let end = fwd_off[idx + 1] as usize;
+        let total_outbound = end - start;
+
+        let refs: Vec<serde_json::Value> = (start..end)
+            .take(limit)
+            .map(|j| {
+                let tgt = fwd_tgt[j] as usize;
+                let tgt_cidx = class_idx.get(tgt).copied().unwrap_or(0) as usize;
+                let tgt_class = sess
+                    .class_names
+                    .get(tgt_cidx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("<unknown>");
+                serde_json::json!({
+                    "target_index": tgt,
+                    "target_class": tgt_class,
+                    "target_shallow": shallow.get(tgt).copied().unwrap_or(0),
+                    "target_retained": retained.get(tgt).copied().unwrap_or(0),
+                })
+            })
+            .collect();
+
+        let result = serde_json::json!({
+            "object_index": p.object_index,
+            "total_outbound_references": total_outbound,
+            "shown": refs.len(),
+            "truncated": total_outbound > limit,
+            "refs": refs,
+            "_hint": format!(
+                "Each 'target_index' is a dense object index. Use inspect_object({{\"object_index\": <target_index>}}) \
+                 for field details, browse_dominators({{\"object_index\": <target_index>}}) to see what it retains, \
+                 or get_dominator_path({{\"object_index\": <target_index>}}) for its retention chain."
+            ),
+        });
+
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// Enumerate objects exclusively retained by a given object (its dominator subtree).
+    #[tool(
+        description = "Enumerate the retained set of an object: all objects that would be freed if \
+                       this object were garbage collected (its dominator subtree). \
+                       Returns objects sorted by retained size descending, with optional class \
+                       name filtering. Each entry has: index, class, shallow_bytes, retained_bytes, \
+                       depth (distance from the root object in the dominator tree). \
+                       Also returns a class_summary: top classes by total retained bytes in the subtree. \
+                       Use this to answer 'what exactly is this object keeping alive?' — for example, \
+                       after finding a leak suspect, call get_retained_set to see the composition of \
+                       its retained memory. \
+                       Combine with class_filter to focus: get_retained_set({object_index: 42, class_filter: 'String'}) \
+                       to see only String objects retained by object 42."
+    )]
+    async fn get_retained_set(
+        &self,
+        Parameters(p): Parameters<GetRetainedSetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let guard = self.session.lock().await;
+        let sess = guard.as_ref().ok_or_else(|| {
+            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
+        })?;
+
+        let (dc_off, dc_tgt) = sess
+            .cache
+            .read_dominator_children()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("arrays.bin missing from cache".to_string(), None)
+            })?;
+        let retained = sess
+            .cache
+            .read_retained()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("retained missing from cache".to_string(), None)
+            })?;
+        let shallow = sess
+            .cache
+            .read_shallow()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("shallow missing from cache".to_string(), None)
+            })?;
+        let class_idx = sess
+            .cache
+            .read_class_idx()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("class_idx missing from cache".to_string(), None)
+            })?;
+
+        let n = shallow.len();
+        let idx = p.object_index as usize;
+        if idx >= n {
+            return Err(McpError::invalid_params(
+                format!("object_index {idx} out of range (heap has {n} objects)"),
+                None,
+            ));
+        }
+
+        let limit = p.limit.unwrap_or(50).min(500);
+        let class_filter = p.class_filter.as_deref().map(|s| s.to_lowercase());
+
+        // BFS/DFS over dominator children, sorted by retained desc at each level.
+        // We use a priority queue (BinaryHeap) to always visit the largest-retained
+        // objects first across the whole subtree, regardless of depth.
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+
+        // (retained_bytes, depth, object_index) — BinaryHeap is max-heap, so
+        // the largest retained rises to the top naturally.
+        let mut heap: BinaryHeap<(u64, Reverse<u16>, u32)> = BinaryHeap::new();
+
+        // Seed with immediate children of the root object.
+        let root_i = idx;
+        if root_i + 1 < dc_off.len() {
+            let start = dc_off[root_i] as usize;
+            let end = dc_off[root_i + 1] as usize;
+            for j in start..end {
+                let child = dc_tgt[j];
+                let ret = retained.get(child as usize).copied().unwrap_or(0);
+                heap.push((ret, Reverse(1), child));
+            }
+        }
+
+        let mut results: Vec<serde_json::Value> = Vec::new();
+        let mut total_objects_visited = 0u64;
+        let mut total_shallow = 0u64;
+
+        // Class summary: class_name → (count, total_retained, total_shallow)
+        let mut class_summary: std::collections::HashMap<String, (u64, u64, u64)> =
+            std::collections::HashMap::new();
+
+        // Cap total nodes visited to prevent runaway on huge subtrees.
+        let max_visit = 100_000usize;
+
+        while let Some((ret, Reverse(depth), obj)) = heap.pop() {
+            let i = obj as usize;
+            if i >= n {
+                continue;
+            }
+            total_objects_visited += 1;
+
+            let cidx = class_idx[i] as usize;
+            let cname = sess
+                .class_names
+                .get(cidx)
+                .map(|s| s.as_str())
+                .unwrap_or("<unknown>");
+            let sh = shallow[i];
+
+            // Always count in summary.
+            let entry = class_summary.entry(cname.to_string()).or_default();
+            entry.0 += 1;
+            entry.1 += ret;
+            entry.2 += sh as u64;
+            total_shallow += sh as u64;
+
+            // Apply class filter for the results list.
+            let passes_filter = match &class_filter {
+                Some(f) => cname.to_lowercase().contains(f),
+                None => true,
+            };
+            if passes_filter && results.len() < limit {
+                results.push(serde_json::json!({
+                    "index": i,
+                    "class": cname,
+                    "shallow_bytes": sh,
+                    "retained_bytes": ret,
+                    "depth": depth,
+                }));
+            }
+
+            // Enqueue children if we haven't visited too many nodes.
+            if (total_objects_visited as usize) < max_visit && depth < 100 {
+                if i + 1 < dc_off.len() {
+                    let start = dc_off[i] as usize;
+                    let end = dc_off[i + 1] as usize;
+                    for j in start..end {
+                        let child = dc_tgt[j];
+                        let child_ret = retained.get(child as usize).copied().unwrap_or(0);
+                        heap.push((child_ret, Reverse(depth + 1), child));
+                    }
+                }
+            }
+        }
+
+        // Build class summary sorted by total retained desc.
+        let mut class_rows: Vec<serde_json::Value> = class_summary
+            .into_iter()
+            .map(|(class, (count, total_ret, total_sh))| {
+                serde_json::json!({
+                    "class": class,
+                    "count": count,
+                    "total_retained": total_ret,
+                    "total_shallow": total_sh,
+                })
+            })
+            .collect();
+        class_rows.sort_by(|a, b| {
+            b["total_retained"]
+                .as_u64()
+                .unwrap_or(0)
+                .cmp(&a["total_retained"].as_u64().unwrap_or(0))
+        });
+        class_rows.truncate(20);
+
+        let root_class = {
+            let cidx = class_idx[idx] as usize;
+            sess.class_names
+                .get(cidx)
+                .map(|s| s.as_str())
+                .unwrap_or("<unknown>")
+        };
+
+        let result = serde_json::json!({
+            "object_index": p.object_index,
+            "root_class": root_class,
+            "root_retained_bytes": retained[idx],
+            "total_objects_in_subtree": total_objects_visited,
+            "total_shallow_in_subtree": total_shallow,
+            "shown": results.len(),
+            "objects": results,
+            "class_summary": class_rows,
+            "_hint": format!(
+                "The retained set is the dominator subtree: all objects that would be freed if {} \
+                 (object {}) were garbage collected. class_summary shows where the retained memory \
+                 goes. Use inspect_object on individual entries, or re-call with class_filter to \
+                 focus on a specific class.",
+                root_class, idx
+            ),
+        });
+
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
     /// List the 28 built-in named query views, grouped by category.
     #[tool(
         description = "List all 28 built-in named OQL queries grouped by category (Overview, Strings, Collections, Threads, Retained, Exploration). \
@@ -1845,6 +2289,12 @@ impl ServerHandler for HprofMcpServer {
              3. get_report({\"section\":\"leaks\"})           — root paths, dominated objects, dominator_tree\n\
              4. browse_dominators({object_index: ...})   — drill into accumulation point\n\
              5. get_report({\"section\":\"top-classes\"})     — which classes dominate memory\n\n\
+             GRAPH TRAVERSAL PRIMITIVES (for iterative exploration):\n\
+             - get_dominator_path({object_index: N})     — walk idom[] from object to GC root (retention chain)\n\
+             - get_outbound_references({object_index: N})— forward edges: what does this object reference? (requires with_graph=true)\n\
+             - get_retained_set({object_index: N})       — DFS dominator subtree: what would be freed if this object were collected?\n\
+             Combine these with browse_dominators (downward tree walk) and find_incoming_references (backward edges) \n\
+             for complete graph exploration.\n\n\
              ANSWERING SIMPLE QUESTIONS ('biggest objects', 'top classes', etc.):\n\
              - get_report({\"section\":\"top-objects\"})      — top 20 biggest objects by retained size\n\
              - get_report({\"section\":\"top-classes\"})      — top 20 classes by retained size\n\

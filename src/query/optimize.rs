@@ -158,7 +158,10 @@ pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
     // if both the planner set it AND a late op still references it.
     plan.needs.retained &= retained;
     plan.needs.dominator_children &= dominator_children;
-    plan.needs.ref_walk &= ref_walk;
+    // `@fillRatio` needs the forward CSR but emits no late op (it is resolved
+    // directly by compute_fill_ratio in the late window), so preserve the
+    // planner-set `ref_walk` need here instead of clearing it.
+    plan.needs.ref_walk &= ref_walk || plan.needs.fill_ratio;
     plan.needs.array_index &= array_index;
 }
 

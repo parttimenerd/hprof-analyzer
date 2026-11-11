@@ -2058,6 +2058,14 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             {
                 continue;
             }
+            // @fillRatio is resolved in the late phase (it traverses the forward
+            // reference graph). Skip it at scan time so it doesn't compare against
+            // Null and drop rows before the late phase evaluates it.
+            if self.plan.finalize_at != crate::query::plan::Phase::P1
+                && crate::query::plan::pred_uses_fill_ratio(&term.pred)
+            {
+                continue;
+            }
             // @dominatorDepth / @dominatorClass / dominatorof() are resolved in P3.
             // Skip at scan time so they don't compare against 0/Null and drop rows.
             if self.plan.finalize_at == crate::query::plan::Phase::P3
@@ -2439,16 +2447,28 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             let mut rows = self.rows;
             let mut row_src = self.row_src;
             let note: Option<String> = None;
-            // Apply window functions (post-scan, pre-ORDER-BY).
-            let extra_window_names: Vec<String> =
-                self.extra_window_attrs.iter().map(attr_name).collect();
-            apply_window_functions(
-                &mut rows,
-                &columns,
-                self.query,
-                self.extra_sort_attrs.len(),
-                &extra_window_names,
-            );
+            // Apply window functions (post-scan, pre-ORDER-BY). When reachability
+            // capture is armed (row_src.is_some()), DEFER to the resume layer: the
+            // post-scan DFN prune may remove unreachable rows, and window functions
+            // must rank over the reachable subset (not the raw scan), else
+            // ROW_NUMBER/RANK/LAG/LEAD leak phantom positions for the dropped rows.
+            // `resume_with_string_values` re-applies them after the prune.
+            let has_window = self
+                .query
+                .select
+                .iter()
+                .any(|it| matches!(it, SelectItem::Window { .. }));
+            if !(has_window && row_src.is_some()) {
+                let extra_window_names: Vec<String> =
+                    self.extra_window_attrs.iter().map(attr_name).collect();
+                apply_window_functions(
+                    &mut rows,
+                    &columns,
+                    self.query,
+                    self.extra_sort_attrs.len(),
+                    &extra_window_names,
+                );
+            }
             // Strip extra_window_attrs trailing values (no longer needed after
             // window evaluation). extra_sort_attrs remain for ORDER BY below.
             let extra_win_n = self.extra_window_attrs.len();

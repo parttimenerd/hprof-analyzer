@@ -7,6 +7,10 @@
 use std::io::Write;
 use std::process::Command;
 
+#[path = "common/table_matcher.rs"]
+mod table_matcher;
+use table_matcher::{query_error, query_table, query_table_args, query_table_error};
+
 const BIN: &str = env!("CARGO_BIN_EXE_hprof-analyzer");
 
 /// Locate the committed philosophers dump, or `None` when it is an unhydrated
@@ -417,49 +421,31 @@ fn query_escalated_respects_reachable_only_default() {
 fn query_count_matches_select_star_for_class_objects() {
     let Some(hprof) = philosophers() else { return };
     // java.lang.Class: the class-object case that exposed the over-count.
-    let count = parse_single_count(&run_query_args(
-        &hprof,
-        &["--all"],
-        "SELECT COUNT(*) FROM java.lang.Class",
-    ));
-    let rows = parse_row_count(&run_query_args(
-        &hprof,
-        &["--all"],
-        "SELECT * FROM java.lang.Class",
-    ));
+    let count = query_table_args(&hprof, &["--all"], "SELECT COUNT(*) FROM java.lang.Class")
+        .column_i64("COUNT(*)")[0];
+    let rows = query_table_args(&hprof, &["--all"], "SELECT * FROM java.lang.Class").row_count;
     assert_eq!(
-        count, rows,
+        count, rows as i64,
         "COUNT(*) ({count}) must equal SELECT * row count ({rows}) for java.lang.Class"
     );
 
     // A wide regex spanning many classes including java.lang.Class.
-    let count_re = parse_single_count(&run_query_args(
-        &hprof,
-        &["--all"],
-        "SELECT COUNT(*) FROM \"java.lang.*\"",
-    ));
-    let rows_re = parse_row_count(&run_query_args(
-        &hprof,
-        &["--all"],
-        "SELECT * FROM \"java.lang.*\"",
-    ));
+    let count_re = query_table_args(&hprof, &["--all"], "SELECT COUNT(*) FROM \"java.lang.*\"")
+        .column_i64("COUNT(*)")[0];
+    let rows_re = query_table_args(&hprof, &["--all"], "SELECT * FROM \"java.lang.*\"").row_count;
     assert_eq!(
-        count_re, rows_re,
+        count_re, rows_re as i64,
         "COUNT(*) ({count_re}) must equal SELECT * row count ({rows_re}) for java.lang.*"
     );
 
     // Sanity: an exact leaf class with no class-object rows is unaffected.
-    let s_count = parse_single_count(&run_query_args(
-        &hprof,
-        &["--all"],
-        "SELECT COUNT(*) FROM java.lang.String",
-    ));
-    let s_rows = parse_row_count(&run_query_args(
-        &hprof,
-        &["--all"],
-        "SELECT * FROM java.lang.String",
-    ));
-    assert_eq!(s_count, s_rows, "java.lang.String count must match rows");
+    let s_count = query_table_args(&hprof, &["--all"], "SELECT COUNT(*) FROM java.lang.String")
+        .column_i64("COUNT(*)")[0];
+    let s_rows = query_table_args(&hprof, &["--all"], "SELECT * FROM java.lang.String").row_count;
+    assert_eq!(
+        s_count, s_rows as i64,
+        "java.lang.String count must match rows"
+    );
     assert!(s_count > 0, "String count must be positive");
 }
 
@@ -557,13 +543,10 @@ fn query_subcommand_tostring_where_filters_in_late_phase() {
 #[test]
 fn tohex_formats_address() {
     let Some(hprof) = philosophers() else { return };
-    let out = run_query_stdout(&hprof, "SELECT toHex(255) FROM java.lang.Thread LIMIT 1");
-    assert!(out.contains("0xff"), "got: {out}");
-    let out2 = run_query_stdout(&hprof, "SELECT toHex(\"x\") FROM java.lang.Thread LIMIT 1");
-    assert!(
-        !out2.contains("0x"),
-        "non-int arg should be Null, got: {out2}"
-    );
+    let t = query_table(&hprof, "SELECT toHex(255) FROM java.lang.Thread LIMIT 1");
+    t.assert_single_cell("0xff");
+    let t2 = query_table(&hprof, "SELECT toHex(\"x\") FROM java.lang.Thread LIMIT 1");
+    t2.assert_single_cell("null");
 }
 
 /// Wave F: `toHex` over an arithmetic expression proves the inner-expr attr
@@ -1535,10 +1518,10 @@ fn refpath_length_tail_resolves() {
 #[test]
 fn plain_count_query_unaffected_by_length_tail_wiring() {
     let Some(hprof) = philosophers() else { return };
-    let out = run_query_stdout(&hprof, "SELECT COUNT(*) FROM java.lang.String");
-    assert!(out.contains("COUNT(*)"), "missing COUNT header:\n{out}");
-    let count = parse_single_count(&out);
-    assert!(count > 0, "philosophers dump has some Strings:\n{out}");
+    let t = query_table(&hprof, "SELECT COUNT(*) FROM java.lang.String");
+    t.assert_columns(&["COUNT(*)"]);
+    let count = t.column_i64("COUNT(*)")[0];
+    assert!(count > 0, "philosophers dump has some Strings");
 }
 
 /// A RefPath `@length` tail also works inside WHERE: `s.value.@length > N`
@@ -1996,6 +1979,35 @@ fn escalated_row_expanding_ops_survive_reachable_only() {
              row counts must match ({oql})"
         );
     }
+}
+
+/// `SELECT x AS RETAINED SET` must attribute each retained-closure member back
+/// to its source object. Before the fix it merged every seed's retained set into
+/// one flat, source-less table. The result must have two columns (`x` = source,
+/// `retained` = member) and, for `FROM java.lang.Thread`, multiple distinct
+/// source threads.
+#[test]
+fn retained_set_attributes_members_to_source() {
+    let Some(hprof) = philosophers() else { return };
+    let t = query_table(
+        &hprof,
+        "SELECT x AS RETAINED SET FROM java.lang.Thread x LIMIT 50",
+    );
+    t.assert_columns(&["x", "retained"]);
+    // Every source is a Thread, and there is more than one distinct source.
+    let mut sources = std::collections::HashSet::new();
+    for row in &t.rows {
+        assert!(
+            row[0].starts_with("java.lang.Thread@"),
+            "source column must be a Thread, got {}",
+            row[0]
+        );
+        sources.insert(row[0].clone());
+    }
+    assert!(
+        sources.len() > 1,
+        "retained set was merged into a single source; expected per-thread attribution"
+    );
 }
 
 /// `UNION` of two classes returns at least as many rows as either branch alone
@@ -6950,7 +6962,7 @@ fn query_dominators_with_retained_where_applies_filter() {
     let filtered_stdout = String::from_utf8_lossy(&filtered.stdout);
     let count_rows = |s: &str| {
         s.lines()
-            .filter(|l| l.starts_with("?@") || (l.contains('|') && !l.contains("---")))
+            .filter(|l| l.contains("@0x") || (l.contains('|') && !l.contains("---")))
             .count()
     };
     let all_count = count_rows(&all_stdout);
@@ -7214,80 +7226,43 @@ fn run_values_query(oql: &str) -> String {
 fn values_basic_two_rows() {
     // `SELECT * FROM (VALUES (1, "a"), (2, "b")) AS t(id, name)` must return
     // exactly two data rows with id=1,name=a and id=2,name=b.
-    let out = run_values_query(r#"SELECT * FROM (VALUES (1, "a"), (2, "b")) AS t(id, name)"#);
-    // Both column headers must appear.
-    assert!(out.contains("id"), "missing 'id' column header:\n{out}");
-    assert!(out.contains("name"), "missing 'name' column header:\n{out}");
-    // Row values must be present.
-    assert!(out.contains('1'), "missing value 1:\n{out}");
-    assert!(out.contains('2'), "missing value 2:\n{out}");
-    assert!(out.contains('a'), "missing value 'a':\n{out}");
-    assert!(out.contains('b'), "missing value 'b':\n{out}");
-    // Exactly two data rows.
-    let row_count = out
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !is_separator_line(l) && !l.contains("id"))
-        .filter(|l| l.contains('|'))
-        .count();
-    assert_eq!(
-        row_count, 2,
-        "expected 2 data rows, got {row_count}:\n{out}"
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        r#"SELECT * FROM (VALUES (1, "a"), (2, "b")) AS t(id, name)"#,
     );
+    t.assert_eq(&["id", "name"], &[&["1", "a"], &["2", "b"]]);
 }
 
 #[test]
 fn values_select_named_column() {
     // `SELECT name FROM (VALUES (1, "hello")) AS t(id, name)` should project
     // only the name column and return "hello".
-    let out = run_values_query(r#"SELECT name FROM (VALUES (1, "hello")) AS t(id, name)"#);
-    assert!(out.contains("hello"), "projected value missing:\n{out}");
-    // The 'id' column must NOT appear (we only selected 'name').
-    assert!(
-        !out.contains("| id") && !out.contains("id |"),
-        "'id' column should not appear when only 'name' selected:\n{out}"
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        r#"SELECT name FROM (VALUES (1, "hello")) AS t(id, name)"#,
     );
+    t.assert_single_cell("hello");
 }
 
 #[test]
 fn values_with_limit() {
     // LIMIT 1 on a 3-row VALUES must return exactly one data row.
-    let out = run_values_query(
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
         r#"SELECT * FROM (VALUES (1, "a"), (2, "b"), (3, "c")) AS t(id, v) LIMIT 1"#,
     );
-    let data_rows: Vec<&str> = out
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !is_separator_line(l) && !l.contains("id"))
-        .filter(|l| l.contains('|'))
-        .collect();
-    assert_eq!(
-        data_rows.len(),
-        1,
-        "LIMIT 1 should yield 1 row, got {}:\n{out}",
-        data_rows.len()
-    );
+    t.assert_row_count(1);
+    assert_eq!(t.row(0), ["1", "a"].as_slice());
 }
 
 #[test]
 fn values_order_by() {
     // ORDER BY id DESC should put row 3 first.
-    let out =
-        run_values_query(r#"SELECT id FROM (VALUES (1), (3), (2)) AS t(id) ORDER BY id DESC"#);
-    // The output should contain 3 rows in DESC order: 3, 2, 1.
-    // Confirm "3 rows" is reported and "3" appears before "1" in the output.
-    assert!(
-        out.contains("(3 rows)"),
-        "expected (3 rows) in output:\n{out}"
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        r#"SELECT id FROM (VALUES (1), (3), (2)) AS t(id) ORDER BY id DESC"#,
     );
-    let pos3 = out.find('3').unwrap_or(usize::MAX);
-    let pos1 = out.rfind('1').unwrap_or(0);
-    // "3" (the value) must appear before "1" (the value) — i.e., 3 is first.
-    // We look for the first standalone '3' vs the last standalone '1' as a proxy
-    // for ordering; the (3 rows) footer contains '3' too, but pos1 anchors
-    // to the last '1' which is safely in the data section.
-    assert!(
-        pos3 < pos1,
-        "ORDER BY DESC: '3' should appear before '1' in output:\n{out}"
-    );
+    t.assert_eq(&["id"], &[&["3"], &["2"], &["1"]]);
 }
 
 // ── JOIN support ─────────────────────────────────────────────────────────────
@@ -7316,18 +7291,13 @@ fn inner_join_filters_unmatched_rows() {
 #[test]
 fn left_join_keeps_unmatched_rows_with_nulls() {
     // LEFT JOIN: all 3 LHS rows kept; row with id=2 gets Null for RHS columns.
-    let out = run_values_query(
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
         r#"SELECT * FROM (VALUES (1, "a"), (2, "b"), (3, "c")) AS t(id, letter) LEFT JOIN (VALUES (1, "alpha"), (3, "gamma")) AS u(uid, name) ON id = uid"#,
     );
-    assert!(
-        out.contains("(3 rows)"),
-        "expected (3 rows) in output:\n{out}"
-    );
-    // Row with letter 'b' must be present (with null RHS values).
-    assert!(
-        out.to_lowercase().contains("null") || out.contains("null"),
-        "Null expected for unmatched LEFT JOIN row:\n{out}"
-    );
+    t.assert_row_count(3);
+    // The unmatched id=2 row is kept, with null RHS cells.
+    assert!(t.contains_row(&["2", "b", "null", "null"]));
 }
 
 #[test]
@@ -8621,22 +8591,225 @@ fn oql74b_union_all_preserves_duplicates() {
 #[test]
 fn oql75_nested_case_when() {
     // Nested CASE WHEN: THEN value itself is another CASE expression.
-    let out = run_values_query(
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
         r#"SELECT CASE WHEN x > 4 THEN "high" ELSE CASE WHEN x > 2 THEN "mid" ELSE "low" END END FROM (VALUES (1), (3), (5)) AS t(x)"#,
     );
-    assert!(out.contains("low"), "x=1 should give 'low':\n{out}");
-    assert!(out.contains("mid"), "x=3 should give 'mid':\n{out}");
-    assert!(out.contains("high"), "x=5 should give 'high':\n{out}");
+    t.assert_rows(&[&["low"], &["mid"], &["high"]]);
 }
 
 #[test]
 fn oql75b_where_boolean_literal() {
     // WHERE true — boolean literal in predicate.
-    let out = run_values_query(r#"SELECT v FROM (VALUES (1), (2), (3)) AS t(v) WHERE true"#);
-    let data = extract_data_rows(&out);
-    assert_eq!(data.len(), 3, "WHERE true should return all 3 rows:\n{out}");
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        r#"SELECT v FROM (VALUES (1), (2), (3)) AS t(v) WHERE true"#,
+    );
+    t.assert_eq(&["v"], &[&["1"], &["2"], &["3"]]);
 
-    let out2 = run_values_query(r#"SELECT v FROM (VALUES (1), (2), (3)) AS t(v) WHERE false"#);
-    let data2 = extract_data_rows(&out2);
-    assert_eq!(data2.len(), 0, "WHERE false should return 0 rows:\n{out2}");
+    // WHERE false — boolean literal that matches nothing.
+    let t2 = query_table(
+        "/nonexistent-dummy.hprof",
+        r#"SELECT v FROM (VALUES (1), (2), (3)) AS t(v) WHERE false"#,
+    );
+    assert!(t2.is_empty(), "WHERE false should return 0 rows");
+}
+
+#[test]
+fn table_matcher_parses_json_into_cells() {
+    let Some(hprof) = philosophers() else { return };
+    let t = query_table(
+        &hprof,
+        "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM java.lang.Thread ORDER BY ret DESC LIMIT 2",
+    );
+    t.assert_eq(&["idx", "ret"], &[&["182023", "309608"], &["65980", "288"]]);
+    assert_eq!(t.column("idx"), vec!["182023", "65980"]);
+    assert_eq!(t.cell(0, 1), "309608");
+}
+
+#[test]
+fn table_matcher_surfaces_errors() {
+    let Some(hprof) = philosophers() else { return };
+    let err = query_error(&hprof, "SELECT t.priority FROM java.lang.Thread t LIMIT 3");
+    assert!(
+        err.contains("unknown field"),
+        "unexpected error text: {err}"
+    );
+
+    // query_table_error returns a Table with `error` populated instead of
+    // panicking, so a test can assert on the error without the process failing.
+    let t = query_table_error(&hprof, "SELECT t.priority FROM java.lang.Thread t LIMIT 3");
+    assert!(
+        t.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("unknown field"),
+        "query_table_error should surface the error: {:?}",
+        t.error
+    );
+}
+
+// ── Bug-hunt regression tests ────────────────────────────────────────────────
+// Each test below reproduces a specific wrong result in the OQL engine and is
+// expected to FAIL against the current binary (it is a regression test, not a
+// passing one). See the bug report for expected-vs-actual details.
+
+/// BUG: window functions are computed over the RAW (unreachable-inclusive) heap
+/// rather than the reachable-only row set the query actually returns. The dump
+/// has 29 `java.lang.Thread` instances, 2 of which are unreachable; the default
+/// reachable-only scan returns 27. `ROW_NUMBER() OVER (ORDER BY @objectId)`
+/// must therefore yield the consecutive sequence `1..=27`, but it instead skips
+/// the ranks of the unreachable rows (1, 2, 4, 5, 6, 8, …), leaking phantom
+/// positions. `LAG`/`LEAD`/`RANK`/`DENSE_RANK` are affected the same way.
+#[test]
+fn bug_window_row_number_skips_unreachable_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let t = query_table(
+        &hprof,
+        "SELECT ROW_NUMBER() OVER (ORDER BY @objectId) AS rn FROM java.lang.Thread ORDER BY @objectId",
+    );
+    assert!(!t.is_empty(), "expected Thread rows");
+    let rn = t.column("rn");
+    for (i, v) in rn.iter().enumerate() {
+        assert_eq!(
+            *v,
+            (i + 1).to_string(),
+            "ROW_NUMBER over the returned rows must be consecutive 1..N; rn[{i}] = {v} (the window counted unreachable objects)"
+        );
+    }
+}
+
+/// BUG: `GROUP BY <expression>` counts the raw (unreachable-inclusive) universe,
+/// while plain `COUNT(*)` and `GROUP BY <plain attribute>` respect the
+/// reachable-only default. For `java.lang.Object`, `COUNT(*)` is 134275 but
+/// `GROUP BY classof(o)` totals 134277 (it folds in the 2 unreachable objects).
+#[test]
+fn bug_group_by_expression_counts_unreachable_objects() {
+    let Some(hprof) = philosophers() else { return };
+    let plain = query_table(&hprof, "SELECT COUNT(*) AS n FROM java.lang.Object");
+    let plain_n: u64 = plain.cell(0, 0).parse().expect("integer count");
+    let grouped = query_table(
+        &hprof,
+        "SELECT classof(o) AS c, COUNT(*) AS n FROM java.lang.Object o GROUP BY classof(o)",
+    );
+    let group_total: u64 = grouped
+        .column("n")
+        .iter()
+        .map(|s| s.parse::<u64>().expect("integer group count"))
+        .sum();
+    assert_eq!(
+        group_total, plain_n,
+        "GROUP BY classof(o) total must equal plain COUNT(*) (both reachable-only); the GROUP BY path counted unreachable objects"
+    );
+}
+
+/// BUG: a JOIN `ON` condition that references a FROM-side object attribute
+/// (e.g. `s.@objectId`) never matches, even against a literal. `WHERE s.@objectId
+/// = 177` returns the single `java.lang.String` with that id, but
+/// `JOIN (VALUES (177)) … ON s.@objectId = v.id` (and even `ON s.@objectId = 177`)
+/// return 0 rows — the FROM-side attribute is not resolved inside the ON clause.
+#[test]
+fn bug_join_on_from_side_objectid_never_matches() {
+    let Some(hprof) = philosophers() else { return };
+    // Sanity: object 177 exists among the Strings (reachable-only).
+    let where_t = query_table(
+        &hprof,
+        "SELECT @objectId FROM java.lang.String s WHERE s.@objectId = 177",
+    );
+    assert_eq!(
+        where_t.len(),
+        1,
+        "sanity: exactly one String has @objectId 177"
+    );
+
+    let join_t = query_table(
+        &hprof,
+        "SELECT s.@objectId AS id FROM java.lang.String s JOIN (VALUES (177)) AS v(id) ON s.@objectId = v.id",
+    );
+    assert_eq!(
+        join_t.len(),
+        1,
+        "JOIN ON s.@objectId = v.id must match the single String with id 177, got {} rows",
+        join_t.len()
+    );
+    if join_t.len() == 1 {
+        assert_eq!(join_t.cell(0, 0), "177");
+    }
+}
+
+/// BUG: `LIMIT` on an `EXCEPT` query returns `(total - LIMIT)` rows instead of
+/// capping at `min(total, LIMIT)`. `A EXCEPT A` is empty; with `LIMIT 5` it must
+/// stay empty, but it returns 22 rows (27 reachable threads − 5).
+#[test]
+fn bug_except_limit_returns_wrong_row_count() {
+    let Some(hprof) = philosophers() else { return };
+    let t = query_table(
+        &hprof,
+        "SELECT @objectId FROM java.lang.Thread EXCEPT SELECT @objectId FROM java.lang.Thread LIMIT 5",
+    );
+    assert_eq!(
+        t.len(),
+        0,
+        "A EXCEPT A must be empty regardless of LIMIT; got {} rows",
+        t.len()
+    );
+}
+
+/// BUG: `dominatorof(x)` returns the super-root sentinel index (242426) for GC
+/// roots instead of Null, disagreeing with `@dominatorClass` which correctly
+/// returns null for the same objects. Thread 96298 is a GC root.
+#[test]
+fn bug_dominatorof_returns_superroot_not_null_for_gc_root() {
+    let Some(hprof) = philosophers() else { return };
+    let t = query_table(
+        &hprof,
+        "SELECT @objectId, dominatorof(t) AS dom, @dominatorClass AS dc FROM java.lang.Thread t ORDER BY @objectId",
+    );
+    let ids = t.column("@objectId");
+    let pos = ids
+        .iter()
+        .position(|v| *v == "96298")
+        .expect("thread 96298 must be present");
+    assert_eq!(
+        t.cell(pos, 2),
+        "null",
+        "@dominatorClass for a GC root must be null"
+    );
+    assert_eq!(
+        t.cell(pos, 1),
+        "null",
+        "dominatorof for a GC root must be null, got {} (super-root sentinel leaked)",
+        t.cell(pos, 1)
+    );
+}
+
+/// `@fillRatio` must auto-escalate (not error) and resolve real values in both
+/// SELECT and WHERE. The WHERE form was previously evaluated at scan time (where
+/// `@fillRatio` is Null) and dropped every row, so a `COUNT(*) WHERE @fillRatio`
+/// returned 0 while the unfiltered count was non-zero.
+#[test]
+fn fill_ratio_resolves_in_select_and_where() {
+    let Some(hprof) = philosophers() else { return };
+    let total = query_table(&hprof, "SELECT COUNT(*) AS n FROM java.util.ArrayList");
+    let total_n: i64 = total.cell(0, 0).parse().expect("integer count");
+    let filtered = query_table(
+        &hprof,
+        "SELECT COUNT(*) AS n FROM java.util.ArrayList WHERE @fillRatio IS NOT NULL",
+    );
+    let filtered_n: i64 = filtered.cell(0, 0).parse().expect("integer count");
+    assert!(
+        filtered_n > 0,
+        "WHERE @fillRatio IS NOT NULL must match some ArrayLists (got 0)"
+    );
+    assert!(
+        filtered_n <= total_n,
+        "filtered count {filtered_n} must not exceed total {total_n}"
+    );
+    // The projection path must resolve non-null values too.
+    let rows = query_table(
+        &hprof,
+        "SELECT @fillRatio AS fr FROM java.util.ArrayList WHERE @fillRatio IS NOT NULL LIMIT 1",
+    );
+    assert_eq!(rows.len(), 1, "expected one non-null fill-ratio row");
+    assert_ne!(rows.cell(0, 0), "null", "fill-ratio cell must be a number");
 }

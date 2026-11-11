@@ -227,6 +227,36 @@ impl LateCtx<'_> {
         let row = *self.class_idx.get(dense as usize)? as usize;
         self.class_names.get(row).map(String::as_str)
     }
+
+    /// The immediate dominator's dense index, or `None` when the object has no
+    /// dominator: either it is a GC root (its idom is the virtual super-root at
+    /// index `n`, stored as `idom.len() - 1`) or it is unreachable/undefined
+    /// (`u32::MAX`). Mirrors `@dominatorClass`, which returns Null in both cases.
+    pub fn dominator_of(&self, dense: u32) -> Option<u32> {
+        let d = *self.idom.get(dense as usize)?;
+        if d == u32::MAX || (d as usize) + 1 == self.idom.len() {
+            None
+        } else {
+            Some(d)
+        }
+    }
+
+    /// Distance (in dominator hops) from the GC roots. `0` when the object has no
+    /// real dominator — it is a GC root / directly retained by the virtual
+    /// super-root. This keeps `@dominatorDepth` consistent with `dominator_of`
+    /// and `@dominatorClass`, which both report Null for such objects.
+    pub fn dominator_depth(&self, dense: u32) -> u32 {
+        let mut depth: u32 = 0;
+        let mut cur = dense;
+        while let Some(dom) = self.dominator_of(cur) {
+            depth += 1;
+            cur = dom;
+            if depth > DOMINATOR_DEPTH_CAP {
+                break;
+            }
+        }
+        depth
+    }
 }
 
 /// Resolve one reference hop: for each source dense index, emit the target dense
@@ -473,6 +503,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
             || crate::query::plan::pred_uses_class_metadata(p)
             || crate::query::plan::pred_uses_edge(p)
             || crate::query::plan::pred_uses_dominator_of(p)
+            || crate::query::plan::pred_uses_fill_ratio(p)
     });
     let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
     let get_filtered_idx = |carry: &CrossPhaseEntry| -> Vec<u32> {
@@ -511,9 +542,9 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
             }
             StageOp::RetainedSet { cap } => {
                 let seeds = get_filtered_idx(entry);
-                let (set, trunc) = run_retained_set(&seeds, *cap, ctx);
+                let (set, trunc) = run_retained_set_per_seed(&seeds, *cap, ctx);
                 let truncated = entry.carry.truncated() || trunc;
-                return dominator_rows(entry, q, &set, truncated, ctx);
+                return retained_set_rows(entry, q, &set, truncated, ctx);
             }
             // The plan emits one RefWalkResolve op per hop, but the whole walk is
             // driven off the query's RefPath AST in one pass here — the first op
@@ -657,6 +688,63 @@ fn dominator_rows(
     }
 }
 
+/// Build a two-column result `(source, retained)` for `AS RETAINED SET`: each row
+/// associates one retained-closure member back to the seed (source) object it
+/// belongs to. Unlike `dominator_rows`, the closure is computed PER SEED so the
+/// retained objects are attributed to their source rather than merged into one
+/// flat table. The source column is named after the FROM alias (`x` in
+/// `FROM Thread x`) and the second column is `retained`.
+fn retained_set_rows(
+    entry: &CrossPhaseEntry,
+    q: &Query,
+    pairs: &[(u32, u32)],
+    mut truncated: bool,
+    ctx: &LateCtx,
+) -> QueryResult {
+    let mut pairs = pairs.to_vec();
+    if let Some(limit) = stage_limit(q) {
+        if pairs.len() as u64 > limit {
+            pairs.truncate(limit as usize);
+            truncated = true;
+        }
+    }
+    let source_col = q.alias.clone().unwrap_or_else(|| "source".to_string());
+    let rows: Vec<Vec<QueryValue>> = pairs
+        .iter()
+        .map(|&(s, m)| {
+            vec![
+                QueryValue::ObjRef {
+                    index: s as u64,
+                    class: ctx.class_name_of(s).unwrap_or("?").to_string(),
+                    addr: ctx.id_map.to_addr_opt(s),
+                },
+                QueryValue::ObjRef {
+                    index: m as u64,
+                    class: ctx.class_name_of(m).unwrap_or("?").to_string(),
+                    addr: ctx.id_map.to_addr_opt(m),
+                },
+            ]
+        })
+        .collect();
+    QueryResult {
+        name: entry.name.clone(),
+        oql: String::new(),
+        columns: vec![
+            QueryColumn { name: source_col },
+            QueryColumn {
+                name: "retained".to_string(),
+            },
+        ],
+        row_count: rows.len() as u64,
+        rows,
+        truncated,
+        error: None,
+        note: None,
+        viz: None,
+        elapsed_ms: None,
+    }
+}
+
 /// Resolve an N-hop `RefPath` projection in the P2 late window. For each carried
 /// seed, walk the hop fields to the resolved target's dense index and project the
 /// tail: an identity attr (`@objectId`/`@objectAddress`) answered directly from
@@ -729,10 +817,10 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                 SelectItem::Attr(Attr::RetainedHeapSize) => {
                     QueryValue::Int(ctx.retained.get(s as usize).copied().unwrap_or(0) as i64)
                 }
-                SelectItem::Attr(Attr::DominatorOf(_)) => match ctx.idom.get(s as usize).copied() {
-                    Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
-                    _ => QueryValue::Null,
-                },
+                SelectItem::Attr(Attr::DominatorOf(_)) => ctx
+                    .dominator_of(s)
+                    .map(|d| QueryValue::Int(d as i64))
+                    .unwrap_or(QueryValue::Null),
                 SelectItem::Attr(Attr::DominatorClass) => {
                     let dom = ctx.idom.get(s as usize).copied().unwrap_or(u32::MAX);
                     if dom == u32::MAX {
@@ -774,20 +862,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                     .map(QueryValue::Float)
                     .unwrap_or(QueryValue::Null),
                 SelectItem::Attr(Attr::DominatorDepth) => {
-                    let mut depth: u32 = 0;
-                    let mut cur = s;
-                    loop {
-                        let dom = ctx.idom.get(cur as usize).copied().unwrap_or(u32::MAX);
-                        if dom == u32::MAX || dom == cur {
-                            break;
-                        }
-                        depth += 1;
-                        cur = dom;
-                        if depth > DOMINATOR_DEPTH_CAP {
-                            break;
-                        }
-                    }
-                    QueryValue::Int(depth as i64)
+                    QueryValue::Int(ctx.dominator_depth(s) as i64)
                 }
                 SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
                     match ctx.class_name_of(s) {
@@ -1217,10 +1292,10 @@ fn eval_late_expr_multi(
             // Returns Null for GC-root objects (idom == u32::MAX, no dominator).
             // Users can wrap it: classof(dominatorof(x)) uses eval_late_expr_multi
             // recursively through SelectItem::Expr or a method call.
-            Attr::DominatorOf(_) => match ctx.idom.get(idx as usize).copied() {
-                Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
-                _ => QueryValue::Null,
-            },
+            Attr::DominatorOf(_) => ctx
+                .dominator_of(idx)
+                .map(|d| QueryValue::Int(d as i64))
+                .unwrap_or(QueryValue::Null),
             // @dominatorClass: pretty class name of the immediate dominator.
             // Returns Null for GC-root objects (idom == u32::MAX).
             Attr::DominatorClass => {
@@ -1235,24 +1310,9 @@ fn eval_late_expr_multi(
                         .unwrap_or(QueryValue::Null)
                 }
             }
-            // @dominatorDepth: depth of this object in the dominator tree.
-            // Root's direct children = depth 1.
-            Attr::DominatorDepth => {
-                let mut depth: u32 = 0;
-                let mut cur = idx;
-                loop {
-                    let dom = ctx.idom.get(cur as usize).copied().unwrap_or(u32::MAX);
-                    if dom == u32::MAX || dom == cur {
-                        break;
-                    }
-                    depth += 1;
-                    cur = dom;
-                    if depth > DOMINATOR_DEPTH_CAP {
-                        break; // safety cap for degenerate cycles
-                    }
-                }
-                QueryValue::Int(depth as i64)
-            }
+            // @dominatorDepth: distance in dominator hops from the GC roots; 0
+            // for GC-root/directly-rooted objects (consistent with dominatorof).
+            Attr::DominatorDepth => QueryValue::Int(ctx.dominator_depth(idx) as i64),
             // @category: classification category of this object's class.
             Attr::Category => {
                 let ci = ctx.class_idx.get(idx as usize).copied().unwrap_or(u32::MAX) as usize;
@@ -1673,10 +1733,10 @@ fn project_string_row_item(
         SelectItem::Attr(Attr::RetainedHeapSize) => {
             QueryValue::Int(ctx.retained.get(dense as usize).copied().unwrap_or(0) as i64)
         }
-        SelectItem::Attr(Attr::DominatorOf(_)) => match ctx.idom.get(dense as usize).copied() {
-            Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
-            _ => QueryValue::Null,
-        },
+        SelectItem::Attr(Attr::DominatorOf(_)) => ctx
+            .dominator_of(dense)
+            .map(|d| QueryValue::Int(d as i64))
+            .unwrap_or(QueryValue::Null),
         SelectItem::Attr(Attr::DominatorClass) => {
             let dom = ctx.idom.get(dense as usize).copied().unwrap_or(u32::MAX);
             if dom == u32::MAX {
@@ -1690,20 +1750,7 @@ fn project_string_row_item(
             }
         }
         SelectItem::Attr(Attr::DominatorDepth) => {
-            let mut depth: u32 = 0;
-            let mut cur = dense;
-            loop {
-                let dom = ctx.idom.get(cur as usize).copied().unwrap_or(u32::MAX);
-                if dom == u32::MAX || dom == cur {
-                    break;
-                }
-                depth += 1;
-                cur = dom;
-                if depth > DOMINATOR_DEPTH_CAP {
-                    break;
-                }
-            }
-            QueryValue::Int(depth as i64)
+            QueryValue::Int(ctx.dominator_depth(dense) as i64)
         }
         SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
             match ctx.class_name_of(dense) {
@@ -1885,20 +1932,7 @@ fn project_array_index_item(
             }
         }
         SelectItem::Attr(Attr::DominatorDepth) => {
-            let mut depth: u32 = 0;
-            let mut cur = dense;
-            loop {
-                let dom = ctx.idom.get(cur as usize).copied().unwrap_or(u32::MAX);
-                if dom == u32::MAX || dom == cur {
-                    break;
-                }
-                depth += 1;
-                cur = dom;
-                if depth > DOMINATOR_DEPTH_CAP {
-                    break;
-                }
-            }
-            QueryValue::Int(depth as i64)
+            QueryValue::Int(ctx.dominator_depth(dense) as i64)
         }
         SelectItem::Expr(e) => {
             let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
@@ -3233,10 +3267,10 @@ fn project_late_row(
         .map(|it| match it {
             SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
             SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
-            SelectItem::Attr(Attr::DominatorOf(_)) => match ctx.idom.get(idx as usize).copied() {
-                Some(d) if d != u32::MAX => QueryValue::Int(d as i64),
-                _ => QueryValue::Null,
-            },
+            SelectItem::Attr(Attr::DominatorOf(_)) => ctx
+                .dominator_of(idx)
+                .map(|d| QueryValue::Int(d as i64))
+                .unwrap_or(QueryValue::Null),
             SelectItem::Attr(Attr::DominatorClass) => {
                 let dom = ctx.idom.get(idx as usize).copied().unwrap_or(u32::MAX);
                 if dom == u32::MAX {
@@ -3250,20 +3284,7 @@ fn project_late_row(
                 }
             }
             SelectItem::Attr(Attr::DominatorDepth) => {
-                let mut depth: u32 = 0;
-                let mut cur = idx;
-                loop {
-                    let dom = ctx.idom.get(cur as usize).copied().unwrap_or(u32::MAX);
-                    if dom == u32::MAX || dom == cur {
-                        break;
-                    }
-                    depth += 1;
-                    cur = dom;
-                    if depth > DOMINATOR_DEPTH_CAP {
-                        break;
-                    }
-                }
-                QueryValue::Int(depth as i64)
+                QueryValue::Int(ctx.dominator_depth(idx) as i64)
             }
             SelectItem::Attr(Attr::UsedHeapSize) => {
                 QueryValue::Int(ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64)
@@ -3366,14 +3387,13 @@ pub(crate) fn run_dominator_children(matches: &[u32], cap: usize, ctx: &LateCtx)
 }
 
 /// Immediate dominator (idom) of each matched dense index, in match order. Tree
-/// roots (`idom == u32::MAX`) have no dominator and emit nothing.
+/// roots (GC roots whose idom is the virtual super-root, and `idom == u32::MAX`)
+/// have no dominator and emit nothing.
 pub(crate) fn run_dominator_of(matches: &[u32], ctx: &LateCtx) -> Vec<u32> {
     let mut out = Vec::new();
     for &i in matches {
-        if let Some(&d) = ctx.idom.get(i as usize) {
-            if d != u32::MAX {
-                out.push(d);
-            }
+        if let Some(d) = ctx.dominator_of(i) {
+            out.push(d);
         }
     }
     out
@@ -3438,6 +3458,34 @@ pub(crate) fn run_retained_set(seeds: &[u32], cap: usize, ctx: &LateCtx) -> (Vec
     (out, false)
 }
 
+/// Compute the retained closure of EACH seed separately, returning `(seed,
+/// member)` pairs so retained objects stay associated with their source. Backs
+/// `AS RETAINED SET` so it does not merge every seed's retained set into one
+/// flat, source-less table. The per-seed closure reuses [`run_retained_set`];
+/// a member that appears in multiple seeds' retained sets is emitted once per
+/// source (that is the point — attribution, not dedup across sources).
+pub(crate) fn run_retained_set_per_seed(
+    seeds: &[u32],
+    cap: usize,
+    ctx: &LateCtx,
+) -> (Vec<(u32, u32)>, bool) {
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    let mut truncated = false;
+    for &s in seeds {
+        let remaining = cap.saturating_sub(out.len());
+        if remaining == 0 {
+            truncated = true;
+            break;
+        }
+        let (members, trunc) = run_retained_set(&[s], remaining, ctx);
+        for m in members {
+            out.push((s, m));
+        }
+        truncated |= trunc;
+    }
+    (out, truncated)
+}
+
 /// Compute the fill ratio for a collection object: non-null backing-array slots
 /// divided by total backing-array slots. Returns `None` when:
 /// - the forward CSR is empty (ref-walk not armed),
@@ -3450,7 +3498,10 @@ fn compute_fill_ratio(obj: u32, ctx: &LateCtx) -> Option<f64> {
     }
     let ci = ctx.class_idx.get(obj as usize).copied().unwrap_or(u32::MAX) as usize;
     let class_name = ctx.class_names.get(ci)?;
-    let di = find_desc_by_name(class_name, ctx.coll_descs)?;
+    // `class_names` is dotted (`java.util.ArrayList`) while `find_desc_by_name`
+    // matches slash-form (`java/util/ArrayList`); convert before lookup.
+    let slash = class_name.replace('.', "/");
+    let di = find_desc_by_name(&slash, ctx.coll_descs)?;
     let desc = &ctx.coll_descs[di];
     let (array_field, _) = desc.array_field.as_ref()?;
 

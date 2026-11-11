@@ -45,7 +45,7 @@ $ hprof-analyzer query heap.hprof \
 
 ```
 SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
-  FROM [OBJECTS] <class | "regex" | INSTANCEOF class | ( subquery ) | VALUES (…) AS t(cols) | ENTRIES class> [alias]
+  FROM [OBJECTS] <class | "regex" | INSTANCEOF class | ( subquery ) | (VALUES …) AS t(cols) | ENTRIES class> [alias]
   [JOIN <source> [AS alias] ON <expr> = <expr>]
   [WHERE <predicate>]
   [GROUP BY <expr> [, <expr>]]
@@ -82,7 +82,7 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 | `FROM "java\.lang\..*"` | class-name regex (double-quoted) |
 | `FROM ( SELECT … ) s` | subquery as the row source |
 | `FROM ENTRIES java.util.ArrayList`¹ | iterate logical entries of a collection — see [FROM ENTRIES](#from-entries) |
-| `FROM VALUES (1, 'a'), (2, 'b') AS t(n, s)` | inline literal rows — see [VALUES](#values-source) |
+| `FROM (VALUES (1, 'a'), (2, 'b')) AS t(n, s)` | inline literal rows — see [VALUES](#values-source) |
 
 ### JOIN
 
@@ -91,17 +91,17 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 ```
 SELECT x.@displayName, c.retained_total
 FROM java.lang.Object x
-JOIN classes c ON x.@className = c.class_name
+JOIN __classes__ c ON x.@className = c.class_name
 ```
 
 Supported join sources:
 
 | Source | Columns |
 |--------|---------|
-| `VALUES (…) AS t(cols)` | user-defined inline rows |
-| `classes` | `class_name`, `instance_count`, `shallow_total`, `retained_total` |
-| `gc_roots` | `dense_idx`, `root_type`, `root_type_name` |
-| `threads` | `serial`, `obj_idx`, `name`, `is_daemon`, `priority` |
+| `(VALUES (…)) AS t(cols)` | user-defined inline rows |
+| `__classes__` | `class_name`, `instance_count`, `shallow_total`, `retained_total` |
+| `__gc_roots__` | `dense_idx`, `root_type`, `root_type_name` |
+| `__threads__` | `serial`, `obj_idx`, `name`, `is_daemon`, `priority` |
 
 Bare `JOIN` means `INNER JOIN`. `LEFT JOIN` keeps outer rows that have no match (right-side columns become `NULL`).
 
@@ -441,12 +441,12 @@ lookup tables inline, or to cross-join heap results with known constants.
 -- Map priority numbers to labels
 SELECT x.name, p.label
 FROM java.lang.Thread x
-JOIN VALUES (1, 'MIN'), (5, 'NORM'), (10, 'MAX') AS p(n, label)
+JOIN (VALUES (1, 'MIN'), (5, 'NORM'), (10, 'MAX')) AS p(n, label)
   ON x.priority = p.n
 
 -- Inline threshold comparison
 SELECT COUNT(*) FROM INSTANCEOF java.util.List s
-WHERE @usedHeapSize > (SELECT t.threshold FROM VALUES (65536) AS t(threshold))
+WHERE @usedHeapSize > (SELECT t.threshold FROM (VALUES (65536)) AS t(threshold))
 ```
 
 Column names are declared in `AS alias(col1, col2, …)` and referenced as
@@ -893,8 +893,8 @@ These features are available in `hprof-analyzer` but not in Eclipse MAT's OQL:
 | `pathToRoot(x)`¹ — walk idom[] upward to GC root | `SELECT pathToRoot(s) FROM … LIMIT 1` |
 | `FROM ENTRIES <ClassName>`¹ — collection entry iteration (ArrayList, Vector, ArrayDeque, HashMap, LinkedHashMap, HashSet) | `SELECT index, element FROM ENTRIES java.util.ArrayList` |
 | SQL LIKE wildcards (`%`, `_`) auto-translated to regex | `LIKE "%error%"` works alongside `LIKE ".*error.*"` |
-| `VALUES (…)` inline table source | `SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(n, s)` |
-| `INNER JOIN` / `LEFT JOIN` against `VALUES` tables or virtual tables (`classes`, `gc_roots`, `threads`) | `FROM java.lang.Object x JOIN classes c ON x.@className = c.class_name` |
+| `(VALUES (…))` inline table source | `SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(n, s)` |
+| `INNER JOIN` / `LEFT JOIN` against `VALUES` tables or virtual tables (`__classes__`, `__gc_roots__`, `__threads__`) | `FROM java.lang.Object x JOIN __classes__ c ON x.@className = c.class_name` |
 | `NOT IN (subquery)` | `WHERE @objectAddress NOT IN (SELECT @objectAddress FROM Foo)` |
 | `GROUP BY` over reference-path hops and `@valueArray` | `GROUP BY x.key` |
 
