@@ -1156,8 +1156,7 @@ impl HprofMcpServer {
                           Requires that the dump was loaded with load_dump({with_graph: true}); \
                           returns an error with instructions otherwise. \
                           Each result row has: src_idx (dense index of the referrer), \
-                          src_class, field_name (field on src that points to this object), \
-                          src_shallow, src_retained. \
+                          src_class, src_shallow, src_retained. \
                           Use src_idx with browse_dominators to follow the retainer chain upward. \
                           Typical workflow: find a suspicious object with query/browse_dominators, \
                           then call find_incoming_references to see which field of which class holds it alive."
@@ -1171,41 +1170,83 @@ impl HprofMcpServer {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
 
-        let graph = sess.report.obj_graph_flat.as_ref().ok_or_else(|| {
-            McpError::invalid_params(
+        if sess.mode != CacheMode::Graph {
+            return Err(McpError::invalid_params(
                 "Incoming reference data not available — the dump was not loaded with with_graph=true. \
                  Reload with load_dump({\"path\": \"<same path>\", \"with_graph\": true}) to enable this tool.",
                 None,
-            )
-        })?;
+            ));
+        }
 
-        let idx = p.object_index as u32;
+        let (inb_off, inb_tgt) = sess
+            .cache
+            .read_inbound_csr()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("graph.bin missing from cache".to_string(), None)
+            })?;
+
+        let retained = sess
+            .cache
+            .read_retained()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::internal_error("retained missing".to_string(), None))?;
+        let shallow = sess
+            .cache
+            .read_shallow()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::internal_error("shallow missing".to_string(), None))?;
+        let class_idx = sess
+            .cache
+            .read_class_idx()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::internal_error("class_idx missing".to_string(), None))?;
+
+        let idx = p.object_index as usize;
+        let n = shallow.len();
+        if idx >= n {
+            return Err(McpError::invalid_params(
+                format!("object_index {idx} out of range (heap has {n} objects)"),
+                None,
+            ));
+        }
+        if idx + 1 >= inb_off.len() {
+            return Err(McpError::invalid_params(
+                format!("object_index {idx} has no inbound edge data in graph.bin"),
+                None,
+            ));
+        }
+
         let limit = p.limit.unwrap_or(50).min(200);
+        let start = inb_off[idx] as usize;
+        let end = inb_off[idx + 1] as usize;
+        let total_incoming = end - start;
 
-        let all_edges = graph.inbound_edges.get(&idx);
-        let total_incoming = all_edges.map_or(0, |e| e.len());
-        let refs: Vec<serde_json::Value> = all_edges
-            .map(|edges| {
-                edges
-                    .iter()
-                    .take(limit)
-                    .map(|e| {
-                        serde_json::json!({
-                            "src_idx": e.src_idx,
-                            "src_class": e.src_class,
-                            "field_name": e.field_name,
-                            "src_shallow": e.src_shallow,
-                            "src_retained": e.src_retained,
-                        })
-                    })
-                    .collect()
+        let refs: Vec<serde_json::Value> = inb_tgt[start..end]
+            .iter()
+            .take(limit)
+            .map(|&src| {
+                let src = src as usize;
+                let src_cidx = class_idx[src] as usize;
+                let src_class = sess
+                    .class_names
+                    .get(src_cidx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("<unknown>");
+                serde_json::json!({
+                    "src_idx": src,
+                    "src_class": src_class,
+                    "src_shallow": shallow[src],
+                    "src_retained": retained[src],
+                })
             })
-            .unwrap_or_default();
+            .collect();
 
         let result = serde_json::json!({
             "object_index": p.object_index,
             "total_incoming_references": total_incoming,
             "shown": refs.len(),
+            "truncated": total_incoming > limit,
             "refs": refs,
             "_hint": format!(
                 "Each 'src_idx' is a dense object index. Use browse_dominators({{\"object_index\": <src_idx>}}) \
@@ -1956,12 +1997,19 @@ fn run_query_on_dump(
             .iter()
             .map(|row| row.iter().map(query_value_to_json).collect())
             .collect();
-        Ok(serde_json::json!({
+        let mut out = serde_json::json!({
             "columns": cols,
             "rows": rows,
             "truncated": r.truncated,
             "row_count": r.row_count,
-        }))
+        });
+        if let Some(e) = &r.error {
+            out["error"] = serde_json::json!(e);
+        }
+        if let Some(n) = &r.note {
+            out["note"] = serde_json::json!(n);
+        }
+        Ok(out)
     } else {
         Ok(serde_json::json!({ "columns": [], "rows": [], "truncated": false }))
     }

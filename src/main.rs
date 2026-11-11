@@ -690,6 +690,22 @@ enum HeapCmd {
         #[arg(long)]
         json: bool,
     },
+    /// List all objects that directly reference the given object (requires graph cache).
+    /// Run `heap load --with-graph <dump>` first if graph cache is not present.
+    FindIncoming {
+        /// Path to the .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        dump: String,
+        /// Dense object index (0-based): from @objectId in query results or 'index' in browse output.
+        #[arg(long = "index", value_name = "N")]
+        index: u64,
+        /// Max referrers to show (default 50).
+        #[arg(long, value_name = "N", default_value_t = 50)]
+        limit: usize,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Print OQL documentation.
     Docs {
         /// Topic: syntax, attributes, examples, workflow, or all (default).
@@ -1651,14 +1667,24 @@ fn run_heap_cmd(
                         .iter()
                         .map(|row| row.iter().map(qval_to_json).collect())
                         .collect();
-                    let out = serde_json::json!({
+                    let mut out = serde_json::json!({
                         "columns": cols,
                         "rows": rows,
                         "row_count": r.row_count,
                         "truncated": r.truncated,
                     });
+                    if let Some(e) = &r.error {
+                        out["error"] = serde_json::json!(e);
+                    }
+                    if let Some(n) = &r.note {
+                        out["note"] = serde_json::json!(n);
+                    }
                     println!("{}", serde_json::to_string_pretty(&out)?);
                 } else {
+                    if let Some(e) = &r.error {
+                        eprintln!("error: {e}");
+                        continue;
+                    }
                     // Simple aligned table
                     let widths: Vec<usize> =
                         r.columns.iter().map(|c| c.name.len().max(12)).collect();
@@ -1712,6 +1738,9 @@ fn run_heap_cmd(
                     }
                     if r.truncated {
                         println!("(truncated — {} rows total)", r.row_count);
+                    }
+                    if let Some(n) = &r.note {
+                        println!("note: {n}");
                     }
                 }
             }
@@ -1767,7 +1796,17 @@ fn run_heap_cmd(
             }
         }
         HeapCmd::Inspect { dump, index, json } => {
-            let sess = load(&dump, CacheMode::Full)?;
+            // Use Graph mode if already cached (no extra work), otherwise Full.
+            let graph_cached =
+                hprof_analyzer::cache::CacheDir::for_dump(std::path::Path::new(&dump))
+                    .map(|c| c.is_valid(CacheMode::Graph))
+                    .unwrap_or(false);
+            let mode = if graph_cached {
+                CacheMode::Graph
+            } else {
+                CacheMode::Full
+            };
+            let sess = load(&dump, mode)?;
             let shallow = sess
                 .cache
                 .read_shallow()?
@@ -1825,6 +1864,44 @@ fn run_heap_cmd(
                     .map(|(_, _, f)| f)
                 });
 
+            // Read inbound refs from the full CSR when the graph is cached.
+            struct InboundSummary {
+                total: usize,
+                refs: Vec<(usize, String, u32, u64)>, // (src_idx, class, shallow, retained)
+            }
+            let inbound: Option<InboundSummary> = if graph_cached {
+                sess.cache
+                    .read_inbound_csr()
+                    .ok()
+                    .flatten()
+                    .and_then(|(inb_off, inb_tgt)| {
+                        if idx + 1 < inb_off.len() {
+                            let start = inb_off[idx] as usize;
+                            let end = inb_off[idx + 1] as usize;
+                            let total = end - start;
+                            let refs = inb_tgt[start..end]
+                                .iter()
+                                .take(20)
+                                .map(|&src| {
+                                    let src = src as usize;
+                                    let src_cidx = class_idx[src] as usize;
+                                    let src_class = sess
+                                        .class_names
+                                        .get(src_cidx)
+                                        .cloned()
+                                        .unwrap_or_else(|| "<unknown>".to_string());
+                                    (src, src_class, shallow[src], retained[src])
+                                })
+                                .collect();
+                            Some(InboundSummary { total, refs })
+                        } else {
+                            None
+                        }
+                    })
+            } else {
+                None
+            };
+
             if json {
                 let mut obj = serde_json::json!({
                     "object_index": idx,
@@ -1844,6 +1921,26 @@ fn run_heap_cmd(
                         })
                         .collect();
                     obj["fields"] = serde_json::json!(fj);
+                }
+                if let Some(ib) = &inbound {
+                    let refs_json: Vec<serde_json::Value> = ib
+                        .refs
+                        .iter()
+                        .map(|(src, cls, sh, ret)| {
+                            serde_json::json!({
+                                "object_index": src,
+                                "class": cls,
+                                "shallow_bytes": sh,
+                                "retained_bytes": ret,
+                            })
+                        })
+                        .collect();
+                    obj["inbound_refs"] = serde_json::json!({
+                        "total": ib.total,
+                        "shown": ib.refs.len(),
+                        "truncated": ib.total > 20,
+                        "refs": refs_json,
+                    });
                 }
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             } else {
@@ -1867,6 +1964,127 @@ fn run_heap_cmd(
                             );
                         }
                     }
+                }
+                if let Some(ib) = &inbound {
+                    println!(
+                        "  Referenced by: {} object{}{}",
+                        ib.total,
+                        if ib.total == 1 { "" } else { "s" },
+                        if ib.total > 20 {
+                            " (showing first 20)"
+                        } else {
+                            ""
+                        },
+                    );
+                    for (src, cls, sh, ret) in &ib.refs {
+                        println!(
+                            "    #{src}  {cls}  shallow={sh}  retained={}",
+                            hprof_analyzer::report::format_bytes(*ret as u64)
+                        );
+                    }
+                } else if !graph_cached {
+                    println!("  Referenced by: (run `heap load --with-graph {dump}` to enable)");
+                }
+            }
+        }
+        HeapCmd::FindIncoming {
+            dump,
+            index,
+            limit,
+            json,
+        } => {
+            let graph_cached =
+                hprof_analyzer::cache::CacheDir::for_dump(std::path::Path::new(&dump))
+                    .map(|c| c.is_valid(CacheMode::Graph))
+                    .unwrap_or(false);
+            if !graph_cached {
+                anyhow::bail!(
+                    "graph cache not found for {dump}\n\
+                     Run `hprof-analyzer heap load --with-graph {dump}` first."
+                );
+            }
+            let sess = load(&dump, CacheMode::Graph)?;
+            let (inb_off, inb_tgt) = sess
+                .cache
+                .read_inbound_csr()?
+                .ok_or_else(|| anyhow::anyhow!("graph.bin missing from cache"))?;
+            let shallow = sess
+                .cache
+                .read_shallow()?
+                .ok_or_else(|| anyhow::anyhow!("shallow missing"))?;
+            let retained = sess
+                .cache
+                .read_retained()?
+                .ok_or_else(|| anyhow::anyhow!("retained missing"))?;
+            let class_idx = sess
+                .cache
+                .read_class_idx()?
+                .ok_or_else(|| anyhow::anyhow!("class_idx missing"))?;
+            let idx = index as usize;
+            let n = shallow.len();
+            if idx >= n {
+                anyhow::bail!("object_index {idx} out of range (heap has {n} objects)");
+            }
+            if idx + 1 >= inb_off.len() {
+                anyhow::bail!("object_index {idx} has no inbound edge data in graph.bin");
+            }
+            let start = inb_off[idx] as usize;
+            let end = inb_off[idx + 1] as usize;
+            let total = end - start;
+            let limit = limit.min(200);
+            let shown: Vec<(usize, String, u32, u64)> = inb_tgt[start..end]
+                .iter()
+                .take(limit)
+                .map(|&src| {
+                    let src = src as usize;
+                    let src_cidx = class_idx[src] as usize;
+                    let src_class = sess
+                        .class_names
+                        .get(src_cidx)
+                        .cloned()
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    (src, src_class, shallow[src], retained[src])
+                })
+                .collect();
+            if json {
+                let refs_json: Vec<serde_json::Value> = shown
+                    .iter()
+                    .map(|(src, cls, sh, ret)| {
+                        serde_json::json!({
+                            "object_index": src,
+                            "class": cls,
+                            "shallow_bytes": sh,
+                            "retained_bytes": ret,
+                        })
+                    })
+                    .collect();
+                let out = serde_json::json!({
+                    "object_index": idx,
+                    "total_incoming_references": total,
+                    "shown": shown.len(),
+                    "truncated": total > limit,
+                    "refs": refs_json,
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                println!(
+                    "Object #{idx} is referenced by {} object{}{}:",
+                    total,
+                    if total == 1 { "" } else { "s" },
+                    if total > limit {
+                        format!(" (showing first {limit})")
+                    } else {
+                        String::new()
+                    },
+                );
+                for (src, cls, sh, ret) in &shown {
+                    println!(
+                        "  #{src}  {cls}  shallow={sh}  retained={}",
+                        hprof_analyzer::report::format_bytes(*ret as u64)
+                    );
+                }
+                if total > limit {
+                    println!("  ... {} more", total - limit);
                 }
             }
         }
