@@ -8813,3 +8813,71 @@ fn fill_ratio_resolves_in_select_and_where() {
     assert_eq!(rows.len(), 1, "expected one non-null fill-ratio row");
     assert_ne!(rows.cell(0, 0), "null", "fill-ratio cell must be a number");
 }
+
+/// BUG: `SUM` over a VALUES source saturates on integer overflow instead of
+/// wrapping. `9223372036854775807 + 2` wraps (Java `long` semantics) to
+/// `-9223372036854775807`, and so does `id + 2` and the heap-scan SUM path; the
+/// VALUES SUM path uses `i64::saturating_add` and silently returns the
+/// saturated max.
+#[test]
+fn bug_values_sum_saturates_instead_of_wrapping() {
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        "SELECT SUM(id) FROM (VALUES (9223372036854775807),(2)) AS t(id)",
+    );
+    t.assert_single_cell("-9223372036854775807");
+}
+
+/// BUG: `COUNT(DISTINCT …)` canonicalises integers through `f64`, so distinct
+/// integers that collide at >2^53 precision are counted once. `2^53` and
+/// `2^53+1` are distinct i64 values but the same f64, so the count is 1, not 2.
+#[test]
+fn bug_count_distinct_loses_precision_above_2_53() {
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        "SELECT COUNT(DISTINCT id) FROM (VALUES (9007199254740992),(9007199254740993)) AS t(id)",
+    );
+    t.assert_single_cell("2");
+}
+
+/// BUG: `substring`/`substr` returns null on a VALUES source, even though the
+/// same expression returns the substring on a heap scan. The VALUES method
+/// evaluator does not implement `substr`.
+#[test]
+fn bug_values_substring_returns_null() {
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        r#"SELECT substring("hello", 2, 3) FROM (VALUES (1)) AS t(x)"#,
+    );
+    t.assert_single_cell("ell");
+}
+
+/// BUG: `concat` with a non-string receiver returns null on a VALUES source,
+/// while the heap-scan path stringifies the receiver. `concat(1, 2)` should be
+/// `"12"`.
+#[test]
+fn bug_values_concat_non_string_receiver_returns_null() {
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        "SELECT concat(1, 2) FROM (VALUES (1)) AS t(x)",
+    );
+    t.assert_single_cell("12");
+}
+
+/// BUG: `MIN`/`MAX` over a VALUES source compare integers via `f64`, so
+/// distinct integers that collide at >2^53 precision compare equal and the
+/// wrong element is returned. `MIN(2^53+1, 2^53)` returns `2^53+1` instead of
+/// `2^53`; `MAX` returns `2^53` instead of `2^53+1`.
+#[test]
+fn bug_values_min_max_lose_precision_above_2_53() {
+    let min_t = query_table(
+        "/nonexistent-dummy.hprof",
+        "SELECT MIN(id) FROM (VALUES (9007199254740993),(9007199254740992)) AS t(id)",
+    );
+    min_t.assert_single_cell("9007199254740992");
+    let max_t = query_table(
+        "/nonexistent-dummy.hprof",
+        "SELECT MAX(id) FROM (VALUES (9007199254740993),(9007199254740992)) AS t(id)",
+    );
+    max_t.assert_single_cell("9007199254740993");
+}

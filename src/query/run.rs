@@ -1587,7 +1587,7 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
                                                 None
                                             }
                                         })
-                                        .fold(0i64, i64::saturating_add);
+                                        .fold(0i64, i64::wrapping_add);
                                     QueryValue::Int(sum)
                                 } else {
                                     let sum = vals.iter().fold(0.0f64, |acc, v| match v {
@@ -1601,36 +1601,14 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
                             AggFunc::Min => vals
                                 .iter()
                                 .min_by(|a, b| {
-                                    use std::cmp::Ordering;
-                                    let af = match a {
-                                        QueryValue::Int(n) => *n as f64,
-                                        QueryValue::Float(f) => *f,
-                                        _ => f64::NAN,
-                                    };
-                                    let bf = match b {
-                                        QueryValue::Int(n) => *n as f64,
-                                        QueryValue::Float(f) => *f,
-                                        _ => f64::NAN,
-                                    };
-                                    af.partial_cmp(&bf).unwrap_or(Ordering::Equal)
+                                    crate::query::execute::total_cmp_query_value(a, b)
                                 })
                                 .cloned()
                                 .unwrap_or(QueryValue::Null),
                             AggFunc::Max => vals
                                 .iter()
                                 .max_by(|a, b| {
-                                    use std::cmp::Ordering;
-                                    let af = match a {
-                                        QueryValue::Int(n) => *n as f64,
-                                        QueryValue::Float(f) => *f,
-                                        _ => f64::NAN,
-                                    };
-                                    let bf = match b {
-                                        QueryValue::Int(n) => *n as f64,
-                                        QueryValue::Float(f) => *f,
-                                        _ => f64::NAN,
-                                    };
-                                    af.partial_cmp(&bf).unwrap_or(Ordering::Equal)
+                                    crate::query::execute::total_cmp_query_value(a, b)
                                 })
                                 .cloned()
                                 .unwrap_or(QueryValue::Null),
@@ -2069,8 +2047,32 @@ fn eval_method_on_qv(
     row: &[crate::query::model::QueryValue],
 ) -> crate::query::model::QueryValue {
     use crate::query::model::QueryValue;
+    let name = name.to_ascii_lowercase();
+    // `concat` stringifies a non-string receiver (Int/Float/Bool), matching the
+    // heap-scan executor. SQL CONCAT skips NULL args.
+    if name == "concat" {
+        let mut result = match recv {
+            QueryValue::Str(s) => s.clone(),
+            QueryValue::Int(i) => i.to_string(),
+            QueryValue::Float(f) => f.to_string(),
+            QueryValue::Bool(b) => b.to_string(),
+            QueryValue::Null => String::new(),
+            _ => return QueryValue::Null,
+        };
+        for arg_expr in args {
+            match eval_expr_on_row(arg_expr, col_names, row) {
+                QueryValue::Str(s) => result.push_str(&s),
+                QueryValue::Int(n) => result.push_str(&n.to_string()),
+                QueryValue::Float(f) => result.push_str(&f.to_string()),
+                QueryValue::Bool(b) => result.push_str(&b.to_string()),
+                QueryValue::Null => {}
+                _ => {}
+            }
+        }
+        return QueryValue::Str(result);
+    }
     match recv {
-        QueryValue::Str(s) => match name.to_ascii_lowercase().as_str() {
+        QueryValue::Str(s) => match name.as_str() {
             "lower" => QueryValue::Str(s.to_lowercase()),
             "upper" => QueryValue::Str(s.to_uppercase()),
             "trim" => QueryValue::Str(s.trim().to_string()),
@@ -2098,21 +2100,28 @@ fn eval_method_on_qv(
                     _ => QueryValue::Null,
                 }
             }
-            "concat" if !args.is_empty() => {
-                let mut result = s.clone();
-                for arg_expr in args {
-                    match eval_expr_on_row(arg_expr, col_names, row) {
-                        QueryValue::Str(other) => result.push_str(&other),
-                        QueryValue::Int(n) => result.push_str(&n.to_string()),
-                        QueryValue::Float(f) => result.push_str(&f.to_string()),
-                        QueryValue::Bool(b) => result.push_str(if b { "true" } else { "false" }),
-                        QueryValue::Null => {}
-                        other => {
-                            let s = format!("{other:?}");
-                            result.push_str(&s);
-                        }
-                    }
+            "substr" | "substring" => {
+                // SQL SUBSTR is 1-based; match the heap-scan executor's semantics.
+                let start_val = args
+                    .first()
+                    .map(|a| eval_expr_on_row(a, col_names, row));
+                let len_val = args.get(1).map(|a| eval_expr_on_row(a, col_names, row));
+                let start_char = match start_val {
+                    Some(QueryValue::Int(n)) => (n.max(1) - 1) as usize,
+                    _ => return QueryValue::Null,
+                };
+                let chars: Vec<char> = s.chars().collect();
+                if start_char >= chars.len() {
+                    return QueryValue::Str(String::new());
                 }
+                let result = match len_val {
+                    Some(QueryValue::Int(n)) if n >= 0 => {
+                        let end = (start_char + n as usize).min(chars.len());
+                        chars[start_char..end].iter().collect()
+                    }
+                    None => chars[start_char..].iter().collect(),
+                    _ => return QueryValue::Null,
+                };
                 QueryValue::Str(result)
             }
             "replace" if args.len() == 2 => {

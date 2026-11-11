@@ -717,6 +717,79 @@ fn check_mixed_class_heap_no_panic(report: &Report) {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario 34: class-object retained attribution consistency
+// ---------------------------------------------------------------------------
+
+fn build_class_object_retained_mismatch() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_class_object_retained_mismatch(&mut b);
+    b.build()
+}
+
+fn check_class_object_retained_mismatch(report: &Report) {
+    let hist_row = report
+        .overview
+        .histogram
+        .iter()
+        .find(|h| h.pretty_class.contains("Widget"))
+        .expect("Widget must appear in the System-Overview histogram");
+    let bc_row = report
+        .top
+        .biggest_classes
+        .iter()
+        .find(|c| c.pretty_class.contains("Widget"))
+        .expect("Widget must appear in Biggest Classes");
+    assert_eq!(
+        bc_row.retained, hist_row.retained,
+        "Biggest Classes retained ({}) diverges from the System-Overview \
+         histogram retained ({}) for the same class — the class object's \
+         retained heap is attributed to the represented class in the histogram \
+         but not in Biggest Classes.",
+        bc_row.retained, hist_row.retained,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 35: refined-culprit retained vs retained_pct consistency
+// ---------------------------------------------------------------------------
+
+fn build_refined_culprit_retained_pct_mismatch() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_refined_culprit_retained_pct_mismatch(&mut b);
+    b.build()
+}
+
+fn check_refined_culprit_retained_pct_mismatch(report: &Report) {
+    assert!(
+        !report.primary_culprits.is_empty(),
+        "expected a dominant culprit; got none"
+    );
+    let c = &report.primary_culprits[0];
+    assert_eq!(
+        c.class_name, "scenarios.Data",
+        "expected the refined culprit to be Data, got {:?}",
+        c.class_name,
+    );
+    // `retained` and `retained_pct` must describe the SAME byte count: the
+    // headline renders both together ("X retains {bytes} ({pct}% of reachable
+    // heap)"). If they disagree, the report claims one object retains N bytes
+    // while printing a percentage for a different, larger object.
+    let total = report.leaks.total_shallow;
+    let retained_from_pct = (c.retained_pct / 100.0 * total as f64).round() as u64;
+    let delta = c.retained.abs_diff(retained_from_pct);
+    assert!(
+        delta <= total / 100,
+        "CulpritRef.retained ({}) and retained_pct ({:.2}% of {}) describe different \
+         byte counts (retained_from_pct = {}, delta = {})",
+        c.retained,
+        c.retained_pct,
+        total,
+        retained_from_pct,
+        delta,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Scenario 27: from_entries_no_panic — FROM ENTRIES parsing smoke-test
 // ---------------------------------------------------------------------------
 
@@ -1043,6 +1116,18 @@ const SCENARIOS: &[Scenario] = &[
         build: build_finalizer_classes_breakdown,
         check: check_finalizer_classes_breakdown,
     },
+    Scenario {
+        name: "class_object_retained_mismatch",
+        opts: default_opts,
+        build: build_class_object_retained_mismatch,
+        check: check_class_object_retained_mismatch,
+    },
+    Scenario {
+        name: "refined_culprit_retained_pct_mismatch",
+        opts: default_opts,
+        build: build_refined_culprit_retained_pct_mismatch,
+        check: check_refined_culprit_retained_pct_mismatch,
+    },
 ];
 
 #[test]
@@ -1248,6 +1333,16 @@ fn scenario_finalizer_classes_breakdown() {
     run_scenario(&SCENARIOS[33]);
 }
 
+#[test]
+fn scenario_class_object_retained_mismatch() {
+    run_scenario(&SCENARIOS[34]);
+}
+
+#[test]
+fn scenario_refined_culprit_retained_pct_mismatch() {
+    run_scenario(&SCENARIOS[35]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1256,7 +1351,7 @@ fn scenario_finalizer_classes_breakdown() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        34,
+        36,
         "update this test when adding scenarios"
     );
 }

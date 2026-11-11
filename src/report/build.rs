@@ -4686,7 +4686,7 @@ pub(crate) fn resolve_primary_culprits(leaks: &LeakSuspects) -> Vec<crate::repor
         CulpritRef {
             class_name: best.0,
             suspect_index: idx,
-            retained_pct: suspect_ret as f64 / total as f64 * 100.0,
+            retained_pct: best.1 as f64 / total as f64 * 100.0,
             retained: best.1,
             basis: CulpritBasis::SingleObject,
         }
@@ -5029,6 +5029,17 @@ fn build_top_consumers(
         class_count_map[ci] += 1;
         if !g.has_same_class_ancestor.get(i) {
             class_retained[ci] += g.retained[i];
+        }
+        // Class object: attribute its retained heap to the class it represents,
+        // matching build_system_overview's histogram (which also adds it), so the
+        // two views agree on per-class retained size. (The class object's own
+        // retained is still counted under java.lang.Class above.)
+        if g.jlc_idx != undef && ci_raw as u32 == g.jlc_idx {
+            if let Some(&repr) = g.class_obj_class_idx.get(&(i as u32)) {
+                if (repr as usize) < class_count {
+                    class_retained[remap[repr as usize] as usize] += g.retained[i];
+                }
+            }
         }
     }
 

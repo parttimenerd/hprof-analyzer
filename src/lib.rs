@@ -718,6 +718,40 @@ pub fn render_report_section(r: &report::Report, section: &str) -> String {
     out
 }
 
+/// Transpose a forward CSR (`fwd_off`/`fwd_tgt`) into a simple inbound CSR
+/// (`inb_off`/`inb_tgt`), where `inb_tgt[inb_off[i]..inb_off[i+1]]` lists the
+/// dense indices that reference object `i`. This is the format the graph cache
+/// (`GraphForCache`) stores for MCP `find_incoming_references` — a plain u32 CSR,
+/// not the blocked byte-offset form `build_from_fwd` produces for the dominator
+/// pass. `n` is the object count.
+fn build_simple_inbound_csr(fwd_off: &[u32], fwd_tgt: &[u32], n: usize) -> (Vec<u32>, Vec<u32>) {
+    let mut inb_off = vec![0u32; n + 1];
+    for &t in fwd_tgt {
+        let t = t as usize;
+        if t < n {
+            inb_off[t + 1] += 1;
+        }
+    }
+    for i in 0..n {
+        inb_off[i + 1] += inb_off[i];
+    }
+    let total = inb_off[n] as usize;
+    let mut inb_tgt = vec![0u32; total];
+    let mut cursor = inb_off.clone();
+    for s in 0..n {
+        let (lo, hi) = (fwd_off[s] as usize, fwd_off[s + 1] as usize);
+        for &t in &fwd_tgt[lo..hi] {
+            let t = t as usize;
+            if t < n {
+                let slot = cursor[t] as usize;
+                inb_tgt[slot] = s as u32;
+                cursor[t] += 1;
+            }
+        }
+    }
+    (inb_off, inb_tgt)
+}
+
 /// arrays at the appropriate point in the pipeline (native only).
 #[cfg(feature = "native")]
 fn analyze_to_report_inner_with_cache(
@@ -899,14 +933,15 @@ fn analyze_to_report_inner_with_cache(
         eprintln!("hprof-cache: failed to write arrays.bin: {e}");
     }
 
-    // Write graph cache (forward edges; inbound CSR omitted for now).
+    // Write graph cache (forward edges + inbound CSR for MCP find_incoming_references).
     if mode == cache::CacheMode::Graph {
         if let Some((fwd_off, fwd_tgt)) = fwd_for_cache {
+            let (inb_off, inb_tgt) = build_simple_inbound_csr(&fwd_off, &fwd_tgt, g.n);
             let graph = GraphForCache {
                 fwd_off: &fwd_off,
                 fwd_tgt: &fwd_tgt,
-                inb_off: &[],
-                inb_tgt: &[],
+                inb_off: &inb_off,
+                inb_tgt: &inb_tgt,
                 fwd_field_idx: g.fwd_field_name_idx.as_deref(),
             };
             if let Err(e) = cache.write_graph(&graph) {
@@ -959,4 +994,30 @@ fn analyze_to_report_inner_with_cache(
         .map(|n| crate::report::format::pretty_class_name(&n))
         .collect();
     Ok((report, retained, class_names))
+}
+
+#[cfg(test)]
+mod lib_tests {
+    use super::build_simple_inbound_csr;
+
+    #[test]
+    fn simple_inbound_csr_transposes_forward_edges() {
+        // Forward CSR: 0 -> {1, 2}, 1 -> {2}, 2 -> {}.
+        let fwd_off = vec![0u32, 2, 3, 3];
+        let fwd_tgt = vec![1u32, 2, 2];
+        let (inb_off, inb_tgt) = build_simple_inbound_csr(&fwd_off, &fwd_tgt, 3);
+        // Inbound: 1 <- {0}, 2 <- {0, 1}, 0 <- {}.
+        assert_eq!(inb_off, vec![0u32, 0, 1, 3]);
+        assert_eq!(inb_tgt, vec![0u32, 0, 1]);
+    }
+
+    #[test]
+    fn simple_inbound_csr_ignores_out_of_range_targets() {
+        // A target of u32::MAX (or >= n) must not corrupt the CSR.
+        let fwd_off = vec![0u32, 2, 2];
+        let fwd_tgt = vec![0u32, u32::MAX];
+        let (inb_off, inb_tgt) = build_simple_inbound_csr(&fwd_off, &fwd_tgt, 2);
+        assert_eq!(inb_off, vec![0u32, 1, 1]);
+        assert_eq!(inb_tgt, vec![0u32]);
+    }
 }

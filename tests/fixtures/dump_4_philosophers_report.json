@@ -114615,7 +114615,7 @@
         ],
         "instances": 129,
         "pretty_class": "scala.concurrent.stm.ccstm.InTxnImpl",
-        "retained": 3830504
+        "retained": 3832440
       },
       {
         "category": "jdk",
@@ -114749,7 +114749,7 @@
         ],
         "instances": 2793,
         "pretty_class": "java.lang.Class",
-        "retained": 3725328
+        "retained": 3725640
       },
       {
         "category": "other",
@@ -114888,6 +114888,94 @@
         "instances": 24078,
         "pretty_class": "byte[]",
         "retained": 2674632
+      },
+      {
+        "category": "jdk",
+        "holders": [
+          {
+            "count": 806,
+            "holder_class": "java.lang.Object[]",
+            "retained": 130640,
+            "via_class": [
+              "java.lang.Class"
+            ]
+          },
+          {
+            "count": 70,
+            "holder_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+            "retained": 4608,
+            "via_class": [
+              "java.lang.Class"
+            ]
+          },
+          {
+            "count": 61,
+            "holder_class": "java.lang.invoke.MemberName",
+            "retained": 976,
+            "via_class": [
+              "java.lang.Class"
+            ]
+          },
+          {
+            "count": 1,
+            "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c00fc678",
+            "retained": 48,
+            "via_class": [
+              "java.lang.Class"
+            ]
+          },
+          {
+            "count": 1,
+            "holder_class": "org.renaissance.harness.Config$$Lambda+0x00007e41c0116280",
+            "retained": 48,
+            "via_class": [
+              "java.lang.Class"
+            ]
+          },
+          {
+            "count": 1,
+            "holder_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dc778",
+            "retained": 48,
+            "via_class": [
+              "java.lang.Class"
+            ]
+          },
+          {
+            "count": 1,
+            "holder_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dd6a0",
+            "retained": 48,
+            "via_class": [
+              "java.lang.Class"
+            ]
+          },
+          {
+            "count": 1,
+            "holder_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de018",
+            "retained": 48,
+            "via_class": [
+              "java.lang.Class"
+            ]
+          },
+          {
+            "count": 1,
+            "holder_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de990",
+            "retained": 48,
+            "via_class": [
+              "java.lang.Class"
+            ]
+          },
+          {
+            "count": 1,
+            "holder_class": "org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00def38",
+            "retained": 48,
+            "via_class": [
+              "java.lang.Class"
+            ]
+          }
+        ],
+        "instances": 1,
+        "pretty_class": "scala.runtime.LazyVals$",
+        "retained": 2622368
       },
       {
         "category": "jdk",
@@ -115033,7 +115121,7 @@
         ],
         "instances": 134275,
         "pretty_class": "java.lang.Object",
-        "retained": 2148400
+        "retained": 2148440
       },
       {
         "category": "jdk",
@@ -115225,7 +115313,7 @@
         ],
         "instances": 23331,
         "pretty_class": "java.lang.String",
-        "retained": 1856480
+        "retained": 1856664
       },
       {
         "category": "jdk",
@@ -115432,7 +115520,7 @@
         ],
         "instances": 361,
         "pretty_class": "java.util.HashMap",
-        "retained": 1612352
+        "retained": 1612432
       },
       {
         "category": "jdk",
@@ -115627,7 +115715,7 @@
         ],
         "instances": 9876,
         "pretty_class": "java.util.HashMap$Node",
-        "retained": 1521992
+        "retained": 1522024
       },
       {
         "category": "jdk",
@@ -115640,7 +115728,7 @@
         ],
         "instances": 19,
         "pretty_class": "java.util.zip.ZipFile$Source",
-        "retained": 1353616
+        "retained": 1354560
       },
       {
         "category": "jdk",
@@ -115728,7 +115816,7 @@
         ],
         "instances": 151,
         "pretty_class": "java.lang.ref.SoftReference",
-        "retained": 1158168
+        "retained": 1158176
       },
       {
         "category": "other",
@@ -115884,7 +115972,7 @@
         ],
         "instances": 19,
         "pretty_class": "java.util.jar.JarFile",
-        "retained": 1144408
+        "retained": 1144952
       },
       {
         "category": "jdk",
@@ -115990,7 +116078,7 @@
         ],
         "instances": 8,
         "pretty_class": "java.util.jar.Manifest",
-        "retained": 1138784
+        "retained": 1138848
       },
       {
         "category": "other",
@@ -116003,7 +116091,7 @@
         ],
         "instances": 128,
         "pretty_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
-        "retained": 1090432
+        "retained": 1091664
       },
       {
         "category": "jdk",
@@ -116344,7 +116432,7 @@
         ],
         "instances": 117,
         "pretty_class": "java.util.concurrent.ConcurrentHashMap",
-        "retained": 625880
+        "retained": 626232
       },
       {
         "category": "jdk",
@@ -116482,105 +116570,6 @@
         "instances": 93,
         "pretty_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
         "retained": 619176
-      },
-      {
-        "category": "jdk",
-        "holders": [
-          {
-            "count": 5505,
-            "holder_class": "java.util.HashMap$Node",
-            "retained": 585120,
-            "via_class": [
-              "java.util.jar.Attributes"
-            ]
-          },
-          {
-            "count": 5477,
-            "holder_class": "java.util.jar.Attributes",
-            "level2": [
-              {
-                "count": 5469,
-                "holder_class": "java.util.HashMap$Node",
-                "retained": 437520
-              },
-              {
-                "count": 8,
-                "holder_class": "java.util.jar.Manifest",
-                "retained": 21192
-              }
-            ],
-            "retained": 371080
-          },
-          {
-            "count": 38,
-            "holder_class": "java.util.LinkedHashSet",
-            "level2": [
-              {
-                "count": 36,
-                "holder_class": "java.util.HashMap$Node",
-                "retained": 147600
-              },
-              {
-                "count": 1,
-                "holder_class": "sun.security.provider.Sun",
-                "retained": 328
-              },
-              {
-                "count": 1,
-                "holder_class": "sun.security.jca.ProviderList$1",
-                "retained": 80
-              }
-            ],
-            "retained": 147400
-          },
-          {
-            "count": 8,
-            "holder_class": "java.util.jar.Manifest",
-            "retained": 21192,
-            "via_class": [
-              "java.util.jar.Attributes"
-            ]
-          },
-          {
-            "count": 2,
-            "holder_class": "java.time.format.DateTimeTextProvider$LocaleStore",
-            "retained": 1256,
-            "via_class": [
-              "java.util.Collections$SingletonMap"
-            ]
-          },
-          {
-            "count": 2,
-            "holder_class": "java.util.Collections$SingletonMap",
-            "level2": [
-              {
-                "count": 2,
-                "holder_class": "java.time.format.DateTimeTextProvider$LocaleStore",
-                "retained": 1256
-              }
-            ],
-            "retained": 1096
-          },
-          {
-            "count": 1,
-            "holder_class": "sun.security.provider.Sun",
-            "retained": 328,
-            "via_class": [
-              "java.util.LinkedHashSet"
-            ]
-          },
-          {
-            "count": 1,
-            "holder_class": "sun.security.jca.ProviderList$1",
-            "retained": 80,
-            "via_class": [
-              "java.util.LinkedHashSet"
-            ]
-          }
-        ],
-        "instances": 5517,
-        "pretty_class": "java.util.LinkedHashMap",
-        "retained": 519576
       }
     ],
     "biggest_objects": [

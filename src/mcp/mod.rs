@@ -1318,24 +1318,55 @@ impl HprofMcpServer {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
 
-        let graph = sess.report.obj_graph_flat.as_ref().ok_or_else(|| {
-            McpError::invalid_params(
+        if sess.mode != CacheMode::Graph {
+            return Err(McpError::invalid_params(
                 "Incoming reference data not available — the dump was not loaded with with_graph=true. \
                  Reload with load_dump({\"path\": \"<same path>\", \"with_graph\": true}) to enable this tool.",
                 None,
-            )
-        })?;
+            ));
+        }
+
+        let (inb_off, inb_tgt) = sess
+            .cache
+            .read_inbound_csr()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("graph.bin missing from cache".to_string(), None)
+            })?;
+        let retained = sess
+            .cache
+            .read_retained()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::internal_error("retained missing".to_string(), None))?;
+        let shallow = sess
+            .cache
+            .read_shallow()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::internal_error("shallow missing".to_string(), None))?;
+        let class_idx = sess
+            .cache
+            .read_class_idx()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::internal_error("class_idx missing".to_string(), None))?;
 
         let limit = p.limit.unwrap_or(20).min(100);
         let needle = p.class_name.to_lowercase();
+        let n = shallow.len();
 
-        // Find all nodes whose display_class contains the search term.
-        let target_indices: std::collections::HashSet<u32> = graph
-            .nodes
-            .iter()
-            .filter(|(_, node)| node.display_class.to_lowercase().contains(&needle))
-            .map(|(idx, _)| *idx)
-            .collect();
+        // Find all objects whose class name contains the search term (substring,
+        // case-insensitive). This mirrors find_incoming_references: the inbound
+        // CSR covers EVERY object, not just the obj-graph's "significant" subset.
+        let mut target_indices: Vec<u32> = Vec::new();
+        for i in 0..n {
+            let cidx = class_idx[i] as usize;
+            if sess
+                .class_names
+                .get(cidx)
+                .is_some_and(|name| name.to_lowercase().contains(&needle))
+            {
+                target_indices.push(i as u32);
+            }
+        }
 
         if target_indices.is_empty() {
             let result = serde_json::json!({
@@ -1343,11 +1374,9 @@ impl HprofMcpServer {
                 "matched_instances": 0,
                 "rows": [],
                 "_hint": format!(
-                    "No nodes with class matching {:?} found in the object graph. \
-                     The graph only contains significant nodes (retained >= {} bytes). \
+                    "No objects with class matching {:?} found. \
                      Try a broader class name or check spelling.",
                     p.class_name,
-                    graph.sig_floor_bytes
                 ),
             });
             let json = serde_json::to_string_pretty(&result)
@@ -1366,15 +1395,26 @@ impl HprofMcpServer {
             std::collections::HashMap::new();
         let mut matched_instances = 0usize;
 
-        for idx in &target_indices {
-            if let Some(edges) = graph.inbound_edges.get(idx) {
-                matched_instances += 1;
-                for e in edges {
-                    let agg = by_src.entry(e.src_class.clone()).or_default();
-                    agg.ref_count += 1;
-                    agg.total_src_retained += e.src_retained;
-                    agg.total_src_shallow += e.src_shallow;
-                }
+        for &idx in &target_indices {
+            let i = idx as usize;
+            if i + 1 >= inb_off.len() {
+                continue;
+            }
+            let start = inb_off[i] as usize;
+            let end = inb_off[i + 1] as usize;
+            matched_instances += 1;
+            for &src in &inb_tgt[start..end] {
+                let s = src as usize;
+                let src_cidx = class_idx[s] as usize;
+                let src_class = sess
+                    .class_names
+                    .get(src_cidx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("<unknown>");
+                let agg = by_src.entry(src_class.to_string()).or_default();
+                agg.ref_count += 1;
+                agg.total_src_retained += retained[s];
+                agg.total_src_shallow += shallow[s] as u64;
             }
         }
 
@@ -1403,7 +1443,7 @@ impl HprofMcpServer {
             "total_target_nodes": target_indices.len(),
             "rows": rows,
             "_note": if target_indices.len() > matched_instances {
-                format!("{} matched nodes had no captured inbound edges (may be below the inbound capture floor or not referenced by other significant objects)",
+                format!("{} matched nodes had no captured inbound edges (e.g. GC roots or objects with no referrers)",
                     target_indices.len() - matched_instances)
             } else {
                 String::new()
@@ -2432,6 +2472,12 @@ fn run_query_on_dump(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.0))?;
     let plan = query::optimize::optimize(plan, &q, &query::optimize::SchemaStats::default());
     let flat_plans = vec![(q, plan)];
+    // VALUES-only queries have no heap FROM source; short-circuit them before the
+    // heap scan so `SELECT * FROM (VALUES ...)` returns inline rows (mirrors
+    // `run_oql_query` in lib.rs).
+    if let Some(results) = query::run::run_values_only_shortcircuit(&flat_plans) {
+        return Ok(serialize_query_results(results));
+    }
     let (flat, union_groups) = query::run::expand_union_queries(&flat_plans);
 
     let dump_str = dump_path
@@ -2445,6 +2491,12 @@ fn run_query_on_dump(
     let results =
         run_oql::run_oql_escalated(dump_str, &flat, &union_groups, reachable_only, &opts)?;
 
+    Ok(serialize_query_results(results))
+}
+
+/// Serialize a single-query result list (first result) into the MCP `query`
+/// tool's JSON shape: `{columns, rows, truncated, row_count, error?, note?}`.
+fn serialize_query_results(results: Vec<crate::query::model::QueryResult>) -> serde_json::Value {
     if let Some(r) = results.into_iter().next() {
         let cols: Vec<&str> = r.columns.iter().map(|c| c.name.as_str()).collect();
         let rows: Vec<Vec<serde_json::Value>> = r
@@ -2464,9 +2516,9 @@ fn run_query_on_dump(
         if let Some(n) = &r.note {
             out["note"] = serde_json::json!(n);
         }
-        Ok(out)
+        out
     } else {
-        Ok(serde_json::json!({ "columns": [], "rows": [], "truncated": false }))
+        serde_json::json!({ "columns": [], "rows": [], "truncated": false })
     }
 }
 
@@ -2509,8 +2561,9 @@ fn resolve_view_or_oql(input: &str) -> (&str, Option<&str>) {
     {
         return (nq.oql, Some(nq.name));
     }
-    // Looks like raw OQL
-    (trimmed, None)
+    // Looks like raw OQL — return the `/run `-stripped candidate so the caller
+    // parses it as OQL (a leading "/run " would make the parser fail).
+    (candidate, None)
 }
 
 /// Build a usage hint for query results that contain object indices.
@@ -2932,6 +2985,52 @@ mod tests {
         let (out, name) = resolve_view_or_oql(raw);
         assert!(name.is_none(), "should not match a view name");
         assert_eq!(out, raw);
+    }
+
+    #[test]
+    fn resolve_view_or_oql_strips_run_prefix_before_raw_oql() {
+        // "/run <sql>" must forward the raw SQL with the "/run " prefix
+        // stripped, not treat the prefix as part of the query text (otherwise
+        // the OQL parser can never succeed on it).
+        let raw = "SELECT 1 FROM (VALUES (1)) AS t(n)";
+        let input = format!("/run {raw}");
+        let (out, name) = resolve_view_or_oql(&input);
+        assert!(name.is_none(), "raw OQL after /run is not a named view");
+        assert_eq!(
+            out, raw,
+            "the /run prefix must be stripped even when the remainder is raw OQL"
+        );
+    }
+
+    #[test]
+    fn query_values_only_query_returns_inline_rows() {
+        // A VALUES-only query has no heap FROM source; it must return the
+        // inline table directly without scanning (or even requiring) the heap.
+        let dir = std::env::temp_dir();
+        let mut path = dir;
+        path.push(format!("hprof_mcp_values_test_{}.hprof", std::process::id()));
+        let mut h = b"JAVA PROFILE 1.0.2\0".to_vec();
+        h.extend_from_slice(&8u32.to_be_bytes()); // id_size
+        h.extend_from_slice(&0u64.to_be_bytes()); // timestamp
+        std::fs::write(&path, &h).unwrap();
+
+        let result = run_query_on_dump(
+            &path,
+            "SELECT id FROM (VALUES (10),(20),(30)) AS t(id)",
+            false,
+        )
+        .expect("VALUES-only query should not require a heap scan");
+        let _ = std::fs::remove_file(&path);
+
+        let rows = result
+            .get("rows")
+            .and_then(|r| r.as_array())
+            .unwrap_or_else(|| panic!("expected rows array, got {result}"));
+        assert_eq!(
+            rows.len(),
+            3,
+            "VALUES-only query must return its 3 inline rows, not a heap scan; got {result}"
+        );
     }
 
     #[test]

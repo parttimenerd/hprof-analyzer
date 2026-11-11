@@ -4050,12 +4050,23 @@ pub(crate) fn canonical_distinct_key_pub(v: &QueryValue) -> String {
 
 fn canonical_distinct_key(v: &QueryValue) -> String {
     match v {
-        // Canonicalize all numeric values through f64 so 1 == 1.0 and 0.0 == -0.0.
-        QueryValue::Int(i) => format!("N:{}", *i as f64),
+        // Integers keep exact i64 precision so COUNT(DISTINCT) does not collide
+        // two distinct longs above 2^53 (OQL-29). A float that is exactly an
+        // integer is canonicalized to the same integer form so `1 == 1.0`
+        // (OQL-33) still holds, matching qv_value_eq_pub's cross-type equality.
+        QueryValue::Int(i) => format!("I:{i}"),
         QueryValue::Float(f) => {
             // Normalize -0.0 → +0.0 so they hash the same.
             let n = if *f == 0.0 { 0.0f64 } else { *f };
-            format!("N:{n}")
+            if n.is_finite()
+                && n.fract() == 0.0
+                && n >= i64::MIN as f64
+                && n < (1u64 << 63) as f64
+            {
+                format!("I:{}", n as i64)
+            } else {
+                format!("F:{n}")
+            }
         }
         // Non-numeric: keep debug form (exact match required).
         other => format!("{other:?}"),

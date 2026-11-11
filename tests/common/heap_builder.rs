@@ -1221,6 +1221,79 @@ pub fn build_app_class_culprit() -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario 34: class-object retained attribution — histogram vs biggest_classes
+// ---------------------------------------------------------------------------
+
+/// Build a heap where a single class both (a) has instances and (b) has a
+/// CLASS OBJECT that itself retains a large object via a static field. The
+/// System-Overview histogram attributes a class object's retained heap to the
+/// class it represents (see `build_system_overview`'s `repr != undef` branch),
+/// while `build_top_consumers` (Biggest Classes) does NOT — so the two sections
+/// report DIFFERENT retained sizes for the same class. This scenario asserts
+/// they must agree (the BUG-4 fix comment in build_top_consumers states exactly
+/// that intent).
+pub fn build_class_object_retained_mismatch(b: &mut HeapBuilder) {
+    // Large object held ONLY by the class object's static field.
+    let big_array = b.prim_array(T_BYTE, &vec![0u8; 100_000]);
+    // Widget class: static field `big` -> array (so the Widget CLASS OBJECT
+    // dominates/retains the array), plus an int instance field.
+    let widget_class = b.class_with_static_root(
+        "scenarios/Widget",
+        "big",
+        big_array,
+        &[("x", T_INT)],
+    );
+    // 10 Widget instances so the class also appears in Biggest Classes. They
+    // are held by a separate Object[] anchored by a static root so they are
+    // reachable (independent of the class object's own static field).
+    let object_class = b.class("java/lang/Object", &[]);
+    let mut instance_ids: Vec<u64> = Vec::with_capacity(10);
+    for i in 0..10i32 {
+        let mut data = Vec::new();
+        int_field(&mut data, i);
+        instance_ids.push(b.instance(widget_class, &data));
+    }
+    let arr = b.obj_array(object_class, &instance_ids);
+    b.class_with_static_root("scenarios/WidgetRegistry", "widgets", arr, &[]);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 35: refined-culprit retained vs retained_pct consistency
+// ---------------------------------------------------------------------------
+
+/// Build a heap where a single top-level dominator (`Holder`) dominates the
+/// heap, but the refined culprit resolution descends one level to `Data`
+/// (a non-JDK class retaining ~95% of `Holder`). `CulpritRef.retained` then
+/// carries `Data`'s (smaller) retained size while `CulpritRef.retained_pct`
+/// still carries `Holder`'s share — so the headline's byte count and its
+/// "% of reachable heap" describe two different objects.
+pub fn build_refined_culprit_retained_pct_mismatch(b: &mut HeapBuilder) {
+    // Data: one Object field "payload" -> a ~970 KB byte[].
+    let data_class = b.class("scenarios/Data", &[("payload", T_OBJECT)]);
+    let big = b.prim_array(T_BYTE, &vec![0u8; 970_000]);
+    let mut d = Vec::new();
+    obj_field(&mut d, big);
+    let data_obj = b.instance(data_class, &d);
+
+    // "other": a ~30 KB byte[] so Holder.retained (~1000 KB) is ~3% larger
+    // than Data.retained (~970 KB) — Data stays comfortably above the 95%
+    // floor so resolution descends, while `retained` and `retained_pct` end up
+    // describing different byte counts.
+    let other = b.prim_array(T_BYTE, &vec![0u8; 30_000]);
+
+    // Holder: two Object fields "data" and "other".
+    let holder_class = b.class(
+        "scenarios/Holder",
+        &[("data", T_OBJECT), ("other", T_OBJECT)],
+    );
+    let mut h = Vec::new();
+    obj_field(&mut h, data_obj);
+    obj_field(&mut h, other);
+    let holder = b.instance(holder_class, &h);
+    b.thread_root(holder);
+}
+
+// ---------------------------------------------------------------------------
 // Scenario 21: subclass_hierarchy_no_panic (class_with_super coverage)
 // ---------------------------------------------------------------------------
 
