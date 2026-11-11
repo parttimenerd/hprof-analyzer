@@ -6,6 +6,33 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **MCP: three new graph-primitive tools for LLM-driven heap exploration** —
+  these expose the cached dense arrays directly, enabling iterative graph
+  traversal without OQL round-trips:
+
+  - **`get_dominator_path`** — walk the immediate-dominator chain (`idom[]`)
+    from any object up to the GC virtual root. Returns the full retention chain
+    with class name, shallow, and retained sizes per node. Available after any
+    `load_dump` (no `with_graph` needed). Use to answer "why is this object
+    retained?"
+
+  - **`get_outbound_references`** — list all objects a given object directly
+    references (forward CSR edges). Returns target index, class, shallow, and
+    retained for each reference. Requires `load_dump({with_graph: true})`.
+    Complements `find_incoming_references` (backward direction).
+
+  - **`get_retained_set`** — enumerate the dominator subtree of an object: all
+    objects that would be freed if this one were collected. Priority-queue
+    traversal returns the largest-retained objects first regardless of depth.
+    Includes a `class_summary` (top 20 classes by total retained in the
+    subtree). Optional `class_filter` (substring) focuses on specific classes.
+    Safety caps: 100 K nodes visited, depth ≤ 100.
+
+  Together with the existing `browse_dominators` (downward tree walk) and
+  `find_incoming_references` (backward edges), these give an LLM complete
+  graph traversal in all five directions: upward, downward, forward, backward,
+  and subtree enumeration.
+
 - **MCP `find_incoming_references` now uses the full inbound CSR** — previously
   read from `obj_graph_flat.inbound_edges`, a significance-filtered viz graph
   that silently omits objects below the retained-heap significance floor. The

@@ -470,6 +470,9 @@ claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
 | `inspect_object` | Class, shallow/retained sizes, and up to 20 inbound referrers for a specific object. |
 | `find_incoming_references` | List **all** objects that directly reference a given object by dense index. Reads the full inbound CSR — no significance floor. Requires `with_graph: true` on `load_dump`. |
 | `find_incoming_references_by_class` | Aggregate inbound references to all instances of a class, grouped by source class with counts and retained totals. |
+| `get_dominator_path` | Walk the immediate-dominator chain from an object up to the GC root. Returns the retention chain — every object that must be collected before this one can be freed. |
+| `get_outbound_references` | List all objects a given object directly references (forward edges). Requires `with_graph: true`. Complements `find_incoming_references`. |
+| `get_retained_set` | Enumerate all objects exclusively retained by a given object (its dominator subtree). Returns objects sorted by retained size with a class-level summary. Optional `class_filter` to focus on specific classes. |
 | `compare_dumps` | Compare two dump reports side-by-side: growth leaders, new classes, grown suspects. |
 | `redact` | Zero primitive values in a dump while preserving the object graph. |
 
@@ -485,6 +488,9 @@ claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
 7. browse_dominators                        — navigate the dominator tree from root or a suspect
 8. inspect_object                           — details on a specific object
 9. find_incoming_references({object_index}) — who holds this object? (needs with_graph:true)
+10. get_dominator_path({object_index})      — retention chain from object to GC root
+11. get_outbound_references({object_index}) — what does this object reference? (needs with_graph:true)
+12. get_retained_set({object_index})        — what would be freed if this object were collected?
 ```
 
 **Tip:** call `get_oql_docs({topic:"examples"})` for 20 worked queries covering common patterns: string waste, leak detection, dominator walk, thread locals, etc.

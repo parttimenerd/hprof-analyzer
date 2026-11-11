@@ -54,18 +54,27 @@ claude mcp add hprof -- hprof-analyzer mcp
 | `query` | Run OQL or a built-in view by name |
 | `browse_dominators` | Navigate the dominator tree |
 | `inspect_object` | Details for a specific object |
+| `find_incoming_references` | All objects referencing a given object (needs `with_graph: true`) |
+| `find_incoming_references_by_class` | Inbound references aggregated by source class |
+| `get_dominator_path` | Retention chain from object to GC root |
+| `get_outbound_references` | Forward edges: what does this object reference? (needs `with_graph: true`) |
+| `get_retained_set` | Dominator subtree: what would be freed? Optional `class_filter` |
 | `get_oql_docs` | OQL language reference (no dump needed) |
+| `compare_dumps` | Diff two dumps for class-level growth leaders |
 | `redact` | Zero primitive values before sharing |
 
 #### MCP investigation workflow
 
 ```
 1. load_dump({path: "/abs/path/to/heap.hprof"})
-2. get_report({section: "triage"})     ⭐ — severity-tagged signals, fastest orientation
-3. get_report({section: "leaks"})         — root paths, accumulation points
-4. get_histogram                          — class-level breakdown
-5. query({oql: "..."})                    — drill in with OQL
-6. browse_dominators                      — walk the dominator tree
+2. get_report({section: "triage"})            ⭐ — severity-tagged signals, fastest orientation
+3. get_report({section: "leaks"})                — root paths, accumulation points
+4. get_histogram                                 — class-level breakdown
+5. query({oql: "..."})                           — drill in with OQL
+6. browse_dominators                             — walk the dominator tree downward
+7. get_dominator_path({object_index: N})         — retention chain to GC root
+8. get_outbound_references({object_index: N})    — what does this object reference?
+9. get_retained_set({object_index: N})           — what would be freed?
 ```
 
 ### Option 2 — CLI fallback (no MCP needed)
