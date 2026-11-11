@@ -6,6 +6,40 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **MCP `find_incoming_references` now uses the full inbound CSR** — previously
+  read from `obj_graph_flat.inbound_edges`, a significance-filtered viz graph
+  that silently omits objects below the retained-heap significance floor. The
+  tool now reads the full `inb_off`/`inb_tgt` CSR (same source as
+  `inspect_object`), so every referencing object is visible. Requires
+  `with_graph=true` on `load_dump`; returns a clear error otherwise. `field_name`
+  is removed from the output (not available in the CSR — use `inspect_object` for
+  field-level detail).
+
+- **`heap inspect` shows inbound references when graph cache is present** — the
+  CLI now auto-detects whether the graph cache exists and, if so, loads
+  `CacheMode::Graph` and appends an "Referenced by" section (up to 20 referrers
+  with class, shallow, and retained sizes) to both text and `--json` output. When
+  the graph cache is absent, a hint to re-run with `heap load --with-graph` is
+  shown instead.
+
+- **New `heap find-incoming` CLI subcommand** — lists all objects that directly
+  reference a given object: `heap find-incoming <dump> --index N [--limit N]
+  [--json]`. Reads from the full inbound CSR (requires graph cache). Fills the
+  gap left by having `browse_dominators` (down) but no CLI equivalent of MCP
+  `find_incoming_references` (up).
+
+- **OQL: class names populated for `ObjRef` in dominator/refpath/list/map
+  expansion** — `dominator_rows`, `refpath_rows`, `expand_list_array`, and
+  `expand_map_table` all hardcoded `"?"` as the class string; now resolved via
+  `ctx.class_name_of()`.
+
+- **OQL: VALUES-only queries short-circuited in `run_oql_query`** — inline
+  `VALUES (…)` tables (e.g. `SELECT * FROM VALUES (1,'a') AS t(id,s)`) no
+  longer trigger a heap scan when executed through the MCP `query` tool or
+  `heap query` CLI. The escalated path now calls
+  `run_values_only_shortcircuit()` before the scan, matching the behaviour of
+  `run_single_dump`.
+
 - **P1 — Pool state snapshot in Leak Indicators** — scan-time detection of common
   Java thread/connection pool instances (HikariCP, Tomcat JDBC, DBCP2, C3P0,
   Spring `ThreadPoolTaskExecutor`, `ForkJoinPool`, `ExecutorService`). Each pool

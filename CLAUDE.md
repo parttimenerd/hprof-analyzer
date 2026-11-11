@@ -25,6 +25,11 @@ claude mcp add hprof -- hprof-analyzer mcp
 4. `get_report({section: "leaks"})` — root paths + dominator tree per suspect
 5. `query({oql: "top-retained-by-class"})` — confirm which class dominates memory
 
+**Traversing inbound references (who holds this object?):**
+- `inspect_object({object_index: N})` — shows class + up to 20 inbound referrers (always works)
+- `find_incoming_references({object_index: N})` — **full** inbound list from the CSR; requires `load_dump({with_graph: true})`. No significance floor — all referrers visible.
+- `find_incoming_references_by_class({class_name: "..."})` — aggregate inbound refs to all instances of a class grouped by source class.
+
 **For sharing a dump:** `redact({input: "...", output: "...-redacted.hprof"})` zeros primitive values while preserving the object graph.
 
 ## Build

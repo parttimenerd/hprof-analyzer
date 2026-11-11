@@ -156,7 +156,13 @@ Equivalent to `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak R
 claude mcp add hprof -- hprof-analyzer mcp
 ```
 
-Once registered, Claude can load dumps, run OQL queries, browse the dominator tree, and redact dumps directly. See the [README MCP section](../README.md#mcp-server--ai-assisted-heap-analysis) for full setup instructions for Claude Desktop and Cline.
+Once registered, Claude can load dumps, run OQL queries, browse the dominator tree, traverse inbound references, and redact dumps directly. See the [README MCP section](../README.md#mcp-server--ai-assisted-heap-analysis) for full setup instructions for Claude Desktop and Cline.
+
+Key traversal tools:
+- `browse_dominators` — navigate the dominator tree downward from the GC root
+- `inspect_object` — class, sizes, and up to 20 inbound referrers
+- `find_incoming_references` — full inbound referrer list (requires `load_dump` with `with_graph: true`)
+- `find_incoming_references_by_class` — who holds all instances of a given class?
 
 ## Redacting a dump before sharing
 

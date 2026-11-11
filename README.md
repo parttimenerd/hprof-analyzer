@@ -406,13 +406,14 @@ Available subcommands:
 | `heap histogram <dump> [--limit N]` | Class histogram with instance + retained counts |
 | `heap query <dump> --oql "..."` | Run an OQL query (add `--json` for machine-readable output) |
 | `heap browse <dump> [--index N] [--depth D] [--width W]` | Browse dominator tree (omit `--index` to start at root) |
-| `heap inspect <dump> --index N` | Inspect a specific object by dense index |
+| `heap inspect <dump> --index N` | Inspect a specific object by dense index. Shows inbound referrers when graph cache is present (see `heap load --with-graph`). |
+| `heap find-incoming <dump> --index N [--limit N]` | List all objects that directly reference a given object. Requires graph cache (`heap load --with-graph`). |
 | `heap docs [--topic syntax\|attributes\|examples\|workflow]` | Full OQL reference (no dump needed) |
-| `heap load <dump> [--with-graph]` | Pre-populate cache; `--with-graph` adds field-value queries |
+| `heap load <dump> [--with-graph]` | Pre-populate cache; `--with-graph` enables `heap find-incoming` and inbound refs in `heap inspect` |
 | `heap cache-list [<dump>]` | Show cache entries and sizes |
 | `heap cache-clear <dump>` | Delete cache for a dump |
 
-Add `--json` to any subcommand for machine-readable output. Object indices for `heap inspect` come from the `@objectId` column in query results or from `heap browse` output.
+Add `--json` to any subcommand for machine-readable output. Object indices come from the `@objectId` column in query results or `heap browse` output.
 
 ## MCP server
 
@@ -460,26 +461,30 @@ claude mcp add hprof -- hprof-analyzer mcp --dump /path/to/heap.hprof
 |------|-------------|
 | `get_session_info` | Check if a dump is loaded and see basic stats. Skip this if you already know the path. |
 | `get_oql_docs` | OQL language reference + workflow guide. No dump needed. |
-| `load_dump` | Load a `.hprof`, `.hprof.gz`, or `.hprof.zip` file. Fast after first run. |
+| `load_dump` | Load a `.hprof`, `.hprof.gz`, or `.hprof.zip` file. Fast after first run. Pass `with_graph: true` to enable inbound-reference traversal. |
 | `get_histogram` | Class histogram with instance + retained counts. |
 | `get_report` | Full report or a named section as JSON. Simple questions: `top-classes`, `top-objects`, `overview`, `threads`. Leak investigation: `triage` ⭐, `leaks`, `retainers`, `dominators`, `indicators`. Default: `all`. |
-| `list_views` | List all 20 built-in named query views (usable directly in `query()`). |
+| `list_views` | List all named query views (usable directly in `query()`). |
 | `query` | Run an OQL query or a built-in view by name; returns `{columns, rows, row_count, truncated}`. |
 | `browse_dominators` | Navigate dominator tree. Omit `object_index` to start at the GC root. |
-| `inspect_object` | Class, shallow/retained sizes for a specific object. |
+| `inspect_object` | Class, shallow/retained sizes, and up to 20 inbound referrers for a specific object. |
+| `find_incoming_references` | List **all** objects that directly reference a given object by dense index. Reads the full inbound CSR — no significance floor. Requires `with_graph: true` on `load_dump`. |
+| `find_incoming_references_by_class` | Aggregate inbound references to all instances of a class, grouped by source class with counts and retained totals. |
+| `compare_dumps` | Compare two dump reports side-by-side: growth leaders, new classes, grown suspects. |
 | `redact` | Zero primitive values in a dump while preserving the object graph. |
 
 ### Typical investigation
 
 ```
-1. get_session_info                     — check if a dump is already loaded (skip if you know the path)
-2. load_dump({path})                    — load the dump (fast from cache after first run)
-3. get_report({section:"triage"})  ⭐  — automated severity signals; fastest orientation
-4. get_report({section:"leaks"})        — root paths, accumulation points, dominated objects
-5. get_histogram                        — class-level breakdown by retained size
-6. query({oql:"..."})                   — drill in with OQL (or use a view name)
-7. browse_dominators                    — navigate the dominator tree from root or a suspect
-8. inspect_object                       — details on a specific object
+1. get_session_info                         — check if a dump is already loaded (skip if you know the path)
+2. load_dump({path})                        — load the dump (fast from cache after first run)
+3. get_report({section:"triage"})  ⭐      — automated severity signals; fastest orientation
+4. get_report({section:"leaks"})            — root paths, accumulation points, dominated objects
+5. get_histogram                            — class-level breakdown by retained size
+6. query({oql:"..."})                       — drill in with OQL (or use a view name)
+7. browse_dominators                        — navigate the dominator tree from root or a suspect
+8. inspect_object                           — details on a specific object
+9. find_incoming_references({object_index}) — who holds this object? (needs with_graph:true)
 ```
 
 **Tip:** call `get_oql_docs({topic:"examples"})` for 20 worked queries covering common patterns: string waste, leak detection, dominator walk, thread locals, etc.
