@@ -376,7 +376,9 @@ impl HprofMcpServer {
                        analysis (over-capacity collections, fill ratios) — the on-disk cache is keyed by dump path \
                        ONLY, not by these options, so a dump already cached under different options silently keeps \
                        serving the OLD options' data; ask the user to run `hprof-analyzer heap cache-clear <dump>` \
-                       if a section you expect to be populated comes back empty."
+                       if a section you expect to be populated comes back empty. \
+                       Set with_graph=true to enable find_incoming_references (full inbound-reference traversal \
+                       covering every object, no significance floor) and the inbound-refs list on inspect_object."
     )]
     async fn load_dump(
         &self,
@@ -991,6 +993,9 @@ impl HprofMcpServer {
                        Returns shallow_bytes (object itself) and retained_bytes (everything kept alive only by this object). \
                        When the dump was loaded with load_dump (which builds the offset index automatically), \
                        also returns 'fields': [{class, name, value}] for instance objects. \
+                       When the dump was loaded with load_dump({with_graph: true}), also returns \
+                       'inbound_refs': up to 20 objects that directly reference this one (class + retained_bytes). \
+                       For the full inbound list (all referrers, no cap), call find_incoming_references. \
                        After inspect, call browse_dominators({object_index: <same>}) to see what it retains.")]
     async fn inspect_object(
         &self,

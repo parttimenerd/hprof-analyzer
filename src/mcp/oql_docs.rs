@@ -735,7 +735,9 @@ Loads a heap dump. **Blocks until complete** — wait for the response.
 - First load: 5–15 min (writes disk cache)
 - Repeat load of same file: ~1 s
 - `path`: absolute path (accepts `.hprof`, `.hprof.gz`, `.hprof.zip`, `.tgz`)
-- `with_graph`: set `true` only if you need the `inspect_object` inbound-refs list. OQL `@inbounds`/`@outbounds` traversal works in queries without it (edges are built on demand during the query scan).
+- `with_graph`: set `true` to enable `find_incoming_references` (full inbound-reference list with no \
+  significance floor) and the inbound-refs list on `inspect_object`. OQL `@inbounds`/`@outbounds` \
+  traversal works in queries without it (edges are built on demand during the query scan).
 
 ### get_summary({})
 Markdown summary: top 5 suspects + top 5 classes by retained size + suggested OQL queries.
@@ -902,9 +904,27 @@ Navigates the dominator tree.
 - `width`: default 10 (children per node); increase for wide trees
 
 ### inspect_object({ object_index })
-Details for one object: class, shallow_bytes, retained_bytes.
+Details for one object: class, shallow_bytes, retained_bytes, fields (when offset index present),
+and up to 20 inbound referrers (when loaded with `with_graph: true`).
 - `object_index`: from `@objectId` in a query or `index` in browse_dominators output
 - After inspect, use `browse_dominators({object_index: <same>})` to see what it retains
+- For the full inbound list (all referrers, no cap), use `find_incoming_references`
+
+### find_incoming_references({ object_index, limit? })
+Lists **all** objects that directly reference the given object, read from the full inbound CSR.
+No significance floor — every referrer is included regardless of retained size.
+- Requires `load_dump({with_graph: true})` — returns an error otherwise with reload instructions
+- `limit`: max rows to return (default 50, max 200)
+- Each row: `{src_idx, src_class, src_shallow, src_retained}`
+- Use `src_idx` with `browse_dominators` or `inspect_object` to follow the retainer chain upward
+- Compare with `inspect_object` inbound_refs: same CSR source, but no 20-row cap here
+
+### find_incoming_references_by_class({ class_name, limit? })
+Aggregates inbound references to **all instances** of a class, grouped by source class.
+Answers "who keeps all `X` instances alive?" in a single call.
+- `class_name`: substring match — `"String"` matches `"java.lang.String"`
+- Requires `load_dump({with_graph: true})`
+- Returns rows sorted by ref_count descending: `{src_class, ref_count, total_src_retained, total_src_shallow}`
 
 ## Complete worked example: "Find the memory leak"
 
@@ -934,10 +954,16 @@ Details for one object: class, shallow_bytes, retained_bytes.
    → Drill into the HashMap — see what entries it holds
 
 6. inspect_object({"object_index": 67890})
-   → {class:"java.util.HashMap", shallow_bytes:48, retained_bytes:849000000}
+   → {class:"java.util.HashMap", shallow_bytes:48, retained_bytes:849000000,
+      inbound_refs:[{object_index:12345, class:"com.example.CacheManager", retained_bytes:850000000}]}
+      (inbound_refs only present when loaded with with_graph:true)
 
 7. query({"oql": "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM com.example.CacheManager ORDER BY ret DESC LIMIT 10"})
    → rows: [[12345, 850000000], ...]  ← @objectId is 0-based, use directly with browse_dominators
+
+8. find_incoming_references({"object_index": 67890})
+   → Lists every object referencing the HashMap — no 20-row cap, unlike inspect_object
+   (requires load_dump({with_graph:true}))
 ```
 
 ## Tips

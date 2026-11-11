@@ -31,7 +31,9 @@ brew install hprof-analyzer
 | `hprof-analyzer heap histogram <dump>` | Class histogram with instance + retained counts |
 | `hprof-analyzer heap query <dump> --oql "..."` | Run an OQL query |
 | `hprof-analyzer heap browse <dump>` | Navigate dominator tree interactively |
-| `hprof-analyzer heap inspect <dump> --index N` | Inspect a specific object by index |
+| `hprof-analyzer heap inspect <dump> --index N` | Inspect a specific object; shows inbound referrers when graph cache is present |
+| `hprof-analyzer heap find-incoming <dump> --index N` | List all objects that directly reference a given object (requires `heap load --with-graph`) |
+| `hprof-analyzer heap load <dump> --with-graph` | Build graph cache to enable `find-incoming` and inbound refs in `inspect` |
 | `hprof-analyzer heap docs --topic examples` | OQL reference and worked examples |
 
 Add `--json` to any `heap` subcommand for machine-readable output.
@@ -47,6 +49,9 @@ Add `--json` to any `heap` subcommand for machine-readable output.
 4. hprof-analyzer heap histogram <dump>                      — class-level breakdown
 5. hprof-analyzer heap query <dump> --oql "..."              — drill in with OQL
 6. hprof-analyzer heap browse <dump>                         — walk the dominator tree
+7. hprof-analyzer heap inspect <dump> --index N              — object details (+ inbound refs if graph cache present)
+8. hprof-analyzer heap load <dump> --with-graph              — build graph cache (run once)
+   hprof-analyzer heap find-incoming <dump> --index N        — list all referrers of an object
 ```
 
 ---
