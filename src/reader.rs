@@ -238,7 +238,7 @@ impl HprofReader {
         // `entry` is wrapped inside an `HprofReader` that cannot outlive this scope
         // (the reader is returned to the caller). No mutation of `archive` happens
         // after this point.
-        let entry: zip::read::ZipFile<'static> = unsafe { std::mem::transmute(entry) };
+        let entry: zip::read::ZipFile<'static, File> = unsafe { std::mem::transmute(entry) };
         Self::from_reader(entry)
     }
 

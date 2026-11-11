@@ -90,6 +90,10 @@ jobs:
         if: endsWith(matrix.target, '-linux-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - name: Add cross-compilation target
+        if: contains(matrix.target, 'musl')
+        run: rustup target add ${{ matrix.target }}
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:

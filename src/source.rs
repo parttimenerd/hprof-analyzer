@@ -129,7 +129,7 @@ fn open_zip_bytes(buf: ArcBuf) -> io::Result<HprofReader> {
     let archive: &'static mut zip::ZipArchive<Cursor<ArcBuf>> = Box::leak(Box::new(archive));
     let entry = archive.by_index(idx).map_err(io::Error::other)?;
     // SAFETY: same as reader.rs open_zip — `archive` is leaked so `'static` is valid.
-    let entry: zip::read::ZipFile<'static> = unsafe { std::mem::transmute(entry) };
+    let entry: zip::read::ZipFile<'static, Cursor<ArcBuf>> = unsafe { std::mem::transmute(entry) };
     HprofReader::from_reader(entry)
 }
 
