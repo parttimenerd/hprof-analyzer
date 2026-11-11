@@ -637,7 +637,7 @@ fn dominator_rows(
         .map(|&i| {
             vec![QueryValue::ObjRef {
                 index: i as u64,
-                class: "?".to_string(),
+                class: ctx.class_name_of(i).unwrap_or("?").to_string(),
                 addr: ctx.id_map.to_addr_opt(i),
             }]
         })
@@ -821,7 +821,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                 }
                 SelectItem::Star => QueryValue::ObjRef {
                     index: s as u64,
-                    class: "?".to_string(),
+                    class: ctx.class_name_of(s).unwrap_or("?").to_string(),
                     addr: ctx.id_map.to_addr_opt(s),
                 },
                 // jsonify(x) is expanded after the scan by
@@ -2705,7 +2705,7 @@ fn expand_list_array(arr: u32, ctx: &LateCtx, rows: &mut Vec<Vec<QueryValue>>, l
                 QueryValue::Int(logical_idx as i64),
                 QueryValue::ObjRef {
                     index: elem as u64,
-                    class: "?".to_string(),
+                    class: ctx.class_name_of(elem).unwrap_or("?").to_string(),
                     addr: ctx.id_map.to_addr_opt(elem),
                 },
             ]);
@@ -2738,7 +2738,7 @@ fn expand_map_table(table: u32, ctx: &LateCtx, rows: &mut Vec<Vec<QueryValue>>, 
                     } else {
                         QueryValue::ObjRef {
                             index: key as u64,
-                            class: "?".to_string(),
+                            class: ctx.class_name_of(key).unwrap_or("?").to_string(),
                             addr: ctx.id_map.to_addr_opt(key),
                         }
                     },
@@ -2747,7 +2747,7 @@ fn expand_map_table(table: u32, ctx: &LateCtx, rows: &mut Vec<Vec<QueryValue>>, 
                     } else {
                         QueryValue::ObjRef {
                             index: value as u64,
-                            class: "?".to_string(),
+                            class: ctx.class_name_of(value).unwrap_or("?").to_string(),
                             addr: ctx.id_map.to_addr_opt(value),
                         }
                     },
