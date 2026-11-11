@@ -160,6 +160,9 @@ Once registered, Claude can load dumps, run OQL queries, browse the dominator tr
 
 Key traversal tools:
 - `browse_dominators` — navigate the dominator tree downward from the GC root
+- `get_dominator_path` — walk the retention chain upward from an object to the GC root
+- `get_outbound_references` — what does this object reference? (requires `with_graph: true`)
+- `get_retained_set` — what would be freed if this object were collected? Optional `class_filter`
 - `inspect_object` — class, sizes, and up to 20 inbound referrers
 - `find_incoming_references` — full inbound referrer list (requires `load_dump` with `with_graph: true`)
 - `find_incoming_references_by_class` — who holds all instances of a given class?

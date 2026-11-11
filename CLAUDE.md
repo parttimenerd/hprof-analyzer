@@ -25,10 +25,14 @@ claude mcp add hprof -- hprof-analyzer mcp
 4. `get_report({section: "leaks"})` — root paths + dominator tree per suspect
 5. `query({oql: "top-retained-by-class"})` — confirm which class dominates memory
 
-**Traversing inbound references (who holds this object?):**
+**Graph traversal primitives (iterative exploration):**
+- `get_dominator_path({object_index: N})` — walk `idom[]` from object to GC root (retention chain). Always available.
+- `get_outbound_references({object_index: N})` — forward edges: what does this object reference? Requires `with_graph: true`.
+- `get_retained_set({object_index: N})` — dominator subtree: what would be freed if this object were collected? Optional `class_filter`.
 - `inspect_object({object_index: N})` — shows class + up to 20 inbound referrers (always works)
 - `find_incoming_references({object_index: N})` — **full** inbound list from the CSR; requires `load_dump({with_graph: true})`. No significance floor — all referrers visible.
 - `find_incoming_references_by_class({class_name: "..."})` — aggregate inbound refs to all instances of a class grouped by source class.
+- `browse_dominators({object_index: N})` — walk the dominator tree downward from a node.
 
 **For sharing a dump:** `redact({input: "...", output: "...-redacted.hprof"})` zeros primitive values while preserving the object graph.
 

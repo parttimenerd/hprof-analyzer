@@ -28,6 +28,9 @@ fn main() {
     println!("cargo:rerun-if-changed=web/package-lock.json");
     println!("cargo:rerun-if-changed=web/esbuild.config.mjs");
     println!("cargo:rerun-if-changed=web/dist/bundle.js");
+    println!("cargo:rerun-if-changed=src/report/model.rs");
+
+    let schema_version = extract_schema_version();
 
     let web = Path::new("web");
     let bundle = web.join("dist/bundle.js");
@@ -49,7 +52,14 @@ fn main() {
             "install"
         };
         assert!(run_npm(web, &[install_cmd]), "`npm {install_cmd}` failed");
-        assert!(run_npm(web, &["run", "build"]), "`npm run build` failed");
+        assert!(
+            run_npm_with_env(
+                web,
+                &["run", "build"],
+                &[("SCHEMA_VERSION", &schema_version)]
+            ),
+            "`npm run build` failed"
+        );
         assert!(
             bundle.exists(),
             "npm run build did not produce web/dist/bundle.js"
@@ -59,6 +69,31 @@ fn main() {
     compress_bundle(&bundle);
     copy_raw_bundle(&bundle);
     codegen_secret_patterns();
+}
+
+/// Extract the numeric value of `pub const SCHEMA_VERSION: u32 = N;` from
+/// `src/report/model.rs`. Panics with a clear message if not found, so a
+/// rename or format change is caught at build time rather than silently
+/// leaving the viewer with a stale hardcoded version.
+fn extract_schema_version() -> String {
+    let model = std::fs::read_to_string("src/report/model.rs")
+        .expect("build.rs: could not read src/report/model.rs");
+    for line in model.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("pub const SCHEMA_VERSION: u32 = ") {
+            if let Some(num) = rest.strip_suffix(';') {
+                let v: u32 = num
+                    .trim()
+                    .parse()
+                    .expect("build.rs: SCHEMA_VERSION value is not a u32");
+                return v.to_string();
+            }
+        }
+    }
+    panic!(
+        "build.rs: could not find `pub const SCHEMA_VERSION: u32 = N;` in \
+         src/report/model.rs — was it renamed?"
+    );
 }
 /// Raw-deflate compress `web/dist/bundle.js` into `$OUT_DIR/bundle.deflate`.
 /// `src/html.rs` embeds this with `include_bytes!` so the binary carries the
@@ -156,7 +191,16 @@ fn npm_available() -> bool {
 }
 
 fn run_npm(dir: &Path, args: &[&str]) -> bool {
-    match Command::new(npm_bin()).args(args).current_dir(dir).status() {
+    run_npm_with_env(dir, args, &[])
+}
+
+fn run_npm_with_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> bool {
+    match Command::new(npm_bin())
+        .args(args)
+        .current_dir(dir)
+        .envs(env.iter().copied())
+        .status()
+    {
         Ok(s) => s.success(),
         Err(_) => false,
     }

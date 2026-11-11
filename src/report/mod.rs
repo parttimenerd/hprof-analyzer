@@ -1547,7 +1547,6 @@ mod tests {
     fn schema_version_guard() {
         let r = fixture_report();
         assert_eq!(r.schema_version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 17);
     }
 
     #[test]

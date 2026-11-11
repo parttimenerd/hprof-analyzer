@@ -7,10 +7,17 @@
 // Deterministic: no content hashing, no timestamps in the output; esbuild's
 // output for a fixed input + version is byte-stable, which the CI freshness
 // check relies on.
+//
+// SCHEMA_VERSION is injected at build time from the Rust source via build.rs
+// so the viewer's version gate never drifts from the Rust definition.
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
 const BUDGET_BYTES = 2048 * 1024;
+
+// Injected by build.rs; fall back to 0 so a standalone `npm run build`
+// outside cargo still compiles (it just won't enforce the version gate).
+const schemaVersion = process.env.SCHEMA_VERSION ?? "0";
 
 await build({
   entryPoints: ["src/index.tsx"],
@@ -20,7 +27,10 @@ await build({
   target: ["es2020"],
   legalComments: "none",
   loader: { ".css": "text" },
-  define: { "process.env.NODE_ENV": '"production"' },
+  define: {
+    "process.env.NODE_ENV": '"production"',
+    __SCHEMA_VERSION__: schemaVersion,
+  },
   outfile: "dist/bundle.js",
 });
 
