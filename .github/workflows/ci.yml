@@ -126,7 +126,7 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Install wasm-bindgen-cli (for wasm64 build)
-        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+        run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
 
       - name: Build browser REPL
         run: bash scripts/build-browser.sh
@@ -228,7 +228,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             archive: tar.gz
           - os: ubuntu-24.04-arm
@@ -262,7 +262,13 @@ jobs:
 
       - name: Install musl tools
         if: endsWith(matrix.target, '-linux-musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: |
+          for i in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y musl-tools && exit 0
+            sleep 15
+          done
+          echo "apt-get failed after 3 attempts" >&2
+          exit 1
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

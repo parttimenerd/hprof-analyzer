@@ -12,7 +12,7 @@
 #       rustup toolchain install nightly --component rust-src
 #   * wasm64-unknown-unknown is a Tier-3 target with no prebuilt std, so we
 #     build std from source via -Z build-std.
-#   * wasm-bindgen 0.2.127 (matches Cargo.lock) — reused from the wasm-pack cache.
+#   * wasm-bindgen 0.2.130 (matches Cargo.lock) — reused from the wasm-pack cache.
 #
 # This script overrides the toolchain per-invocation with RUSTUP_TOOLCHAIN and
 # does NOT modify rust-toolchain.toml (the repo stays pinned to stable).
@@ -23,7 +23,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 NIGHTLY="${HPROF_NIGHTLY_TOOLCHAIN:-nightly}"
-WB_VERSION="0.2.127"
+WB_VERSION="0.2.130"
 OUT_DIR="dist/wasm64"
 
 echo "==> Checking prerequisites…"
