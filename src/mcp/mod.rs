@@ -512,7 +512,7 @@ impl HprofMcpServer {
             cache_mismatch_notes
                 .push("collections=true requested but cache has no collection data");
         }
-        if (p.with_graph || p.full_analysis) && result.mode != CacheMode::Graph {
+        if p.with_graph && result.mode != CacheMode::Graph {
             cache_mismatch_notes
                 .push("with_graph=true requested but cache was built without the reference graph");
         }
@@ -1402,6 +1402,11 @@ impl HprofMcpServer {
             }
             let start = inb_off[i] as usize;
             let end = inb_off[i + 1] as usize;
+            if start == end {
+                // No inbound edges (GC root or unreferenced) — count it toward the
+                // "no captured inbound edges" note, not as a matched instance.
+                continue;
+            }
             matched_instances += 1;
             for &src in &inb_tgt[start..end] {
                 let s = src as usize;
@@ -1888,6 +1893,11 @@ impl HprofMcpServer {
         let mut cur = idx as u32;
         let max_steps = 1000; // safety cap
         for _ in 0..max_steps {
+            if cur == u32::MAX {
+                // Undefined dominator (unreachable object): stop without emitting
+                // a bogus "<GC Root>" entry at index u32::MAX.
+                break;
+            }
             let i = cur as usize;
             let (class, sh, ret) = if i < n {
                 let cidx = class_idx[i] as usize;
@@ -1898,6 +1908,7 @@ impl HprofMcpServer {
                     .unwrap_or("<unknown>");
                 (cname.to_string(), shallow[i], retained[i])
             } else {
+                // i == n: the virtual GC root.
                 ("<GC Root>".to_string(), 0u32, 0u64)
             };
             path.push(serde_json::json!({
@@ -1906,7 +1917,7 @@ impl HprofMcpServer {
                 "shallow_bytes": sh,
                 "retained_bytes": ret,
             }));
-            if cur == vroot || cur == u32::MAX || i >= n {
+            if cur == vroot {
                 break;
             }
             cur = idom[i];
@@ -2394,7 +2405,11 @@ fn build_node(
 ) -> DomNode {
     let vroot = n as u64;
     let (class, ret, sh) = if idx == vroot {
-        let total: u64 = retained.iter().sum();
+        // The virtual GC root's retained is the total reachable heap — the sum of
+        // every object's shallow size. Summing per-object retained sizes would
+        // double-count dominated objects (each object's retained overlaps its
+        // dominator's).
+        let total: u64 = shallow.iter().map(|&s| s as u64).sum();
         ("<GC Root>".to_string(), total, 0u32)
     } else {
         let i = idx as usize;
@@ -2633,8 +2648,16 @@ fn truncate_dom_tree_inner(
                         }
                     }
                 }
-                for val in map.values_mut() {
-                    truncate_dom_tree_inner(val, depth + 1, max_depth, max_width);
+                for (key, val) in map.iter_mut() {
+                    // The `dominator_tree` key roots the actual tree; reset depth so
+                    // the wrapper layers (leaks → suspects[]) don't consume the
+                    // depth budget and silently cap the tree two levels early.
+                    let child_depth = if key == "dominator_tree" {
+                        0
+                    } else {
+                        depth + 1
+                    };
+                    truncate_dom_tree_inner(val, child_depth, max_depth, max_width);
                 }
             }
         }
@@ -3008,7 +3031,10 @@ mod tests {
         // inline table directly without scanning (or even requiring) the heap.
         let dir = std::env::temp_dir();
         let mut path = dir;
-        path.push(format!("hprof_mcp_values_test_{}.hprof", std::process::id()));
+        path.push(format!(
+            "hprof_mcp_values_test_{}.hprof",
+            std::process::id()
+        ));
         let mut h = b"JAVA PROFILE 1.0.2\0".to_vec();
         h.extend_from_slice(&8u32.to_be_bytes()); // id_size
         h.extend_from_slice(&0u64.to_be_bytes()); // timestamp
@@ -3117,6 +3143,82 @@ mod tests {
             marker["_omitted"],
             serde_json::json!(30),
             "should report 30 omitted children"
+        );
+    }
+
+    #[test]
+    fn build_node_virtual_root_retained_is_total_heap() {
+        // 3 objects; obj0 dominates obj1 and obj2; virtual root = index 3.
+        let n = 3usize;
+        // Dominator-children CSR (len n+2): 0->[1,2], 1->[], 2->[], 3(vroot)->[0].
+        let dc_off = vec![0u32, 2, 2, 2, 3];
+        let dc_tgt = vec![1u32, 2, 0];
+        let shallow = vec![10u32, 20, 30]; // total heap = 60
+        let retained = vec![60u64, 20, 30]; // obj0 retains 60, obj1 20, obj2 30
+        let class_idx = vec![0u32, 1, 2];
+        let class_by_idx: std::collections::HashMap<u32, String> =
+            [(0u32, "A"), (1, "B"), (2, "C")]
+                .into_iter()
+                .map(|(k, v)| (k, v.to_string()))
+                .collect();
+
+        let tree = browse_tree(
+            3,
+            3,
+            10,
+            n,
+            &dc_off,
+            &dc_tgt,
+            &retained,
+            &shallow,
+            &class_idx,
+            &class_by_idx,
+        );
+
+        assert_eq!(tree["class"], "<GC Root>");
+        // The virtual GC root retains the entire heap: the sum of shallow sizes
+        // (10+20+30 = 60). `retained.iter().sum()` double-counts dominated
+        // objects (60+20+30 = 110), inflating the reported root size.
+        assert_eq!(
+            tree["retained_bytes"].as_u64(),
+            Some(60),
+            "virtual root retained_bytes must be total heap, got {tree}"
+        );
+    }
+
+    #[test]
+    fn truncate_dom_tree_depth_counts_wrapper_nesting() {
+        // `get_report(leaks)` passes the WHOLE leaks report to
+        // truncate_dom_tree_depth. The dominator_tree is nested under
+        // `suspects[].dominator_tree`, so the depth counter starts at 2 rather
+        // than 0 and the tree is capped two levels earlier than the documented
+        // "capped at depth 3": only the root and its immediate children survive.
+        let mut v = serde_json::json!({
+            "suspects": [{
+                "dominator_tree": {
+                    "obj_index_1based": 1,
+                    "children": [
+                        {"obj_index_1based": 2, "children": [
+                            {"obj_index_1based": 3, "children": [
+                                {"obj_index_1based": 4, "children": []}
+                            ]}
+                        ]}
+                    ]
+                }
+            }]
+        });
+
+        truncate_dom_tree_depth(&mut v, 3);
+
+        let tree = &v["suspects"][0]["dominator_tree"];
+        let level1 = &tree["children"][0];
+        assert_eq!(level1["obj_index_1based"], 2);
+        // The grandchild (level 3) must still be visible under a "depth 3" cap;
+        // it is wiped today because the wrapper layers consume the depth budget.
+        let level2 = &level1["children"][0];
+        assert_eq!(
+            level2["obj_index_1based"], 3,
+            "grandchild should survive a depth-3 cap, got: {level1}"
         );
     }
 }

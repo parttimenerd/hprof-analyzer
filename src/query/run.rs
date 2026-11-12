@@ -1436,7 +1436,7 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
         if in_sets.is_empty() {
             qv_rows
                 .iter()
-                .filter(|row| eval_pred_on_row(pred, col_names, row))
+                .filter(|row| eval_pred_on_row(pred, col_names, row) == Some(true))
                 .collect()
         } else {
             qv_rows
@@ -1444,6 +1444,7 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
                 .filter(|row| {
                     let mut cursor = 0usize;
                     eval_pred_on_row_with_sets(pred, col_names, row, &in_sets, &mut cursor)
+                        == Some(true)
                 })
                 .collect()
         }
@@ -1558,7 +1559,7 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
                             .filter(|row| {
                                 filter
                                     .as_ref()
-                                    .map(|p| eval_pred_on_row(p, col_names, row))
+                                    .map(|p| eval_pred_on_row(p, col_names, row) == Some(true))
                                     .unwrap_or(true)
                             })
                             .map(|row| agg_arg_value(arg, row))
@@ -1575,41 +1576,44 @@ pub fn execute_values_query(q: &Query, plan: &QueryPlan) -> QueryResult {
                                 QueryValue::Int(n as i64)
                             }
                             AggFunc::Sum => {
-                                // E-04: preserve Int type when all operands are Int.
-                                let all_int = vals.iter().all(|v| matches!(v, QueryValue::Int(_)));
-                                if all_int {
-                                    let sum: i64 = vals
-                                        .iter()
-                                        .filter_map(|v| {
-                                            if let QueryValue::Int(n) = v {
-                                                Some(*n)
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .fold(0i64, i64::wrapping_add);
-                                    QueryValue::Int(sum)
+                                // SUM over no non-null values is NULL (SQL semantics),
+                                // not 0.
+                                if vals.is_empty() {
+                                    QueryValue::Null
                                 } else {
-                                    let sum = vals.iter().fold(0.0f64, |acc, v| match v {
-                                        QueryValue::Int(n) => acc + *n as f64,
-                                        QueryValue::Float(f) => acc + f,
-                                        _ => acc,
-                                    });
-                                    QueryValue::Float(sum)
+                                    // E-04: preserve Int type when all operands are Int.
+                                    let all_int =
+                                        vals.iter().all(|v| matches!(v, QueryValue::Int(_)));
+                                    if all_int {
+                                        let sum: i64 = vals
+                                            .iter()
+                                            .filter_map(|v| {
+                                                if let QueryValue::Int(n) = v {
+                                                    Some(*n)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .fold(0i64, i64::wrapping_add);
+                                        QueryValue::Int(sum)
+                                    } else {
+                                        let sum = vals.iter().fold(0.0f64, |acc, v| match v {
+                                            QueryValue::Int(n) => acc + *n as f64,
+                                            QueryValue::Float(f) => acc + f,
+                                            _ => acc,
+                                        });
+                                        QueryValue::Float(sum)
+                                    }
                                 }
                             }
                             AggFunc::Min => vals
                                 .iter()
-                                .min_by(|a, b| {
-                                    crate::query::execute::total_cmp_query_value(a, b)
-                                })
+                                .min_by(|a, b| crate::query::execute::total_cmp_query_value(a, b))
                                 .cloned()
                                 .unwrap_or(QueryValue::Null),
                             AggFunc::Max => vals
                                 .iter()
-                                .max_by(|a, b| {
-                                    crate::query::execute::total_cmp_query_value(a, b)
-                                })
+                                .max_by(|a, b| crate::query::execute::total_cmp_query_value(a, b))
                                 .cloned()
                                 .unwrap_or(QueryValue::Null),
                             AggFunc::Avg => {
@@ -2024,7 +2028,7 @@ fn eval_expr_on_row(
         }
         Expr::Case { branches, else_ } => {
             for (pred, then_expr) in branches {
-                if eval_pred_on_row(pred, col_names, row) {
+                if eval_pred_on_row(pred, col_names, row) == Some(true) {
                     return eval_expr_on_row(then_expr, col_names, row);
                 }
             }
@@ -2102,9 +2106,7 @@ fn eval_method_on_qv(
             }
             "substr" | "substring" => {
                 // SQL SUBSTR is 1-based; match the heap-scan executor's semantics.
-                let start_val = args
-                    .first()
-                    .map(|a| eval_expr_on_row(a, col_names, row));
+                let start_val = args.first().map(|a| eval_expr_on_row(a, col_names, row));
                 let len_val = args.get(1).map(|a| eval_expr_on_row(a, col_names, row));
                 let start_char = match start_val {
                     Some(QueryValue::Int(n)) => (n.max(1) - 1) as usize,
@@ -2214,31 +2216,46 @@ fn eval_pred_on_row_with_sets(
     row: &[crate::query::model::QueryValue],
     in_sets: &[std::collections::HashSet<String>],
     in_cursor: &mut usize,
-) -> bool {
+) -> Option<bool> {
     use crate::query::ast::{Attr, Predicate};
-    use crate::query::execute::{canonical_distinct_key_pub as canonical_key, compare_values};
+    use crate::query::execute::{canonical_distinct_key_pub as canonical_key, compare_values_3vl};
     match pred {
         Predicate::And(a, b) => {
-            eval_pred_on_row_with_sets(a, col_names, row, in_sets, in_cursor)
-                && eval_pred_on_row_with_sets(b, col_names, row, in_sets, in_cursor)
+            match eval_pred_on_row_with_sets(a, col_names, row, in_sets, in_cursor) {
+                Some(false) => Some(false),
+                Some(true) => eval_pred_on_row_with_sets(b, col_names, row, in_sets, in_cursor),
+                None => match eval_pred_on_row_with_sets(b, col_names, row, in_sets, in_cursor) {
+                    Some(false) => Some(false),
+                    _ => None,
+                },
+            }
         }
         Predicate::Or(a, b) => {
-            eval_pred_on_row_with_sets(a, col_names, row, in_sets, in_cursor)
-                || eval_pred_on_row_with_sets(b, col_names, row, in_sets, in_cursor)
+            match eval_pred_on_row_with_sets(a, col_names, row, in_sets, in_cursor) {
+                Some(true) => Some(true),
+                Some(false) => eval_pred_on_row_with_sets(b, col_names, row, in_sets, in_cursor),
+                None => match eval_pred_on_row_with_sets(b, col_names, row, in_sets, in_cursor) {
+                    Some(true) => Some(true),
+                    _ => None,
+                },
+            }
         }
         Predicate::Not(inner) => {
-            !eval_pred_on_row_with_sets(inner, col_names, row, in_sets, in_cursor)
+            match eval_pred_on_row_with_sets(inner, col_names, row, in_sets, in_cursor) {
+                Some(v) => Some(!v),
+                None => None,
+            }
         }
         Predicate::Compare { lhs, op, rhs } => {
             let lv = eval_expr_on_row(lhs, col_names, row);
             let rv = eval_expr_on_row(rhs, col_names, row);
-            compare_values(&lv, *op, &rv, None)
+            compare_values_3vl(&lv, *op, &rv, None)
         }
         Predicate::InSubquery { lhs, .. } => {
             let idx = *in_cursor;
             *in_cursor += 1;
             let Some(set) = in_sets.get(idx) else {
-                return true; // conservative: include row if set missing
+                return Some(true); // conservative: include row if set missing
             };
             // Resolve the LHS column value.
             let lhs_val = match lhs {
@@ -2253,40 +2270,54 @@ fn eval_pred_on_row_with_sets(
                 }
                 _ => crate::query::model::QueryValue::Null,
             };
-            set.contains(&canonical_key(&lhs_val))
+            Some(set.contains(&canonical_key(&lhs_val)))
         }
-        Predicate::Bool(b) => *b,
+        Predicate::Bool(b) => Some(*b),
         // Conservative: include row for unsupported predicate types.
-        _ => true,
+        _ => Some(true),
     }
 }
 
-/// Evaluate a predicate against a VALUES row. Returns true when the row passes.
-/// Unsupported predicate types (InstanceOf, InSubquery, Exists) always return true
-/// (conservative: include the row).
+/// Evaluate a predicate against a VALUES row using three-valued logic:
+/// `Some(true)`/`Some(false)` are definite; `None` is UNKNOWN (a NULL comparison).
+/// The WHERE filter treats UNKNOWN as "not matching", so `NULL != 1` and
+/// `NOT (NULL = 2)` correctly exclude the NULL row.
 fn eval_pred_on_row(
     pred: &crate::query::ast::Predicate,
     col_names: &[String],
     row: &[crate::query::model::QueryValue],
-) -> bool {
+) -> Option<bool> {
     use crate::query::ast::Predicate;
-    use crate::query::execute::compare_values;
+    use crate::query::execute::compare_values_3vl;
     match pred {
-        Predicate::And(a, b) => {
-            eval_pred_on_row(a, col_names, row) && eval_pred_on_row(b, col_names, row)
-        }
-        Predicate::Or(a, b) => {
-            eval_pred_on_row(a, col_names, row) || eval_pred_on_row(b, col_names, row)
-        }
-        Predicate::Not(inner) => !eval_pred_on_row(inner, col_names, row),
+        Predicate::And(a, b) => match eval_pred_on_row(a, col_names, row) {
+            Some(false) => Some(false),
+            Some(true) => eval_pred_on_row(b, col_names, row),
+            None => match eval_pred_on_row(b, col_names, row) {
+                Some(false) => Some(false),
+                _ => None,
+            },
+        },
+        Predicate::Or(a, b) => match eval_pred_on_row(a, col_names, row) {
+            Some(true) => Some(true),
+            Some(false) => eval_pred_on_row(b, col_names, row),
+            None => match eval_pred_on_row(b, col_names, row) {
+                Some(true) => Some(true),
+                _ => None,
+            },
+        },
+        Predicate::Not(inner) => match eval_pred_on_row(inner, col_names, row) {
+            Some(v) => Some(!v),
+            None => None,
+        },
         Predicate::Compare { lhs, op, rhs } => {
             let lv = eval_expr_on_row(lhs, col_names, row);
             let rv = eval_expr_on_row(rhs, col_names, row);
-            compare_values(&lv, *op, &rv, None)
+            compare_values_3vl(&lv, *op, &rv, None)
         }
-        Predicate::Bool(b) => *b,
+        Predicate::Bool(b) => Some(*b),
         // Conservative: include row for unsupported predicate types.
-        _ => true,
+        _ => Some(true),
     }
 }
 

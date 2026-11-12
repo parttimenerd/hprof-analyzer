@@ -1587,7 +1587,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Expr::Aggregate { .. } => QueryValue::Null,
             Expr::Case { branches, else_ } => {
                 for (cond, then_expr) in branches {
-                    if self.eval_pred(cond, src_idx, class_id, blob) {
+                    if self.eval_pred(cond, src_idx, class_id, blob) == Some(true) {
                         return self.eval_expr(then_expr, src_idx, class_id, blob);
                     }
                 }
@@ -1733,7 +1733,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Expr::Aggregate { .. } => QueryValue::Null,
             Expr::Case { branches, else_ } => {
                 for (cond, then_expr) in branches {
-                    if self.array_eval_pred(cond, src_idx, class_name, length) {
+                    if self.array_eval_pred(cond, src_idx, class_name, length) == Some(true) {
                         return self.eval_expr_array(then_expr, src_idx, class_name, length);
                     }
                 }
@@ -2073,7 +2073,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             {
                 continue;
             }
-            if !self.eval_pred(&term.pred, src_idx, class_id, blob) {
+            if self.eval_pred(&term.pred, src_idx, class_id, blob) != Some(true) {
                 return false;
             }
         }
@@ -2094,36 +2094,43 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         src_idx: usize,
         class_id: u64,
         blob: &[u8],
-    ) -> bool {
+    ) -> Option<bool> {
         use crate::query::ast::Predicate as P;
         match pred {
-            P::And(a, b) => {
-                let a_val = self.eval_pred(a, src_idx, class_id, blob);
-                if !a_val {
+            P::And(a, b) => match self.eval_pred(a, src_idx, class_id, blob) {
+                Some(false) => {
                     // Short-circuit: skip b, but advance cursors by b's node count
                     // so subsequent predicates (siblings in the term list) consume
                     // the right entries from in_sets / exists_bools.
                     self.in_cursor.set(self.in_cursor.get() + count_in_nodes(b));
                     self.exists_cursor
                         .set(self.exists_cursor.get() + count_exists_nodes(b));
-                    false
-                } else {
-                    self.eval_pred(b, src_idx, class_id, blob)
+                    Some(false)
                 }
-            }
-            P::Or(a, b) => {
-                let a_val = self.eval_pred(a, src_idx, class_id, blob);
-                if a_val {
+                Some(true) => self.eval_pred(b, src_idx, class_id, blob),
+                None => match self.eval_pred(b, src_idx, class_id, blob) {
+                    Some(false) => Some(false),
+                    _ => None,
+                },
+            },
+            P::Or(a, b) => match self.eval_pred(a, src_idx, class_id, blob) {
+                Some(true) => {
                     // Short-circuit: skip b, but advance cursors.
                     self.in_cursor.set(self.in_cursor.get() + count_in_nodes(b));
                     self.exists_cursor
                         .set(self.exists_cursor.get() + count_exists_nodes(b));
-                    true
-                } else {
-                    self.eval_pred(b, src_idx, class_id, blob)
+                    Some(true)
                 }
-            }
-            P::Not(a) => !self.eval_pred(a, src_idx, class_id, blob),
+                Some(false) => self.eval_pred(b, src_idx, class_id, blob),
+                None => match self.eval_pred(b, src_idx, class_id, blob) {
+                    Some(true) => Some(true),
+                    _ => None,
+                },
+            },
+            P::Not(a) => match self.eval_pred(a, src_idx, class_id, blob) {
+                Some(v) => Some(!v),
+                None => None,
+            },
             P::InstanceOf(cname) => {
                 // `WHERE x INSTANCEOF C` follows Java semantics: match C and any
                 // subclass. Reuse the resolver's hierarchy walk (LiveResolver
@@ -2134,9 +2141,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     class_name: cname.clone(),
                     is_regex: false,
                 };
-                self.resolver.is_instance_of(class_id, &spec, None)
+                Some(self.resolver.is_instance_of(class_id, &spec, None))
             }
-            P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
+            P::InSubquery { lhs, .. } => Some(self.eval_in_subquery(lhs, src_idx)),
             P::Exists { .. } => {
                 // Non-correlated: look up the pre-evaluated bool by encounter
                 // order. The cursor was reset to 0 in `where_passes` before
@@ -2144,9 +2151,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // its `exists_bools` entry regardless of tree shape.
                 let idx = self.exists_cursor.get();
                 self.exists_cursor.set(idx + 1);
-                self.exists_bools.get(idx).copied().unwrap_or(false)
+                Some(self.exists_bools.get(idx).copied().unwrap_or(false))
             }
-            P::Bool(b) => *b,
+            P::Bool(b) => Some(*b),
             P::Compare { lhs, op, rhs } => {
                 // Pass the real `src_idx` so object-identity LHS attrs
                 // (@objectAddress/@objectId) compare against the actual object,
@@ -2158,7 +2165,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // string-literal RHS has one (arithmetic RHS → None, which is
                 // correct: LIKE RHS is validated as string literal at parse time).
                 let like_re = rhs.as_lit().and_then(|v| self.like_re_for(v));
-                compare_values(&lv, *op, &rv, like_re)
+                compare_values_3vl(&lv, *op, &rv, like_re)
             }
         }
     }
@@ -2229,7 +2236,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             {
                 continue;
             }
-            if !self.array_eval_pred(&term.pred, src_idx, class_name, length) {
+            if self.array_eval_pred(&term.pred, src_idx, class_name, length) != Some(true) {
                 return false;
             }
         }
@@ -2241,32 +2248,39 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         src_idx: usize,
         class_name: &str,
         length: u32,
-    ) -> bool {
+    ) -> Option<bool> {
         use crate::query::ast::Predicate as P;
         match pred {
-            P::And(a, b) => {
-                let a_val = self.array_eval_pred(a, src_idx, class_name, length);
-                if !a_val {
+            P::And(a, b) => match self.array_eval_pred(a, src_idx, class_name, length) {
+                Some(false) => {
                     self.in_cursor.set(self.in_cursor.get() + count_in_nodes(b));
                     self.exists_cursor
                         .set(self.exists_cursor.get() + count_exists_nodes(b));
-                    false
-                } else {
-                    self.array_eval_pred(b, src_idx, class_name, length)
+                    Some(false)
                 }
-            }
-            P::Or(a, b) => {
-                let a_val = self.array_eval_pred(a, src_idx, class_name, length);
-                if a_val {
+                Some(true) => self.array_eval_pred(b, src_idx, class_name, length),
+                None => match self.array_eval_pred(b, src_idx, class_name, length) {
+                    Some(false) => Some(false),
+                    _ => None,
+                },
+            },
+            P::Or(a, b) => match self.array_eval_pred(a, src_idx, class_name, length) {
+                Some(true) => {
                     self.in_cursor.set(self.in_cursor.get() + count_in_nodes(b));
                     self.exists_cursor
                         .set(self.exists_cursor.get() + count_exists_nodes(b));
-                    true
-                } else {
-                    self.array_eval_pred(b, src_idx, class_name, length)
+                    Some(true)
                 }
-            }
-            P::Not(a) => !self.array_eval_pred(a, src_idx, class_name, length),
+                Some(false) => self.array_eval_pred(b, src_idx, class_name, length),
+                None => match self.array_eval_pred(b, src_idx, class_name, length) {
+                    Some(true) => Some(true),
+                    _ => None,
+                },
+            },
+            P::Not(a) => match self.array_eval_pred(a, src_idx, class_name, length) {
+                Some(v) => Some(!v),
+                None => None,
+            },
             P::InstanceOf(cname) => {
                 // OQL-34: use array-aware assignability (same as FROM INSTANCEOF for arrays).
                 let spec = crate::query::ast::ClassSpec {
@@ -2274,20 +2288,20 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     instanceof: true,
                     is_regex: false,
                 };
-                array_instanceof_matches(class_name, &spec, None)
+                Some(array_instanceof_matches(class_name, &spec, None))
             }
-            P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
+            P::InSubquery { lhs, .. } => Some(self.eval_in_subquery(lhs, src_idx)),
             P::Exists { .. } => {
                 let idx = self.exists_cursor.get();
                 self.exists_cursor.set(idx + 1);
-                self.exists_bools.get(idx).copied().unwrap_or(false)
+                Some(self.exists_bools.get(idx).copied().unwrap_or(false))
             }
-            P::Bool(b) => *b,
+            P::Bool(b) => Some(*b),
             P::Compare { lhs, op, rhs } => {
                 let lv = self.eval_expr_array(lhs, src_idx, class_name, length);
                 let rv = self.eval_expr_array(rhs, src_idx, class_name, length);
                 let like_re = rhs.as_lit().and_then(|v| self.like_re_for(v));
-                compare_values(&lv, *op, &rv, like_re)
+                compare_values_3vl(&lv, *op, &rv, like_re)
             }
         }
     }
@@ -2665,7 +2679,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                         filter: Some(pred), ..
                     } = item
                     {
-                        self.eval_pred(pred, src_idx, class_id, blob)
+                        self.eval_pred(pred, src_idx, class_id, blob) == Some(true)
                     } else {
                         true
                     }
@@ -2711,7 +2725,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                     filter: Some(pred), ..
                 } = item
                 {
-                    self.eval_pred(pred, src_idx, class_id, blob)
+                    self.eval_pred(pred, src_idx, class_id, blob) == Some(true)
                 } else {
                     true
                 };
@@ -2836,7 +2850,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                         filter: Some(pred), ..
                     } = item
                     {
-                        self.array_eval_pred(pred, src_idx, class_name, length)
+                        self.array_eval_pred(pred, src_idx, class_name, length) == Some(true)
                     } else {
                         true
                     }
@@ -2878,7 +2892,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                     filter: Some(pred), ..
                 } = item
                 {
-                    self.array_eval_pred(pred, src_idx, class_name, length)
+                    self.array_eval_pred(pred, src_idx, class_name, length) == Some(true)
                 } else {
                     true
                 };
@@ -3200,7 +3214,15 @@ pub(crate) fn cast_query_value(
     match target {
         CastTarget::Int => match value {
             QueryValue::Int(_) => value,
-            QueryValue::Float(f) => QueryValue::Int(f as i64),
+            // Non-finite floats (NaN/±inf) have no integer representation → NULL,
+            // matching Float→Bool's NaN→NULL rule (OQL-63).
+            QueryValue::Float(f) => {
+                if f.is_finite() {
+                    QueryValue::Int(f as i64)
+                } else {
+                    QueryValue::Null
+                }
+            }
             QueryValue::Str(ref s) => s
                 .parse::<i64>()
                 .map(QueryValue::Int)
@@ -3507,6 +3529,30 @@ pub(crate) fn compare_values(
     rv: &QueryValue,
     like_re: Option<&regex::Regex>,
 ) -> bool {
+    compare_values_3vl(lv, op, rv, like_re).unwrap_or(false)
+}
+
+/// Three-valued-logic comparison: `None` means UNKNOWN (SQL NULL propagation).
+/// `Some(true)`/`Some(false)` are definite truth values. The WHERE predicate
+/// evaluators use this so `NULL = 1`, `NULL != 1`, `NULL < 1`, … all yield
+/// UNKNOWN (exclude the row) rather than leaking the NULL row through `!=` or
+/// `NOT (...)`.
+pub(crate) fn compare_values_3vl(
+    lv: &QueryValue,
+    op: CompareOp,
+    rv: &QueryValue,
+    like_re: Option<&regex::Regex>,
+) -> Option<bool> {
+    // IS NULL / IS NOT NULL are SQL null-CHECKS (not ordinary equality): they
+    // return a definite TRUE/FALSE, not UNKNOWN, even when the LHS is null.
+    if matches!(op, CompareOp::IsNull | CompareOp::IsNotNull) {
+        let is_null = matches!(lv, QueryValue::Null);
+        return Some(if matches!(op, CompareOp::IsNull) {
+            is_null
+        } else {
+            !is_null
+        });
+    }
     if matches!(op, CompareOp::Like | CompareOp::NotLike) {
         let is_like = match (lv, rv) {
             (QueryValue::Str(s), QueryValue::Str(pat)) => {
@@ -3535,20 +3581,21 @@ pub(crate) fn compare_values(
             // Non-string LHS or NULL: never "like" (SQL LIKE on NULL is NULL → false).
             _ => false,
         };
-        return if matches!(op, CompareOp::Like) {
+        return Some(if matches!(op, CompareOp::Like) {
             is_like
         } else {
             !is_like
-        };
+        });
+    }
+    // Any comparison against NULL is UNKNOWN (SQL three-valued logic), which the
+    // WHERE predicate treats as "not matching".
+    if matches!(lv, QueryValue::Null) || matches!(rv, QueryValue::Null) {
+        return None;
     }
     // OQL-29: Eq/Ne use exact cross-type comparison to avoid i64→f64 precision loss.
-    // SQL standard: NULL = NULL and NULL != NULL are both false (NULL propagates as unknown).
     if matches!(op, CompareOp::Eq | CompareOp::Ne) {
-        if matches!(lv, QueryValue::Null) && matches!(rv, QueryValue::Null) {
-            return false;
-        }
         let eq = qv_value_eq(lv, rv);
-        return if matches!(op, CompareOp::Eq) { eq } else { !eq };
+        return Some(if matches!(op, CompareOp::Eq) { eq } else { !eq });
     }
     let ord = match (lv, rv) {
         (QueryValue::Int(a), QueryValue::Int(b)) => (*a).partial_cmp(b),
@@ -3557,21 +3604,22 @@ pub(crate) fn compare_values(
         (QueryValue::Float(a), QueryValue::Float(b)) => a.partial_cmp(b),
         (QueryValue::Str(a), QueryValue::Str(b)) => Some(a.as_str().cmp(b.as_str())),
         (QueryValue::Bool(a), QueryValue::Bool(b)) => Some(a.cmp(b)),
-        // E-02: NULL ordering comparisons return None (false), matching SQL semantics
-        // where NULL is not comparable. (Eq/Ne are handled above via qv_value_eq.)
+        // Incomparable non-NULL types → false (historical behavior).
         _ => None,
     };
     match ord {
-        None => false,
-        Some(o) => match op {
+        None => Some(false),
+        Some(o) => Some(match op {
             CompareOp::Eq | CompareOp::Ne => unreachable!("handled above"),
             CompareOp::Lt => o.is_lt(),
             CompareOp::Le => o.is_le(),
             CompareOp::Gt => o.is_gt(),
             CompareOp::Ge => o.is_ge(),
             // Handled above; unreachable here.
-            CompareOp::Like | CompareOp::NotLike => false,
-        },
+            CompareOp::Like | CompareOp::NotLike | CompareOp::IsNull | CompareOp::IsNotNull => {
+                false
+            }
+        }),
     }
 }
 
@@ -4058,10 +4106,7 @@ fn canonical_distinct_key(v: &QueryValue) -> String {
         QueryValue::Float(f) => {
             // Normalize -0.0 → +0.0 so they hash the same.
             let n = if *f == 0.0 { 0.0f64 } else { *f };
-            if n.is_finite()
-                && n.fract() == 0.0
-                && n >= i64::MIN as f64
-                && n < (1u64 << 63) as f64
+            if n.is_finite() && n.fract() == 0.0 && n >= i64::MIN as f64 && n < (1u64 << 63) as f64
             {
                 format!("I:{}", n as i64)
             } else {
@@ -4977,8 +5022,9 @@ mod tests {
             &QueryValue::Null,
             None
         ));
-        // NULL != 1 returns true: OQL treats null as "no value", which is not equal to 1.
-        assert!(compare_values(
+        // NULL != 1 is UNKNOWN → treated as false (doesn't match the row) under
+        // SQL three-valued logic.
+        assert!(!compare_values(
             &QueryValue::Null,
             CompareOp::Ne,
             &QueryValue::Int(1),
