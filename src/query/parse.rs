@@ -6411,7 +6411,7 @@ mod tests {
 
     #[test]
     fn parse_is_null_and_is_not_null() {
-        use crate::query::ast::{CompareOp, Expr, Predicate, Value};
+        use crate::query::ast::{CompareOp, Predicate};
         let q = super::parse("SELECT * FROM java.lang.String s WHERE toString(s) IS NULL").unwrap();
         match &q.where_ {
             Some(Predicate::Compare {
