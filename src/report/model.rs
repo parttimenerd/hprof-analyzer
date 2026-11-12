@@ -250,6 +250,7 @@ pub struct Component {
     pub pct: f64,
     /// Retained heap as a percentage of the sum of all per-class histogram
     /// retained sizes. Stays ≤ 100% in practice and is easier to interpret.
+    #[serde(default)]
     pub pct_of_retained: f64,
     /// Top classes within this component by retained heap (capped).
     pub top_classes: Vec<ComponentClass>,

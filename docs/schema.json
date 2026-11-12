@@ -829,6 +829,7 @@
           "type": "number"
         },
         "pct_of_retained": {
+          "default": 0.0,
           "description": "Retained heap as a percentage of the sum of all per-class histogram\nretained sizes. Stays ≤ 100% in practice and is easier to interpret.",
           "format": "double",
           "type": "number"
@@ -851,7 +852,6 @@
         "loader_label",
         "retained",
         "pct",
-        "pct_of_retained",
         "top_classes"
       ],
       "type": "object"
