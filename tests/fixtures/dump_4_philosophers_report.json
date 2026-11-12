@@ -117048,6 +117048,7 @@
       {
         "loader_label": "<boot>",
         "pct": 270.3648923927522,
+        "pct_of_retained": 76.01473195070253,
         "retained": 32947120,
         "top_classes": [
           {
@@ -117075,6 +117076,7 @@
       {
         "loader_label": "java/net/URLClassLoader",
         "pct": 60.75589963965703,
+        "pct_of_retained": 17.081890273029103,
         "retained": 7403816,
         "top_classes": [
           {
@@ -117102,6 +117104,7 @@
       {
         "loader_label": "java/net/URLClassLoader",
         "pct": 22.5067634058549,
+        "pct_of_retained": 6.32791325912478,
         "retained": 2742712,
         "top_classes": [
           {
@@ -117129,6 +117132,7 @@
       {
         "loader_label": "jdk/internal/loader/ClassLoaders$AppClassLoader",
         "pct": 1.9842825078400363,
+        "pct_of_retained": 0.557893081505621,
         "retained": 241808,
         "top_classes": [
           {
@@ -117156,6 +117160,7 @@
       {
         "loader_label": "jdk/internal/loader/ClassLoaders$PlatformClassLoader",
         "pct": 0.06249708686110351,
+        "pct_of_retained": 0.017571435637972314,
         "retained": 7616,
         "top_classes": [
           {

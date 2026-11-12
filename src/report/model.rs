@@ -243,8 +243,14 @@ pub struct Component {
     pub loader_label: String,
     /// Total retained heap attributed to this component.
     pub retained: u64,
-    /// Retained heap as a percentage of total reachable retained heap.
+    /// Retained heap as a percentage of total reachable shallow heap.
+    /// May exceed 100% because a component's retained set can overlap with
+    /// other components' retained sets (retained is a transitive closure,
+    /// not a partition of the heap).
     pub pct: f64,
+    /// Retained heap as a percentage of the sum of all per-class histogram
+    /// retained sizes. Stays ≤ 100% in practice and is easier to interpret.
+    pub pct_of_retained: f64,
     /// Top classes within this component by retained heap (capped).
     pub top_classes: Vec<ComponentClass>,
 }

@@ -1961,6 +1961,7 @@ fn build_top_components(overview: &SystemOverview) -> TopComponents {
     use std::collections::HashMap;
 
     let total_shallow = overview.total_shallow;
+    let total_hist_retained: u64 = overview.histogram.iter().map(|r| r.retained).sum();
 
     struct Acc {
         label: String,
@@ -2000,10 +2001,16 @@ fn build_top_components(overview: &SystemOverview) -> TopComponents {
             } else {
                 0.0
             };
+            let pct_of_retained = if total_hist_retained > 0 {
+                acc.retained as f64 / total_hist_retained as f64 * 100.0
+            } else {
+                0.0
+            };
             Component {
                 loader_label: acc.label,
                 retained: acc.retained,
                 pct,
+                pct_of_retained,
                 top_classes: acc.classes,
             }
         })

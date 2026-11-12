@@ -824,7 +824,12 @@
           "type": "string"
         },
         "pct": {
-          "description": "Retained heap as a percentage of total reachable retained heap.",
+          "description": "Retained heap as a percentage of total reachable shallow heap.\nMay exceed 100% because a component's retained set can overlap with\nother components' retained sets (retained is a transitive closure,\nnot a partition of the heap).",
+          "format": "double",
+          "type": "number"
+        },
+        "pct_of_retained": {
+          "description": "Retained heap as a percentage of the sum of all per-class histogram\nretained sizes. Stays ≤ 100% in practice and is easier to interpret.",
           "format": "double",
           "type": "number"
         },
@@ -846,6 +851,7 @@
         "loader_label",
         "retained",
         "pct",
+        "pct_of_retained",
         "top_classes"
       ],
       "type": "object"

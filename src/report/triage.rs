@@ -6202,12 +6202,14 @@ mod tests {
                     loader_label: "app1".into(),
                     retained: 900,
                     pct: 90.0,
+                    pct_of_retained: 90.0,
                     top_classes: vec![],
                 },
                 Component {
                     loader_label: "app2".into(),
                     retained: 100,
                     pct: 10.0,
+                    pct_of_retained: 10.0,
                     top_classes: vec![],
                 },
             ],
@@ -6221,6 +6223,7 @@ mod tests {
             loader_label: "system".into(),
             retained: 10,
             pct: 1.0,
+            pct_of_retained: 1.0,
             top_classes: vec![],
         });
         // Now 3 components, top at 90% >= 60%: fires

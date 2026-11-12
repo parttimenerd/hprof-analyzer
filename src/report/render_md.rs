@@ -2282,12 +2282,25 @@ pub(crate) fn render_top_components(tc: &TopComponents, graphs: bool, out: &mut 
         return;
     }
     out.push_str(
-        "_Retained heap grouped by class loader (component). `% Heap` is the share of total reachable heap. \
-Totals can exceed 100% because retained sets overlap — an object held by multiple components is counted in each._\n\n",
+        "_Retained heap grouped by class loader (component). `% Heap` is retained as a share of total \
+shallow heap (may exceed 100% — retained sets overlap). `% Retained` is retained as a share of the sum \
+of all histogram-retained sizes (always ≤ 100%)._\n\n",
     );
     let retained_max = tc.components.iter().map(|c| c.retained).max().unwrap_or(0);
-    let mut headers: Vec<&str> = vec!["Component", "Retained", "% Heap", "Top Classes"];
-    let mut aligns = vec![Align::Left, Align::Right, Align::Right, Align::Left];
+    let mut headers: Vec<&str> = vec![
+        "Component",
+        "Retained",
+        "% Heap",
+        "% Retained",
+        "Top Classes",
+    ];
+    let mut aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Left,
+    ];
     if graphs {
         headers.push("");
         aligns.push(Align::Left);
@@ -2304,6 +2317,7 @@ Totals can exceed 100% because retained sets overlap — an object held by multi
             format!("`{}`", c.loader_label),
             format_bytes(c.retained),
             fmt_pct(c.pct),
+            fmt_pct(c.pct_of_retained),
             top,
         ];
         if graphs {
