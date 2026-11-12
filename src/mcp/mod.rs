@@ -303,6 +303,16 @@ pub struct GetOutboundReferencesParams {
     pub limit: Option<usize>,
 }
 
+/// Parameters for `get_field_name` — resolve a reference edge to its Java field name.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetFieldNameParams {
+    /// Dense object index of the source object.
+    pub src_object_index: u64,
+    /// 0-based index of the outbound edge within this object's edge list
+    /// (i.e. position within `fwd_off[src]..fwd_off[src+1]`).
+    pub edge_index: u64,
+}
+
 /// Parameters for `get_retained_set` — DFS dominator subtree enumeration.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetRetainedSetParams {
@@ -325,6 +335,13 @@ pub struct CompareDumpsParams {
     /// Absolute path to the current (newer) .hprof file.
     pub current: String,
     /// Max growth-leader classes to return (default 20).
+    pub limit: Option<usize>,
+}
+
+/// Parameters for `get_gc_roots`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetGcRootsParams {
+    /// Max roots to return (default 500).
     pub limit: Option<usize>,
 }
 
@@ -2050,6 +2067,102 @@ impl HprofMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
+    /// Look up the Java field name for a specific reference edge.
+    #[tool(
+        description = "Look up the Java field name for a specific outbound reference edge of an \
+                       object. Requires that the dump was loaded with load_dump({with_graph: true}) \
+                       and that --ref-paths was active during analysis (field-name capture is optional). \
+                       Parameters: src_object_index — the source object; edge_index — the 0-based \
+                       position within that object's outbound edge list (as returned by \
+                       get_outbound_references). Returns the Java field name string, or an empty \
+                       string if the edge was captured without a name (e.g. array elements, \
+                       virtual edges to class loaders). Use get_outbound_references first to discover \
+                       valid edge_index values for a given object."
+    )]
+    async fn get_field_name(
+        &self,
+        Parameters(p): Parameters<GetFieldNameParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let guard = self.session.lock().await;
+        let sess = guard.as_ref().ok_or_else(|| {
+            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
+        })?;
+
+        if sess.mode != CacheMode::Graph {
+            return Err(McpError::invalid_params(
+                "Field name data not available — the dump was not loaded with with_graph=true. \
+                 Reload with load_dump({\"path\": \"<same path>\", \"with_graph\": true}) to enable this tool.",
+                None,
+            ));
+        }
+
+        let pool = match sess.field_name_pool.as_deref() {
+            Some(p) if p.len() > 1 => p,
+            _ => {
+                return Err(McpError::invalid_params(
+                    "Field name pool not available for this dump. The dump may have been cached \
+                     without --ref-paths, or field names were not captured during analysis. \
+                     Re-analyze with load_dump to rebuild the cache with field names.",
+                    None,
+                ));
+            }
+        };
+
+        let (fwd_off, _fwd_tgt) = sess
+            .cache
+            .read_forward_edges()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("graph.bin missing from cache".to_string(), None)
+            })?;
+
+        let fwd_field_idx = sess
+            .cache
+            .read_fwd_field_idx()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::invalid_params(
+                    "Per-edge field-name indices not in cache. The dump was loaded without \
+                     --ref-paths; re-analyze to capture field names.",
+                    None,
+                )
+            })?;
+
+        let src = p.src_object_index as usize;
+        let n = fwd_off.len().saturating_sub(1);
+        if src >= n {
+            return Err(McpError::invalid_params(
+                format!("src_object_index {src} out of range (heap has {n} objects)"),
+                None,
+            ));
+        }
+
+        let edge_start = fwd_off[src] as usize;
+        let edge_end = fwd_off[src + 1] as usize;
+        let total_edges = edge_end - edge_start;
+        let ei = p.edge_index as usize;
+        if ei >= total_edges {
+            return Err(McpError::invalid_params(
+                format!(
+                    "edge_index {ei} out of range — object {src} has {total_edges} outbound edge(s)"
+                ),
+                None,
+            ));
+        }
+
+        let pool_idx = fwd_field_idx[edge_start + ei] as usize;
+        let field_name = pool.get(pool_idx).map(|s| s.as_str()).unwrap_or("");
+
+        let result = serde_json::json!({
+            "src_object_index": src,
+            "edge_index": ei,
+            "field_name": field_name,
+        });
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
     /// Enumerate objects exclusively retained by a given object (its dominator subtree).
     #[tool(
         description = "Enumerate the retained set of an object: all objects that would be freed if \
@@ -2244,6 +2357,73 @@ impl HprofMcpServer {
             ),
         });
 
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// Return the GC root objects: their dense indices and class names.
+    #[tool(
+        description = "Return the dense object indices and class names of all GC roots in the \
+                       loaded heap dump, up to `limit` (default 500). GC roots are the entry \
+                       points of the object retention graph — everything not reachable from a \
+                       root is eligible for GC. Use the returned object_index values with \
+                       browse_dominators or inspect_object to explore what each root retains. \
+                       Does not require with_graph=true."
+    )]
+    async fn get_gc_roots(
+        &self,
+        Parameters(p): Parameters<GetGcRootsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let guard = self.session.lock().await;
+        let sess = guard.as_ref().ok_or_else(|| {
+            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
+        })?;
+
+        let limit = p.limit.unwrap_or(500);
+        let n = sess.report.overview.total_objects as usize;
+
+        let idom = sess
+            .cache
+            .read_idom()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("idom array not found in cache".to_string(), None)
+            })?;
+        let class_idx = sess
+            .cache
+            .read_class_idx()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::internal_error("class_idx array not found in cache".to_string(), None)
+            })?;
+
+        // GC roots are objects whose immediate dominator is the virtual root (index n).
+        // idom has length n+1; idom[n] = n (vroot dominates itself, sentinel).
+        let vroot = n as u32;
+        let roots: Vec<serde_json::Value> = idom[..n]
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| **d == vroot)
+            .take(limit)
+            .map(|(i, _)| {
+                let cidx = class_idx[i] as usize;
+                let class = sess
+                    .class_names
+                    .get(cidx)
+                    .cloned()
+                    .unwrap_or_else(|| "<unknown>".into());
+                serde_json::json!({ "object_index": i, "class": class })
+            })
+            .collect();
+
+        let total_gc_roots = sess.report.overview.gc_roots;
+        let result = serde_json::json!({
+            "total_gc_roots": total_gc_roots,
+            "shown": roots.len(),
+            "truncated": roots.len() == limit && (total_gc_roots as usize) > limit,
+            "roots": roots,
+        });
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -3220,5 +3400,79 @@ mod tests {
             level2["obj_index_1based"], 3,
             "grandchild should survive a depth-3 cap, got: {level1}"
         );
+    }
+
+    /// get_gc_roots logic: objects whose idom entry equals the virtual-root index (n).
+    #[test]
+    fn gc_roots_identified_by_idom_vroot() {
+        // 3 objects; object 0 and 2 are GC roots (idom == 3 = n).
+        // Object 1 is retained by object 0 (idom == 0).
+        let n = 3usize;
+        let vroot = n as u32;
+        let idom: Vec<u32> = vec![vroot, 0, vroot, vroot]; // len n+1
+
+        let roots: Vec<usize> = idom[..n]
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| **d == vroot)
+            .map(|(i, _)| i)
+            .collect();
+
+        assert_eq!(roots, vec![0, 2], "objects 0 and 2 should be GC roots");
+    }
+
+    /// gc_roots limit is applied before building the result vector.
+    #[test]
+    fn gc_roots_limit_truncates_results() {
+        let n = 5usize;
+        let vroot = n as u32;
+        let idom: Vec<u32> = vec![vroot; n + 1];
+
+        let limit = 3usize;
+        let roots: Vec<usize> = idom[..n]
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| **d == vroot)
+            .take(limit)
+            .map(|(i, _)| i)
+            .collect();
+
+        assert_eq!(roots.len(), limit);
+        assert_eq!(roots, vec![0, 1, 2]);
+    }
+
+    /// field_name_pool round-trips through the cache write/read path.
+    #[test]
+    fn field_name_pool_cache_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = crate::cache::CacheDir {
+            path: dir.path().to_path_buf(),
+        };
+
+        let pool = vec![
+            String::new(), // index 0 = unnamed sentinel
+            "referenceQueue".to_string(),
+            "next".to_string(),
+            "value".to_string(),
+        ];
+
+        cache.write_field_name_pool(&pool).unwrap();
+        let loaded = cache
+            .read_field_name_pool()
+            .unwrap()
+            .expect("pool should be present");
+
+        assert_eq!(loaded, pool);
+    }
+
+    /// read_field_name_pool returns None when the file does not exist.
+    #[test]
+    fn field_name_pool_missing_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = crate::cache::CacheDir {
+            path: dir.path().to_path_buf(),
+        };
+        let result = cache.read_field_name_pool().unwrap();
+        assert!(result.is_none(), "should return None when pool file absent");
     }
 }

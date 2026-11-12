@@ -95,6 +95,9 @@ pub struct CachedSession {
     pub mode: CacheMode,
     /// Dense pass2 class name table: index = class_idx value → class name string.
     pub class_names: Vec<String>,
+    /// Field-name pool for resolving fwd_field_idx entries.  Only present when
+    /// the cache was built with `with_graph=true` and had field-path data.
+    pub field_name_pool: Option<Vec<String>>,
 }
 
 // ── CacheDir ──────────────────────────────────────────────────────────────────
@@ -287,6 +290,24 @@ impl CacheDir {
     /// Returns the forward edge field-name indices, or `None` if not cached.
     pub fn read_fwd_field_idx(&self) -> io::Result<Option<Vec<u16>>> {
         read_delta_u16_array(&self.path.join("graph.bin"), "fwd_field_idx")
+    }
+
+    /// Persist the field-name pool (index 0 = "" sentinel) alongside graph.bin.
+    pub fn write_field_name_pool(&self, pool: &[String]) -> io::Result<()> {
+        let json = serde_json::to_vec(pool).map_err(|e| std::io::Error::other(e.to_string()))?;
+        write_zstd(&self.path.join("field_name_pool.json.zst"), &json)
+    }
+
+    /// Read the field-name pool back from cache.
+    pub fn read_field_name_pool(&self) -> io::Result<Option<Vec<String>>> {
+        let path = self.path.join("field_name_pool.json.zst");
+        let bytes = match read_zstd(&path) {
+            Ok(b) => b,
+            Err(_) => return Ok(None),
+        };
+        let pool: Vec<String> =
+            serde_json::from_slice(&bytes).map_err(|e| std::io::Error::other(e.to_string()))?;
+        Ok(Some(pool))
     }
 
     /// Delete all files in the cache directory.

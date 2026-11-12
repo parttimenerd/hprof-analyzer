@@ -745,6 +745,21 @@ enum HeapCmd {
         #[arg(value_hint = ValueHint::FilePath)]
         dump: String,
     },
+    /// Look up the Java field name for a specific reference edge.
+    ///
+    /// Requires a graph-mode cache (built with --with-graph). Use
+    /// `heap inspect` or `heap outbound` first to find the edge_index.
+    FieldName {
+        /// Path to the .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        dump: String,
+        /// Dense object index of the source object.
+        #[arg(long = "src", value_name = "N")]
+        src: u64,
+        /// 0-based index of the outbound edge within the object's edge list.
+        #[arg(long = "edge", value_name = "N")]
+        edge: u64,
+    },
 }
 
 /// `compare` subcommands: MAT-parity check, or cross-dump growth.
@@ -2162,6 +2177,54 @@ fn run_heap_cmd(
             let cache = hprof_analyzer::cache::CacheDir::for_dump(std::path::Path::new(&dump))?;
             cache.clear()?;
             println!("Cache cleared for: {dump}");
+        }
+        HeapCmd::FieldName { dump, src, edge } => {
+            let sess = load(&dump, CacheMode::Graph)?;
+            let pool = sess.field_name_pool.as_deref().ok_or_else(|| {
+                std::io::Error::other(
+                    "Field name pool not available — the cache was built without --ref-paths. \
+                     Re-analyze with `heap load --with-graph` after clearing the cache.",
+                )
+            })?;
+            if pool.len() <= 1 {
+                return Err(std::io::Error::other(
+                    "Field names were not captured during analysis. \
+                     Clear the cache and re-analyze with `--with-graph`.",
+                )
+                .into());
+            }
+            let (fwd_off, _fwd_tgt) = sess.cache.read_forward_edges()?.ok_or_else(|| {
+                std::io::Error::other("graph.bin missing — load with --with-graph")
+            })?;
+            let fwd_field_idx = sess
+                .cache
+                .read_fwd_field_idx()?
+                .ok_or_else(|| std::io::Error::other("fwd_field_idx missing from graph.bin"))?;
+            let src_usize = src as usize;
+            let n = fwd_off.len().saturating_sub(1);
+            if src_usize >= n {
+                return Err(std::io::Error::other(format!(
+                    "src {src} out of range (heap has {n} objects)"
+                ))
+                .into());
+            }
+            let edge_start = fwd_off[src_usize] as usize;
+            let edge_end = fwd_off[src_usize + 1] as usize;
+            let total_edges = edge_end - edge_start;
+            let ei = edge as usize;
+            if ei >= total_edges {
+                return Err(std::io::Error::other(format!(
+                    "edge {ei} out of range — object {src} has {total_edges} outbound edge(s)"
+                ))
+                .into());
+            }
+            let pool_idx = fwd_field_idx[edge_start + ei] as usize;
+            let field_name = pool.get(pool_idx).map(|s| s.as_str()).unwrap_or("");
+            if field_name.is_empty() {
+                println!("(unnamed edge — array element or synthetic reference)");
+            } else {
+                println!("{field_name}");
+            }
         }
     }
     Ok(())

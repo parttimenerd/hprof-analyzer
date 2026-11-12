@@ -525,6 +525,7 @@ pub fn analyze_with_cache(
             .read_pass1()?
             .ok_or_else(|| std::io::Error::other("cache corrupt: missing pass1"))?;
         let class_names = cache.read_class_names()?.unwrap_or_default();
+        let field_name_pool = cache.read_field_name_pool().unwrap_or(None);
         let session = CachedSession {
             dump_path: path.to_path_buf(),
             report,
@@ -532,6 +533,7 @@ pub fn analyze_with_cache(
             cache,
             mode,
             class_names,
+            field_name_pool,
         };
         // Back-fill offsets.bin for caches that predate offset capture, and
         // gz_index.bin for gz dumps. Both are skipped when already present.
@@ -611,6 +613,7 @@ pub fn analyze_with_cache(
     let pass1 = cache
         .read_pass1()?
         .ok_or_else(|| std::io::Error::other("cache corrupt: missing pass1 after write"))?;
+    let field_name_pool = cache.read_field_name_pool().unwrap_or(None);
 
     Ok(CachedSession {
         dump_path: path.to_path_buf(),
@@ -619,6 +622,7 @@ pub fn analyze_with_cache(
         cache,
         mode,
         class_names,
+        field_name_pool,
     })
 }
 
@@ -953,6 +957,12 @@ fn analyze_to_report_inner_with_cache(
             };
             if let Err(e) = cache.write_graph(&graph) {
                 eprintln!("hprof-cache: failed to write graph.bin: {e}");
+            }
+        }
+        // Persist the field-name pool when present (non-empty beyond the "" sentinel).
+        if let Some(pool) = g.field_name_pool.as_ref().filter(|p| p.len() > 1) {
+            if let Err(e) = cache.write_field_name_pool(pool) {
+                eprintln!("hprof-cache: failed to write field_name_pool: {e}");
             }
         }
     }
