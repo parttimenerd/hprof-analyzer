@@ -66,3 +66,13 @@ if [[ -f "$base_dump" ]]; then
 else
   echo "note: $base_dump absent; skipped compare sample (8 files written)"
 fi
+
+# Copy the raw dump fixtures that the in-browser demo (SAMPLE_DUMPS in index.html) loads.
+echo "copying demo dump fixtures…"
+for f in \
+  tests/fixtures/dump_1_mnemonics.hprof \
+  tests/fixtures/dump_2_scala-doku.hprof \
+  tests/fixtures/dump_4_philosophers.hprof \
+  tests/fixtures/dump_7_gauss-mix.hprof; do
+  [[ -f "$f" ]] && cp "$f" "$out/$(basename "$f")"
+done
