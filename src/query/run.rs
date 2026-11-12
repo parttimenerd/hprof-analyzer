@@ -2241,10 +2241,7 @@ fn eval_pred_on_row_with_sets(
             }
         }
         Predicate::Not(inner) => {
-            match eval_pred_on_row_with_sets(inner, col_names, row, in_sets, in_cursor) {
-                Some(v) => Some(!v),
-                None => None,
-            }
+            eval_pred_on_row_with_sets(inner, col_names, row, in_sets, in_cursor).map(|v| !v)
         }
         Predicate::Compare { lhs, op, rhs } => {
             let lv = eval_expr_on_row(lhs, col_names, row);
@@ -2306,10 +2303,7 @@ fn eval_pred_on_row(
                 _ => None,
             },
         },
-        Predicate::Not(inner) => match eval_pred_on_row(inner, col_names, row) {
-            Some(v) => Some(!v),
-            None => None,
-        },
+        Predicate::Not(inner) => eval_pred_on_row(inner, col_names, row).map(|v| !v),
         Predicate::Compare { lhs, op, rhs } => {
             let lv = eval_expr_on_row(lhs, col_names, row);
             let rv = eval_expr_on_row(rhs, col_names, row);

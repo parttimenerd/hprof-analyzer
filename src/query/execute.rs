@@ -2127,10 +2127,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     _ => None,
                 },
             },
-            P::Not(a) => match self.eval_pred(a, src_idx, class_id, blob) {
-                Some(v) => Some(!v),
-                None => None,
-            },
+            P::Not(a) => self.eval_pred(a, src_idx, class_id, blob).map(|v| !v),
             P::InstanceOf(cname) => {
                 // `WHERE x INSTANCEOF C` follows Java semantics: match C and any
                 // subclass. Reuse the resolver's hierarchy walk (LiveResolver
@@ -2277,10 +2274,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     _ => None,
                 },
             },
-            P::Not(a) => match self.array_eval_pred(a, src_idx, class_name, length) {
-                Some(v) => Some(!v),
-                None => None,
-            },
+            P::Not(a) => self
+                .array_eval_pred(a, src_idx, class_name, length)
+                .map(|v| !v),
             P::InstanceOf(cname) => {
                 // OQL-34: use array-aware assignability (same as FROM INSTANCEOF for arrays).
                 let spec = crate::query::ast::ClassSpec {
