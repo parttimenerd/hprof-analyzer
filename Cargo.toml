@@ -48,9 +48,6 @@ native = ["dep:reedline", "dep:crossterm", "dep:tiny_http", "dep:clap", "dep:cla
 # Minimal feature set for the standalone hprof-redact binary: only zip/tar compression.
 # Excludes the CLI, REPL, MCP server, and all their heavy transitive deps.
 redact-bin = ["dep:zip", "dep:tar"]
-# Java scripting engine for `heap script java` sub-command.
-# Requires a JDK at runtime ($JAVA_HOME).  Builds a cdylib that Java loads.
-jni-scripting  = ["dep:jni"]
 
 [dependencies]
 base64 = "0.22"
@@ -89,9 +86,6 @@ bincode = { version = "2", features = ["serde"], optional = true }
 regex = "1"
 # Seekable gz decoder for jsonify and array subscript on .hprof.gz files.
 indexed_deflate = { version = "0.1", optional = true }
-# ── Scripting engine (opt-in) ────────────────────────────────────────────────
-# JNI bridge — lets Java programs call into ScriptSession.
-jni = { version = "0.21", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

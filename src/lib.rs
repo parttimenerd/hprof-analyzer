@@ -38,9 +38,6 @@ pub mod run_oql;
 mod sweep;
 mod trace;
 pub mod types;
-// Scripting engines (opt-in feature flags)
-#[cfg(feature = "jni-scripting")]
-pub mod scripting;
 mod unreachable_retained;
 mod vbyte;
 
