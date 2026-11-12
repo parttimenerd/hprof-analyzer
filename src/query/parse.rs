@@ -6415,25 +6415,19 @@ mod tests {
         let q = super::parse("SELECT * FROM java.lang.String s WHERE toString(s) IS NULL").unwrap();
         match &q.where_ {
             Some(Predicate::Compare {
-                op: CompareOp::Eq,
-                rhs,
+                op: CompareOp::IsNull,
                 ..
-            }) => {
-                assert_eq!(rhs, &Expr::Lit(Value::Null), "IS NULL rhs must be null");
-            }
-            other => panic!("IS NULL should desugar to = null, got: {other:?}"),
+            }) => {}
+            other => panic!("IS NULL should produce IsNull op, got: {other:?}"),
         }
         let q2 =
             super::parse("SELECT * FROM java.lang.String s WHERE toString(s) IS NOT NULL").unwrap();
         match &q2.where_ {
             Some(Predicate::Compare {
-                op: CompareOp::Ne,
-                rhs,
+                op: CompareOp::IsNotNull,
                 ..
-            }) => {
-                assert_eq!(rhs, &Expr::Lit(Value::Null), "IS NOT NULL rhs must be null");
-            }
-            other => panic!("IS NOT NULL should desugar to != null, got: {other:?}"),
+            }) => {}
+            other => panic!("IS NOT NULL should produce IsNotNull op, got: {other:?}"),
         }
     }
 
