@@ -1237,12 +1237,8 @@ pub fn build_class_object_retained_mismatch(b: &mut HeapBuilder) {
     let big_array = b.prim_array(T_BYTE, &vec![0u8; 100_000]);
     // Widget class: static field `big` -> array (so the Widget CLASS OBJECT
     // dominates/retains the array), plus an int instance field.
-    let widget_class = b.class_with_static_root(
-        "scenarios/Widget",
-        "big",
-        big_array,
-        &[("x", T_INT)],
-    );
+    let widget_class =
+        b.class_with_static_root("scenarios/Widget", "big", big_array, &[("x", T_INT)]);
     // 10 Widget instances so the class also appears in Biggest Classes. They
     // are held by a separate Object[] anchored by a static root so they are
     // reachable (independent of the class object's own static field).
@@ -1472,4 +1468,24 @@ pub fn build_finalizer_classes(b: &mut HeapBuilder) {
     // object array. Use an obj_array holding all five.
     let arr = b.obj_array(object_class, &[f1, f2, f3, f4, f5]);
     b.class_with_static_root("FinalizerHolderAll", "all", arr, &[]);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: component-%heap denominator — class-object double-count makes the
+// Top Components "% Heap" column disagree with its own caption.
+// ---------------------------------------------------------------------------
+
+/// Build a heap where a single class object's static field retains a large
+/// byte[] array. The class object's retained heap is attributed to BOTH the
+/// `java.lang.Class` row and the represented class row (see
+/// `build_system_overview`/`build_top_consumers`), so the sum of per-class
+/// `retained` values (`total_retained` in `build_top_components`) exceeds the
+/// reachable shallow heap (`overview.total_shallow`). This is the setup that
+/// exposes the "% Heap" denominator bug: `build_top_components` divides each
+/// component's retained by that inflated `total_retained` rather than by the
+/// reachable heap its own render caption ("share of total reachable heap",
+/// "totals can exceed 100%") promises.
+pub fn build_component_pct_denominator(b: &mut HeapBuilder) {
+    let big_array = b.prim_array(T_BYTE, &vec![0u8; 1_000_000]);
+    b.class_with_static_root("scenarios/ComponentHolder", "big", big_array, &[]);
 }

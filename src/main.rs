@@ -1613,10 +1613,12 @@ fn run_heap_cmd(
         }
         HeapCmd::Histogram { dump, limit, json } => {
             let sess = load(&dump, CacheMode::Full)?;
+            // Use the full class histogram (untruncated), not `top.biggest_classes`
+            // which is capped at the `top_consumers` limit (default 20).
             let rows: Vec<_> = sess
                 .report
-                .top
-                .biggest_classes
+                .overview
+                .histogram
                 .iter()
                 .take(limit)
                 .map(|c| {
@@ -1632,7 +1634,7 @@ fn run_heap_cmd(
             } else {
                 println!("{:<60} {:>12} {:>16}", "Class", "Instances", "Retained");
                 println!("{}", "-".repeat(90));
-                for c in sess.report.top.biggest_classes.iter().take(limit) {
+                for c in sess.report.overview.histogram.iter().take(limit) {
                     println!(
                         "{:<60} {:>12} {:>16}",
                         c.pretty_class,

@@ -8881,3 +8881,54 @@ fn bug_values_min_max_lose_precision_above_2_53() {
     );
     max_t.assert_single_cell("9007199254740993");
 }
+
+/// BUG: `!=` with a NULL operand returns TRUE, so a NULL row is included.
+/// SQL three-valued logic says `NULL != 1` is UNKNOWN (excluded). `compare_values`
+/// returns `!qv_value_eq(lv, rv)` for `Ne`, and `qv_value_eq(NULL, 1)` is false,
+/// so `!false == true` leaks the NULL row. (`NOT IN` desugars to an AND chain of
+/// `!=` compares, so it is affected the same way.)
+#[test]
+fn bug_null_ne_is_unknown_not_true() {
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        "SELECT v FROM (VALUES (NULL),(2)) AS t(v) WHERE v != 1",
+    );
+    t.assert_eq(&["v"], &[&["2"]]);
+}
+
+/// BUG: `NOT (v = 2)` with a NULL v returns TRUE. `v = 2` is UNKNOWN for NULL,
+/// and `NOT UNKNOWN` is still UNKNOWN, so the NULL row must be excluded — but the
+/// `Not` predicate arm does a plain boolean negation and includes it.
+#[test]
+fn bug_not_of_null_comparison_is_unknown() {
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        "SELECT v FROM (VALUES (NULL),(1),(2)) AS t(v) WHERE NOT (v = 2)",
+    );
+    t.assert_eq(&["v"], &[&["1"]]);
+}
+
+/// BUG: CAST of a non-finite float to INT uses Rust's saturating `as` cast:
+/// NaN -> 0 and +Inf -> i64::MAX. CAST(float AS BOOL) already maps NaN to NULL
+/// (OQL-63), so the INT cast should also yield NULL, not 0 / MAX.
+#[test]
+fn bug_cast_nonfinite_float_to_int() {
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        r#"SELECT CAST(CAST("nan" AS FLOAT) AS INT) AS y, CAST(CAST("inf" AS FLOAT) AS INT) AS z FROM (VALUES (1)) AS t(a)"#,
+    );
+    t.assert_eq(&["y", "z"], &[&["null", "null"]]);
+}
+
+/// BUG: `SUM` over an empty (all-NULL / no-row) set returns 0, while `AVG`,
+/// `MIN` and `MAX` return NULL for the same input. SQL requires SUM of an empty
+/// set to be NULL; the VALUES aggregate path folds from `0i64` even when no
+/// non-null value was seen.
+#[test]
+fn bug_sum_of_empty_returns_zero_not_null() {
+    let t = query_table(
+        "/nonexistent-dummy.hprof",
+        "SELECT SUM(v) FROM (VALUES (NULL)) AS t(v)",
+    );
+    t.assert_single_cell("null");
+}

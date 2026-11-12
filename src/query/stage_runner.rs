@@ -5451,7 +5451,7 @@ mod arith_late_tests {
             &QueryValue::Int(1),
             &no_re
         ));
-        assert!(cmp_late_qv(
+        assert!(!cmp_late_qv(
             &QueryValue::Null,
             CompareOp::Ne,
             &QueryValue::Int(1),

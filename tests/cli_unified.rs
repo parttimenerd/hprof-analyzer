@@ -96,6 +96,32 @@ fn analyze_flag_on_json_errors() {
     );
 }
 
+/// `heap histogram --limit N` must actually print N classes. The command reads
+/// from `report.top.biggest_classes`, which is capped at the `top_consumers`
+/// detail level (20 by default), so any `--limit` above 20 silently truncates.
+#[test]
+fn heap_histogram_limit_is_respected() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .args(["heap", "histogram", "--limit", "100", &hprof])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "heap histogram failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Output is: one header line, one separator line, then one data row per class.
+    let non_empty = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+    let data_rows = non_empty.saturating_sub(2);
+    assert_eq!(
+        data_rows, 100,
+        "heap histogram --limit 100 should print 100 classes, but printed {data_rows} \
+         (biggest_classes is capped at top_consumers=20)"
+    );
+}
+
 /// Help no longer mentions the removed analyze/render subcommands.
 #[test]
 fn help_has_no_analyze_or_render_subcommands() {

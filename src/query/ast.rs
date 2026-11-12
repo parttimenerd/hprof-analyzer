@@ -478,6 +478,11 @@ pub enum CompareOp {
     Le,
     Gt,
     Ge,
+    /// `IS NULL` — SQL null-check (TRUE iff the LHS is null), distinct from `= null`
+    /// which is UNKNOWN under three-valued logic.
+    IsNull,
+    /// `IS NOT NULL` — SQL null-check (TRUE iff the LHS is not null).
+    IsNotNull,
     /// `LIKE` — RHS is a Java-style regex matched with FULL/ANCHORED semantics
     /// (like `java.util.regex.Pattern.matches`, i.e. the whole string must
     /// match), NOT a SQL glob. Meaningful only for string LHS/RHS.

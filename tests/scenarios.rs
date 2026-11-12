@@ -844,6 +844,70 @@ fn check_finalizer_classes_breakdown(report: &Report) {
     assert_eq!(b_row.unwrap().count, 2, "FinalizableB should have count=2");
 }
 
+// ---------------------------------------------------------------------------
+// Scenario 36: component_pct_denominator — Top Components "% Heap" must be
+// the share of total reachable heap, not of the (double-counted) sum of
+// per-class retained sizes.
+// ---------------------------------------------------------------------------
+
+fn build_component_pct_denominator() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_component_pct_denominator(&mut b);
+    b.build()
+}
+
+fn check_component_pct_denominator(report: &Report) {
+    let comps = &report.top_components.components;
+    assert!(!comps.is_empty(), "expected at least one component");
+    let total_shallow = report.overview.total_shallow;
+    assert!(total_shallow > 0, "expected a non-empty reachable heap");
+    for c in comps {
+        // Per the render caption, "% Heap is the share of total reachable heap"
+        // (and "totals can exceed 100%"). pct must equal retained / total_shallow.
+        let expected = c.retained as f64 / total_shallow as f64 * 100.0;
+        assert!(
+            (c.pct - expected).abs() < 1e-6,
+            "component {:?}: pct={} but caption-implied pct = retained({}) / \
+             total_shallow({}) * 100 = {}. The implementation divides by the sum of \
+             per-class retained (which double-counts class objects) instead of the \
+             reachable heap.",
+            c.loader_label,
+            c.pct,
+            c.retained,
+            total_shallow,
+            expected,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 37: overview_section_off_heap_row — `heap report --section overview`
+// must show the same System Overview as the full report, including the
+// "Off-Heap / On-Heap" row when DirectByteBuffers are present.
+// ---------------------------------------------------------------------------
+
+fn build_overview_section_off_heap() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_off_heap_direct_byte_buffer(&mut b);
+    b.build()
+}
+
+fn check_overview_section_off_heap(report: &Report) {
+    // The full markdown report includes the off-heap row (cap > 0).
+    let full = hprof_analyzer::report::render_markdown(report);
+    assert!(
+        full.contains("Off-Heap / On-Heap"),
+        "full report should show the off-heap row for a DirectByteBuffer dump"
+    );
+    // `render_report_section(_, "overview")` must render the same System Overview.
+    let section = hprof_analyzer::render_report_section(report, "overview");
+    assert!(
+        section.contains("Off-Heap / On-Heap"),
+        "overview section omitted the Off-Heap / On-Heap row present in the full \
+         report (render_report_section passes off_heap_cap=0)"
+    );
+}
+
 fn default_opts() -> AnalyzeOptions {
     AnalyzeOptions::default()
 }
@@ -1128,6 +1192,18 @@ const SCENARIOS: &[Scenario] = &[
         build: build_refined_culprit_retained_pct_mismatch,
         check: check_refined_culprit_retained_pct_mismatch,
     },
+    Scenario {
+        name: "component_pct_denominator",
+        opts: default_opts,
+        build: build_component_pct_denominator,
+        check: check_component_pct_denominator,
+    },
+    Scenario {
+        name: "overview_section_off_heap_row",
+        opts: default_opts,
+        build: build_overview_section_off_heap,
+        check: check_overview_section_off_heap,
+    },
 ];
 
 #[test]
@@ -1343,6 +1419,16 @@ fn scenario_refined_culprit_retained_pct_mismatch() {
     run_scenario(&SCENARIOS[35]);
 }
 
+#[test]
+fn scenario_component_pct_denominator() {
+    run_scenario(&SCENARIOS[36]);
+}
+
+#[test]
+fn scenario_overview_section_off_heap_row() {
+    run_scenario(&SCENARIOS[37]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1351,7 +1437,7 @@ fn scenario_refined_culprit_retained_pct_mismatch() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        36,
+        38,
         "update this test when adding scenarios"
     );
 }

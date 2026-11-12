@@ -1063,9 +1063,9 @@ where
                 .map(|(lhs, negated)| Predicate::Compare {
                     lhs,
                     op: if negated {
-                        CompareOp::Ne
+                        CompareOp::IsNotNull
                     } else {
-                        CompareOp::Eq
+                        CompareOp::IsNull
                     },
                     rhs: Expr::Lit(Value::Null),
                 });

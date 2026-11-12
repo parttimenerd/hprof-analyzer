@@ -1953,12 +1953,14 @@ const COMPONENT_TOP_CLASSES: usize = 5;
 /// Eclipse-MAT-style "Top Components": group the class histogram by class loader
 /// (component) and sum retained heap; report the top components with their top
 /// classes. A bounded fold over `overview.histogram` (rows <= #loaders), so
-/// RSS-safe. `pct` is against the total reachable retained heap (sum of the
-/// histogram's MAT-top-ancestor retained), matching how the histogram reports it.
+/// RSS-safe. `pct` is against the total reachable heap (total_shallow) — NOT the
+/// sum of per-class retained, which double-counts class objects and can inflate
+/// the denominator ~3.5× (the caption in render_md explicitly documents that
+/// component percentages can exceed 100%).
 fn build_top_components(overview: &SystemOverview) -> TopComponents {
     use std::collections::HashMap;
 
-    let total_retained: u64 = overview.histogram.iter().map(|r| r.retained).sum();
+    let total_shallow = overview.total_shallow;
 
     struct Acc {
         label: String,
@@ -1993,8 +1995,8 @@ fn build_top_components(overview: &SystemOverview) -> TopComponents {
                     .then(a.pretty_class.cmp(&b.pretty_class))
             });
             acc.classes.truncate(COMPONENT_TOP_CLASSES);
-            let pct = if total_retained > 0 {
-                acc.retained as f64 / total_retained as f64 * 100.0
+            let pct = if total_shallow > 0 {
+                acc.retained as f64 / total_shallow as f64 * 100.0
             } else {
                 0.0
             };

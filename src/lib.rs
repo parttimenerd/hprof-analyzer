@@ -38,6 +38,9 @@ pub mod run_oql;
 mod sweep;
 mod trace;
 pub mod types;
+// Scripting engines (opt-in feature flags)
+#[cfg(feature = "jni-scripting")]
+pub mod scripting;
 mod unreachable_retained;
 mod vbyte;
 
@@ -675,7 +678,14 @@ pub fn render_report_section(r: &report::Report, section: &str) -> String {
         "top" => render_md::render_top_consumers(&r.top, r.overview.total_shallow, &mut out),
         "threads" => render_md::render_threads(&r.threads, false, &mut out),
         "overview" => {
-            render_md::render_system_overview(&r.overview, 0, &r.category_rollup, &mut out)
+            // Pass the direct-byte-buffer capacity so the Off-Heap / On-Heap row
+            // renders identically to the full report (which uses the same value).
+            render_md::render_system_overview(
+                &r.overview,
+                r.leak_indicators.direct_byte_buffer_capacity_sum,
+                &r.category_rollup,
+                &mut out,
+            )
         }
         "triage" => render_md::render_oom_triage(r, &mut out),
         "waste" => render_md::render_waste_summary(r, &mut out),
