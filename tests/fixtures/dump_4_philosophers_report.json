@@ -117047,7 +117047,7 @@
     "components": [
       {
         "loader_label": "<boot>",
-        "pct": 76.01473195070253,
+        "pct": 270.3648923927522,
         "retained": 32947120,
         "top_classes": [
           {
@@ -117074,7 +117074,7 @@
       },
       {
         "loader_label": "java/net/URLClassLoader",
-        "pct": 17.081890273029103,
+        "pct": 60.75589963965703,
         "retained": 7403816,
         "top_classes": [
           {
@@ -117101,7 +117101,7 @@
       },
       {
         "loader_label": "java/net/URLClassLoader",
-        "pct": 6.32791325912478,
+        "pct": 22.5067634058549,
         "retained": 2742712,
         "top_classes": [
           {
@@ -117128,7 +117128,7 @@
       },
       {
         "loader_label": "jdk/internal/loader/ClassLoaders$AppClassLoader",
-        "pct": 0.557893081505621,
+        "pct": 1.9842825078400363,
         "retained": 241808,
         "top_classes": [
           {
@@ -117155,7 +117155,7 @@
       },
       {
         "loader_label": "jdk/internal/loader/ClassLoaders$PlatformClassLoader",
-        "pct": 0.017571435637972314,
+        "pct": 0.06249708686110351,
         "retained": 7616,
         "top_classes": [
           {
@@ -117363,7 +117363,7 @@
     {
       "anchor": "top-components",
       "anchor_label": "Top Components",
-      "detail": "Component `<boot>` retains 76.0% of heap (31.4 MB) while the next largest component (`java/net/URLClassLoader`) retains only 17.1%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `<boot>` is accumulating without a release path.",
+      "detail": "Component `<boot>` retains 270.4% of heap (31.4 MB) while the next largest component (`java/net/URLClassLoader`) retains only 60.8%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `<boot>` is accumulating without a release path.",
       "id": "component-retention-imbalance",
       "severity": "warning",
       "title": "Component Retention Imbalance"
