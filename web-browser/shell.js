@@ -575,22 +575,23 @@ const SAMPLE_DUMPS = [
     });
   }
 
-  // Always show sample section; probe availability to decide if items are clickable
+  // Show sample cards as immediately clickable. Probe in the background and
+  // mark offline only if the server explicitly says the file is missing (4xx).
+  // This avoids the visible delay where cards stay greyed out while waiting
+  // for HEAD responses on large hprof files hosted on GitHub Pages.
   const sampleList = document.getElementById('sample-list');
   sampleSection.style.display = '';
   SAMPLE_DUMPS.forEach(s => {
     const item = document.createElement('div');
-    item.className = 'sample-item sample-item-pending';
+    item.className = 'sample-item';
     item.innerHTML =
       `<span class="sample-name">${s.name}</span>` +
       `<span class="sample-size">~${s.sizeMb} MB</span>`;
+    item.addEventListener('click', () => loadSampleDump(s));
     sampleList.appendChild(item);
+    // Background probe: quietly grey out if the file is definitively absent.
     fetch(s.path, { method: 'HEAD' })
-      .then(r => {
-        if (!r.ok) throw new Error('not found');
-        item.classList.remove('sample-item-pending');
-        item.addEventListener('click', () => loadSampleDump(s));
-      })
+      .then(r => { if (!r.ok) { item.classList.add('sample-item-offline'); item.title = 'Not available in this build'; } })
       .catch(() => { item.classList.add('sample-item-offline'); item.title = 'Not available in this build'; });
   });
 
