@@ -146,6 +146,100 @@ test('copy button appears on hover', async ({ page }) => {
   const copyBtn = firstCopyCell.locator('.copy-btn');
   await expect(copyBtn).toBeVisible();
 });
+
+// ── Content-presence tests ────────────────────────────────────────────────────
+// These verify that the report data actually reaches the DOM — i.e. the React
+// app decoded + rendered the embedded JSON successfully, not just that the HTML
+// shell loaded.
+
+test('report content: triage section has at least one signal', async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.waitForSelector('#memory-triage');
+  // Each triage signal renders as an <li> inside #memory-triage > ul.
+  const signals = page.locator('#memory-triage ul li');
+  const count = await signals.count();
+  expect(count, 'Memory Triage must render at least one signal').toBeGreaterThan(0);
+  // Each signal mentions either a class name (dot in FQN) or a byte size.
+  const firstText = await signals.first().innerText();
+  const hasContent = /\w+\.\w+|\d+\s*(MB|KB|GB|bytes?)/i.test(firstText);
+  expect(hasContent, `First triage signal text "${firstText.slice(0, 80)}" has no class name or size`).toBe(true);
+});
+
+test('report content: leak suspects section lists at least one suspect', async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.waitForSelector('#leak-suspects');
+  // Suspect entries reference a "retained" heap size.
+  const suspects = page.locator('#leak-suspects').getByText(/retained/i).first();
+  await expect(suspects).toBeVisible();
+});
+
+test('report content: top-consumers table has data rows', async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.waitForSelector('#top-consumers');
+  // The top-consumers section contains an HTML table; count <tr> rows.
+  // There must be more than one (header row + at least one data row).
+  const rows = page.locator('#top-consumers tr');
+  const count = await rows.count();
+  expect(count, 'Top Consumers must have at least one data row').toBeGreaterThan(1);
+});
+
+test('report content: system overview shows nonzero heap size', async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.waitForSelector('#system-overview');
+  // The overview renders a heap size figure like "23 MB" or "51.2 MB".
+  const overview = page.locator('#system-overview');
+  await expect(overview).toContainText(/\d+(\.\d+)?\s*(GB|MB|KB)/i);
+});
+
+test('report content: threads section lists at least one thread', async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.waitForSelector('#threads');
+  const threads = page.locator('#threads');
+  // Thread entries contain the word "Thread" somewhere.
+  await expect(threads).toContainText(/Thread/i);
+  // There must be at least one <tr> row in the threads table.
+  const rows = threads.locator('tr');
+  const count = await rows.count();
+  expect(count, 'Threads section must have at least one thread row').toBeGreaterThan(1);
+});
+
+test('report content: triage signals show class name or size details', async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.waitForSelector('#memory-triage');
+  // The first triage signal must mention a numeric byte-size figure or a class name (dot in FQN).
+  // This catches the case where the signal list rendered but all text is placeholder/empty.
+  const firstSignal = page.locator('#memory-triage ul li').first();
+  const text = await firstSignal.innerText();
+  const hasSize = /\d+(\.\d+)?\s*(GB|MB|KB|bytes?)/i.test(text);
+  const hasFqn  = /\w+\.\w+/.test(text); // e.g. "cafesat.sat.Vector" or "java.util.HashMap"
+  expect(hasSize || hasFqn, `First triage signal "${text.slice(0, 80)}" has no size or FQN`).toBe(true);
+});
+
+test('report content: no NaN or undefined visible in rendered text', async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.waitForSelector('.toc');
+  // Scroll to bottom to trigger any lazy sections.
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.waitForTimeout(300);
+  const body = await page.locator('body').innerText();
+  expect(body, 'Rendered text must not contain NaN').not.toContain('NaN');
+  expect(body, 'Rendered text must not contain undefined').not.toContain('undefined');
+});
+
+test('report content: table of contents links match present section IDs', async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.waitForSelector('.toc');
+  // Collect all href="#..." links inside the TOC nav.
+  const tocLinks = await page.locator('.toc a[href^="#"]').evaluateAll(
+    (els: HTMLAnchorElement[]) => els.map(el => el.getAttribute('href')!.slice(1))
+  );
+  expect(tocLinks.length, 'TOC must have links').toBeGreaterThan(0);
+  // Every TOC link must resolve to an element present in the DOM.
+  for (const id of tocLinks) {
+    const count = await page.locator(`[id="${id}"]`).count();
+    expect(count, `TOC link #${id} has no matching DOM element`).toBeGreaterThan(0);
+  }
+});
 EOF
 
 # Create a minimal playwright.config.ts for the temp dir.
