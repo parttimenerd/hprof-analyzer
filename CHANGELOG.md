@@ -6,6 +6,41 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **MCP `get_gc_roots` tool** — lists all GC roots in the heap (objects whose
+  immediate dominator is the virtual root). Returns index, class, shallow, and
+  retained size per root, with an optional `limit` parameter. Available after
+  any `load_dump` (no `with_graph` needed).
+
+- **MCP `get_field_name` tool** — look up the Java field name for a specific
+  reference edge by source object index and edge index within that object's
+  forward-edge list. Requires `load_dump({with_graph: true})`. The field name
+  pool is persisted in the cache (`field_name_pool.json.zst`) so it is
+  available on repeat loads without re-analyzing the dump.
+
+- **`heap field-name` CLI subcommand** — CLI counterpart of `get_field_name`:
+  `heap field-name <dump> --src N --edge N`. Requires graph cache (`heap load
+  --with-graph`).
+
+- **Report: `pct_of_retained` on `Component`** — each component in the
+  Components table now includes `pct_of_retained`: what percentage its retained
+  heap is of the total retained heap (complements the existing `pct` which is
+  percentage of shallow heap). Shown as a `% Retained` column in Markdown
+  output.
+
+### Fixed
+
+- **Backward compatibility for `pct_of_retained`** — reports generated before
+  this field was added (`#[serde(default)]`) now deserialize cleanly; old JSON
+  files no longer cause a missing-field error.
+
+### Tests
+
+- **Parity test trimmed to two fixtures** — `parity_all_fixtures` previously
+  ran against all 5 present dumps (10 binary invocations). Now runs only
+  `dump_4_philosophers` and `dump_2_scala-doku`, which cover the two distinct
+  class-loader layouts. Both `REGEN_FIXTURES=1` and `HPROF_UPDATE_SNAPSHOTS=1`
+  trigger baseline regeneration.
+
 - **MCP: three new graph-primitive tools for LLM-driven heap exploration** —
   these expose the cached dense arrays directly, enabling iterative graph
   traversal without OQL round-trips:
