@@ -4,6 +4,8 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-11-13
+
 ### Added
 
 - **MCP `get_gc_roots` tool** — lists all GC roots in the heap (objects whose
