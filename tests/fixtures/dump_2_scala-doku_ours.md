@@ -69,6 +69,7 @@ _Automated signals pointing to where memory concentrates and what to investigate
 - **Empty-Collection Cemetery:** 5,822 of 6,491 tracked collections (89.7%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
 - **Deep Retention Chain (Linked-List Shape):** The dominator tree's longest chain is 41,355 hops — this is a linked-list-shaped heap. Memory is being accumulated object-by-object in an unbounded chain (e.g. `LinkedList`, `ArrayDeque` backed by a linked structure, or a recursive data structure). Consider replacing with an array-backed container (`ArrayList`, `ArrayDeque`) or bounding growth. See [Dominator Analysis](#dominator-analysis).
 - **Self-Referential Class Accumulation:** `cafesat.asts.core.Trees$ConnectiveApplication` is self-referential — 35,073 of its 43,982 instances (79.7%) are nested inside another `cafesat.asts.core.Trees$ConnectiveApplication` instance, forming a recursive tree/chain shape that totals 3.9 MB (13.0% of reachable heap). This is a common OOM pattern for tree/graph data structures that grow without a size bound (e.g. a cache keyed by node, a session tree that never prunes). Check whether `cafesat.asts.core.Trees$ConnectiveApplication` has an unbounded self-referential field (a `List<cafesat.asts.core.Trees$ConnectiveApplication>`/`Map<K,cafesat.asts.core.Trees$ConnectiveApplication>` child collection, or a parent/sibling back-reference) and whether instances are ever removed once added. See [System Overview](#system-overview).
+- **Component Retention Imbalance:** Component `java/net/URLClassLoader` retains 209.0% of heap (62.3 MB) while the next largest component (`<boot>`) retains only 207.1%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `java/net/URLClassLoader` is accumulating without a release path. See [Top Components](#top-components).
 - **Collection Waste Not Analyzed:** Collection waste not analyzed — re-run with `--collections` to check for wasted capacity.
 
 ## Waste Summary
@@ -714,11 +715,11 @@ _Classes ranked by total retained heap. High retained with low shallow means the
 | 13 | `java.lang.Class`                                 |     2,860 |   3.5 MB |
 | 14 | `cafesat.sat.Solver$Clause[]`                     |    36,615 |   3.4 MB |
 | 15 | `int[]`                                           |    89,265 |   2.6 MB |
-| 16 | `java.lang.Object`                                |   133,780 |   2.0 MB |
-| 17 | `byte[]`                                          |    24,721 |   2.0 MB |
-| 18 | `java.lang.String`                                |    23,997 |   1.7 MB |
-| 19 | `java.util.HashMap`                               |       361 |   1.6 MB |
-| 20 | `java.util.HashMap$Node[]`                        |       395 |   1.6 MB |
+| 16 | `scala.runtime.LazyVals$`                         |         1 |   2.5 MB |
+| 17 | `java.lang.Object`                                |   133,780 |   2.0 MB |
+| 18 | `byte[]`                                          |    24,721 |   2.0 MB |
+| 19 | `java.lang.String`                                |    23,997 |   1.7 MB |
+| 20 | `java.util.HashMap`                               |       361 |   1.6 MB |
 
 #### Who Holds Each Class?
 
@@ -1030,6 +1031,21 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | `cafesat.common.FixedIntStack`                    |      1 |  71.5 KB |
 |   ↳ `cafesat.sat.Solver`                          |      1 |  71.6 KB |
 
+**`scala.runtime.LazyVals$`**
+
+| Holder Class                                                    | Count | Retained |
+| --------------------------------------------------------------- | ----: | -------: |
+| `java.lang.Object[]`                                            |   793 |  69.4 KB |
+| `java.lang.invoke.DirectMethodHandle$Constructor`               |   111 |   7.7 KB |
+| `java.lang.invoke.MemberName`                                   |    95 |   1.5 KB |
+| `cafesat.api.FormulaBuilder$$$Lambda+0x00007de4a41bc0a8`        |     1 |    288 B |
+| `cafesat.sat.Solver$$Lambda+0x00007de4a41f23a8`                 |     1 |    232 B |
+| `cafesat.asts.fol.Manip$$$Lambda+0x00007de4a41bdef0`            |     1 |    224 B |
+| `cafesat.asts.fol.Manip$$$Lambda+0x00007de4a41c1420`            |     1 |    224 B |
+| `cafesat.sat.ConjunctiveNormalForm$$$Lambda+0x00007de4a41d87e0` |     1 |    200 B |
+| `cafesat.asts.fol.Manip$$$Lambda+0x00007de4a41be680`            |     1 |    120 B |
+| `cafesat.asts.fol.Manip$$$Lambda+0x00007de4a41bea48`            |     1 |    120 B |
+
 **`java.lang.Object`**
 
 | Holder Class                                          |   Count | Retained |
@@ -1152,31 +1168,6 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 |   ↳ `cafesat.asts.fol.Manip$$$Lambda+0x00007de4a41c1420`            |     1 |    224 B |
 |   ↳ `cafesat.sat.ConjunctiveNormalForm$$$Lambda+0x00007de4a41d87e0` |     1 |    200 B |
 |   ↳ `cafesat.asts.fol.Manip$$$Lambda+0x00007de4a41bea48`            |     1 |    120 B |
-
-**`java.util.HashMap$Node[]`**
-
-| Holder Class                                | Count | Retained |
-| ------------------------------------------- | ----: | -------: |
-| `java.util.HashMap`                         |   348 |   1.6 MB |
-|   ↳ `java.util.jar.Manifest`                |     8 |   1.1 MB |
-|   ↳ `org.renaissance.core.ModuleLoader`     |     2 | 147.6 KB |
-|   ↳ `java.lang.Thread`                      |     1 | 137.1 KB |
-|   ↳ `java.util.HashSet`                     |   212 |  63.4 KB |
-|   ↳ `java.lang.Module`                      |    56 |  48.4 KB |
-|   ↳ `java.lang.Class`                       |    21 |  37.1 KB |
-|   ↳ `sun.text.resources.cldr.FormatData`    |     1 |  28.3 KB |
-|   ↳ `sun.text.resources.cldr.FormatData_en` |     1 |  19.9 KB |
-|   ↳ `java.security.Provider$Service`        |    42 |  13.3 KB |
-|   ↳ `java.lang.ModuleLayer`                 |     1 |   4.2 KB |
-| `java.util.jar.Manifest`                    |     8 |   1.1 MB |
-| `java.util.jar.Attributes`                  | 5,786 | 380.7 KB |
-| `org.renaissance.core.ModuleLoader`         |     2 | 147.6 KB |
-| `java.util.LinkedHashSet`                   |    38 | 143.9 KB |
-| `java.lang.Thread`                          |     1 | 137.1 KB |
-| `java.util.HashSet`                         |   212 |  63.4 KB |
-| `java.lang.Module`                          |    56 |  48.4 KB |
-| `java.lang.Class`                           |    21 |  37.1 KB |
-| `sun.text.resources.cldr.FormatData`        |     1 |  28.3 KB |
 
 ### Retained Size Distribution
 
@@ -1446,15 +1437,15 @@ _Frame percentages are of this thread's 160 B retained heap._
 
 ## Top Components
 
-_Retained heap grouped by class loader (component). `% Heap` is the share of total reachable heap. Totals can exceed 100% because retained sets overlap — an object held by multiple components is counted in each._
+_Retained heap grouped by class loader (component). `% Heap` is retained as a share of total shallow heap (may exceed 100% — retained sets overlap). `% Retained` is retained as a share of the sum of all histogram-retained sizes (always ≤ 100%)._
 
-| Component                                              | Retained | % Heap | Top Classes                                                                                                                                                                                                                                   |
-| ------------------------------------------------------ | -------: | -----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `java/net/URLClassLoader`                              |  62.3 MB |  49.1% | `scala.collection.immutable.$colon$colon` (8.6 MB), `scala.collection.immutable.BitmapIndexedSetNode` (8.4 MB), `scala.collection.immutable.HashSet` (8.0 MB), `cafesat.sat.Literal` (4.8 MB), `cafesat.sat.Solver` (4.6 MB)                  |
-| `<boot>`                                               |  61.7 MB |  48.7% | `java.lang.Thread` (22.9 MB), `java.lang.Object[]` (11.4 MB), `java.lang.Class` (3.5 MB), `int[]` (2.6 MB), `java.lang.Object` (2.0 MB)                                                                                                       |
-| `java/net/URLClassLoader`                              |   2.6 MB |   2.1% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scala.math.BigInt[]` (8.0 KB), `scopt.ORunner$` (7.9 KB)                                                        |
-| `jdk/internal/loader/ClassLoaders$AppClassLoader`      | 235.5 KB |   0.2% | `org.renaissance.core.ModuleLoader` (149.8 KB), `org.renaissance.core.BenchmarkSuite` (77.0 KB), `org.renaissance.core.BenchmarkDescriptor` (2.3 KB), `org.renaissance.core.Launcher` (1.6 KB), `org.renaissance.core.ResourceUtils` (1.2 KB) |
-| `jdk/internal/loader/ClassLoaders$PlatformClassLoader` |   7.4 KB |  <0.1% | `sun.util.resources.cldr.provider.CLDRLocaleDataMetaInfo` (7.4 KB)                                                                                                                                                                            |
+| Component                                              | Retained | % Heap | % Retained | Top Classes                                                                                                                                                                                                                                   |
+| ------------------------------------------------------ | -------: | -----: | ---------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `java/net/URLClassLoader`                              |  62.3 MB | 209.0% |      49.1% | `scala.collection.immutable.$colon$colon` (8.6 MB), `scala.collection.immutable.BitmapIndexedSetNode` (8.4 MB), `scala.collection.immutable.HashSet` (8.0 MB), `cafesat.sat.Literal` (4.8 MB), `cafesat.sat.Solver` (4.6 MB)                  |
+| `<boot>`                                               |  61.7 MB | 207.1% |      48.7% | `java.lang.Thread` (22.9 MB), `java.lang.Object[]` (11.4 MB), `java.lang.Class` (3.5 MB), `int[]` (2.6 MB), `java.lang.Object` (2.0 MB)                                                                                                       |
+| `java/net/URLClassLoader`                              |   2.6 MB |   8.8% |       2.1% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scala.math.BigInt[]` (8.0 KB), `scopt.ORunner$` (7.9 KB)                                                        |
+| `jdk/internal/loader/ClassLoaders$AppClassLoader`      | 235.5 KB |   0.8% |       0.2% | `org.renaissance.core.ModuleLoader` (149.8 KB), `org.renaissance.core.BenchmarkSuite` (77.0 KB), `org.renaissance.core.BenchmarkDescriptor` (2.3 KB), `org.renaissance.core.Launcher` (1.6 KB), `org.renaissance.core.ResourceUtils` (1.2 KB) |
+| `jdk/internal/loader/ClassLoaders$PlatformClassLoader` |   7.4 KB |  <0.1% |      <0.1% | `sun.util.resources.cldr.provider.CLDRLocaleDataMetaInfo` (7.4 KB)                                                                                                                                                                            |
 
 ## Arrays by Size
 

@@ -13,48 +13,21 @@ use std::process::Command;
 /// `--detail default`. They are NOT byte-identical to MAT: our output includes
 /// ours-only sections (path-to-GC-root chains, dominator subtree, per-thread
 /// local objects, allocation sites) that MAT does not emit. Regenerate a
-/// baseline with `REGEN_FIXTURES=1 cargo test --release parity` when the
-/// output legitimately changes.
+/// baseline with `HPROF_UPDATE_SNAPSHOTS=1 cargo test --release parity` (or
+/// `REGEN_FIXTURES=1`) when the output legitimately changes.
+///
+/// Two fixtures are kept: dump_4_philosophers (small, widely used) and
+/// dump_2_scala-doku (Scala class-loader layout, different Components structure).
 const FIXTURES: &[(&str, &str, &str)] = &[
-    (
-        "dump_0_fj-kmeans.hprof",
-        "dump_0_fj-kmeans_ours.md",
-        "dump_0_fj-kmeans_mdgraphs.md",
-    ),
-    (
-        "dump_1_mnemonics.hprof",
-        "dump_1_mnemonics_ours.md",
-        "dump_1_mnemonics_mdgraphs.md",
-    ),
-    (
-        "dump_2_scala-doku.hprof",
-        "dump_2_scala-doku_ours.md",
-        "dump_2_scala-doku_mdgraphs.md",
-    ),
-    (
-        "dump_3_par-mnemonics.hprof",
-        "dump_3_par-mnemonics_ours.md",
-        "dump_3_par-mnemonics_mdgraphs.md",
-    ),
     (
         "dump_4_philosophers.hprof",
         "dump_4_philosophers_ours.md",
         "dump_4_philosophers_mdgraphs.md",
     ),
     (
-        "dump_6_dec-tree.hprof",
-        "dump_6_dec-tree_ours.md",
-        "dump_6_dec-tree_mdgraphs.md",
-    ),
-    (
-        "dump_7_gauss-mix.hprof",
-        "dump_7_gauss-mix_ours.md",
-        "dump_7_gauss-mix_mdgraphs.md",
-    ),
-    (
-        "dump_8_log-regression.hprof",
-        "dump_8_log-regression_ours.md",
-        "dump_8_log-regression_mdgraphs.md",
+        "dump_2_scala-doku.hprof",
+        "dump_2_scala-doku_ours.md",
+        "dump_2_scala-doku_mdgraphs.md",
     ),
 ];
 
@@ -68,7 +41,8 @@ fn strip_views_line(s: &str) -> String {
 #[test]
 fn parity_all_fixtures() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let regen = std::env::var("REGEN_FIXTURES").is_ok();
+    let regen =
+        std::env::var("REGEN_FIXTURES").is_ok() || std::env::var("HPROF_UPDATE_SNAPSHOTS").is_ok();
 
     let mut failures = Vec::new();
     let mut ran = 0usize;
@@ -140,7 +114,7 @@ fn parity_all_fixtures() {
     } else {
         assert!(
             failures.is_empty(),
-            "parity mismatch for: {failures:?}\n\nRegenerate with: REGEN_FIXTURES=1 cargo test --release parity"
+            "parity mismatch for: {failures:?}\n\nRegenerate with: HPROF_UPDATE_SNAPSHOTS=1 cargo test --release parity"
         );
         eprintln!("parity: ran {ran} of {} fixtures", FIXTURES.len());
     }

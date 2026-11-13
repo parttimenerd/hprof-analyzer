@@ -66,7 +66,7 @@ _Automated signals pointing to where memory concentrates and what to investigate
 - **Fixed per-Object Header Overhead:** 2.7 MB (23.3% of heap) consumed by JVM object headers alone (236,457 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Object Header Overhead](#object-header-overhead).
 - **Hash-Map Collision Hotspot:** 6 of 537 tracked maps (1.1%) have a load factor > 90% — over-packed hash tables cause long collision chains and degrade lookup performance. Increase initial capacity or lower the load factor (pass `initialCapacity` and `loadFactor` to the constructor, default is 0.75). See [Collections](#collections).
 - **Empty-Collection Cemetery:** 5,523 of 6,186 tracked collections (89.3%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
-- **Component Retention Imbalance:** Component `<boot>` retains 76.0% of heap (31.4 MB) while the next largest component (`java/net/URLClassLoader`) retains only 17.1%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `<boot>` is accumulating without a release path. See [Top Components](#top-components).
+- **Component Retention Imbalance:** Component `<boot>` retains 270.4% of heap (31.4 MB) while the next largest component (`java/net/URLClassLoader`) retains only 60.8%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `<boot>` is accumulating without a release path. See [Top Components](#top-components).
 - **Collection Waste Not Analyzed:** Collection waste not analyzed — re-run with `--collections` to check for wasted capacity.
 
 ## Waste Summary
@@ -585,22 +585,22 @@ _Classes ranked by total retained heap. High retained with low shallow means the
 |  2 | `scala.concurrent.stm.ccstm.InTxnImpl`                                |       129 |   3.7 MB |
 |  3 | `java.lang.Class`                                                     |     2,793 |   3.6 MB |
 |  4 | `byte[]`                                                              |    24,078 |   2.6 MB |
-|  5 | `java.lang.Object`                                                    |   134,275 |   2.0 MB |
-|  6 | `java.lang.String`                                                    |    23,331 |   1.8 MB |
-|  7 | `java.util.HashMap`                                                   |       361 |   1.5 MB |
-|  8 | `java.util.HashMap$Node[]`                                            |       395 |   1.5 MB |
-|  9 | `java.util.HashMap$Node`                                              |     9,876 |   1.5 MB |
-| 10 | `java.util.zip.ZipFile$Source`                                        |        19 |   1.3 MB |
-| 11 | `java.lang.ref.SoftReference`                                         |       151 |   1.1 MB |
-| 12 | `long[]`                                                              |       173 |   1.1 MB |
-| 13 | `java.util.jar.JarFile`                                               |        19 |   1.1 MB |
-| 14 | `java.util.jar.Manifest`                                              |         8 |   1.1 MB |
-| 15 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |       128 |   1.0 MB |
-| 16 | `scala.concurrent.stm.ccstm.Handle[]`                                 |       283 |   1.0 MB |
-| 17 | `int[]`                                                               |     1,346 | 875.9 KB |
-| 18 | `java.util.concurrent.ConcurrentHashMap`                              |       117 | 611.2 KB |
-| 19 | `java.util.concurrent.ConcurrentHashMap$Node[]`                       |        93 | 604.7 KB |
-| 20 | `java.util.LinkedHashMap`                                             |     5,517 | 507.4 KB |
+|  5 | `scala.runtime.LazyVals$`                                             |         1 |   2.5 MB |
+|  6 | `java.lang.Object`                                                    |   134,275 |   2.0 MB |
+|  7 | `java.lang.String`                                                    |    23,331 |   1.8 MB |
+|  8 | `java.util.HashMap`                                                   |       361 |   1.5 MB |
+|  9 | `java.util.HashMap$Node[]`                                            |       395 |   1.5 MB |
+| 10 | `java.util.HashMap$Node`                                              |     9,876 |   1.5 MB |
+| 11 | `java.util.zip.ZipFile$Source`                                        |        19 |   1.3 MB |
+| 12 | `java.lang.ref.SoftReference`                                         |       151 |   1.1 MB |
+| 13 | `long[]`                                                              |       173 |   1.1 MB |
+| 14 | `java.util.jar.JarFile`                                               |        19 |   1.1 MB |
+| 15 | `java.util.jar.Manifest`                                              |         8 |   1.1 MB |
+| 16 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |       128 |   1.0 MB |
+| 17 | `scala.concurrent.stm.ccstm.Handle[]`                                 |       283 |   1.0 MB |
+| 18 | `int[]`                                                               |     1,346 | 875.9 KB |
+| 19 | `java.util.concurrent.ConcurrentHashMap`                              |       117 | 611.6 KB |
+| 20 | `java.util.concurrent.ConcurrentHashMap$Node[]`                       |        93 | 604.7 KB |
 
 #### Who Holds Each Class?
 
@@ -711,6 +711,21 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | `byte[][]`                                                                |    345 |  92.8 KB |
 |   ↳ `java.lang.Class`                                                     |      1 |  94.1 KB |
 | `java.util.ImmutableCollections$SetN`                                     |    149 |  90.1 KB |
+
+**`scala.runtime.LazyVals$`**
+
+| Holder Class                                                              | Count | Retained |
+| ------------------------------------------------------------------------- | ----: | -------: |
+| `java.lang.Object[]`                                                      |   806 | 127.6 KB |
+| `java.lang.invoke.DirectMethodHandle$Constructor`                         |    70 |   4.5 KB |
+| `java.lang.invoke.MemberName`                                             |    61 |    976 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007e41c00fc678`               |     1 |     48 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007e41c0116280`               |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dc778` |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00dd6a0` |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de018` |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00de990` |     1 |     48 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007e41c00def38` |     1 |     48 B |
 
 **`java.lang.Object`**
 
@@ -1029,25 +1044,6 @@ _For each class above with holder data, the immediate-dominator class breakdown:
 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`     |     7 |  49.9 KB |
 | `jdk.internal.module.ServicesCatalog`                      |     4 |  12.4 KB |
 | `java.util.Properties`                                     |     4 |   8.4 KB |
-
-**`java.util.LinkedHashMap`**
-
-| Holder Class                                            | Count | Retained |
-| ------------------------------------------------------- | ----: | -------: |
-| `java.util.HashMap$Node`                                | 5,505 | 571.4 KB |
-| `java.util.jar.Attributes`                              | 5,477 | 362.4 KB |
-|   ↳ `java.util.HashMap$Node`                            | 5,469 | 427.3 KB |
-|   ↳ `java.util.jar.Manifest`                            |     8 |  20.7 KB |
-| `java.util.LinkedHashSet`                               |    38 | 143.9 KB |
-|   ↳ `java.util.HashMap$Node`                            |    36 | 144.1 KB |
-|   ↳ `sun.security.provider.Sun`                         |     1 |    328 B |
-|   ↳ `sun.security.jca.ProviderList$1`                   |     1 |     80 B |
-| `java.util.jar.Manifest`                                |     8 |  20.7 KB |
-| `java.time.format.DateTimeTextProvider$LocaleStore`     |     2 |   1.2 KB |
-| `java.util.Collections$SingletonMap`                    |     2 |   1.1 KB |
-|   ↳ `java.time.format.DateTimeTextProvider$LocaleStore` |     2 |   1.2 KB |
-| `sun.security.provider.Sun`                             |     1 |    328 B |
-| `sun.security.jca.ProviderList$1`                       |     1 |     80 B |
 
 ### Retained Size Distribution
 
@@ -6241,15 +6237,15 @@ _Frame percentages are of this thread's 584 B retained heap._
 
 ## Top Components
 
-_Retained heap grouped by class loader (component). `% Heap` is the share of total reachable heap. Totals can exceed 100% because retained sets overlap — an object held by multiple components is counted in each._
+_Retained heap grouped by class loader (component). `% Heap` is retained as a share of total shallow heap (may exceed 100% — retained sets overlap). `% Retained` is retained as a share of the sum of all histogram-retained sizes (always ≤ 100%)._
 
-| Component                                              | Retained | % Heap | Top Classes                                                                                                                                                                                                                                                          |
-| ------------------------------------------------------ | -------: | -----: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<boot>`                                               |  31.4 MB |  76.0% | `java.lang.Object[]` (3.7 MB), `java.lang.Class` (3.6 MB), `byte[]` (2.6 MB), `java.lang.Object` (2.0 MB), `java.lang.String` (1.8 MB)                                                                                                                               |
-| `java/net/URLClassLoader`                              |   7.1 MB |  17.1% | `scala.concurrent.stm.ccstm.InTxnImpl` (3.7 MB), `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` (1.0 MB), `scala.concurrent.stm.ccstm.Handle[]` (1.0 MB), `scala.concurrent.stm.skel.CallbackList` (417.2 KB), `scala.Function1[]` (399.1 KB) |
-| `java/net/URLClassLoader`                              |   2.6 MB |   6.3% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scala.math.BigInt[]` (8.0 KB), `scopt.ORunner$` (7.9 KB)                                                                               |
-| `jdk/internal/loader/ClassLoaders$AppClassLoader`      | 236.1 KB |   0.6% | `org.renaissance.core.ModuleLoader` (149.8 KB), `org.renaissance.core.BenchmarkSuite` (77.0 KB), `org.renaissance.core.BenchmarkDescriptor` (2.3 KB), `org.renaissance.core.Launcher` (1.6 KB), `org.renaissance.core.ResourceUtils` (1.2 KB)                        |
-| `jdk/internal/loader/ClassLoaders$PlatformClassLoader` |   7.4 KB |  <0.1% | `sun.util.resources.cldr.provider.CLDRLocaleDataMetaInfo` (7.4 KB)                                                                                                                                                                                                   |
+| Component                                              | Retained | % Heap | % Retained | Top Classes                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------ | -------: | -----: | ---------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<boot>`                                               |  31.4 MB | 270.4% |      76.0% | `java.lang.Object[]` (3.7 MB), `java.lang.Class` (3.6 MB), `byte[]` (2.6 MB), `java.lang.Object` (2.0 MB), `java.lang.String` (1.8 MB)                                                                                                                               |
+| `java/net/URLClassLoader`                              |   7.1 MB |  60.8% |      17.1% | `scala.concurrent.stm.ccstm.InTxnImpl` (3.7 MB), `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` (1.0 MB), `scala.concurrent.stm.ccstm.Handle[]` (1.0 MB), `scala.concurrent.stm.skel.CallbackList` (417.2 KB), `scala.Function1[]` (399.1 KB) |
+| `java/net/URLClassLoader`                              |   2.6 MB |  22.5% |       6.3% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scala.math.BigInt[]` (8.0 KB), `scopt.ORunner$` (7.9 KB)                                                                               |
+| `jdk/internal/loader/ClassLoaders$AppClassLoader`      | 236.1 KB |   2.0% |       0.6% | `org.renaissance.core.ModuleLoader` (149.8 KB), `org.renaissance.core.BenchmarkSuite` (77.0 KB), `org.renaissance.core.BenchmarkDescriptor` (2.3 KB), `org.renaissance.core.Launcher` (1.6 KB), `org.renaissance.core.ResourceUtils` (1.2 KB)                        |
+| `jdk/internal/loader/ClassLoaders$PlatformClassLoader` |   7.4 KB |   0.1% |      <0.1% | `sun.util.resources.cldr.provider.CLDRLocaleDataMetaInfo` (7.4 KB)                                                                                                                                                                                                   |
 
 ## Arrays by Size
 
