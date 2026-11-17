@@ -2,9 +2,16 @@
 members = [".", "crates/hprof-wasm", "crates/hprof-redact"]
 resolver = "2"
 
+# Single source of truth for the package version: member crates (currently
+# `hprof-redact`) inherit via `version.workspace = true`, so every version
+# upgrade of hprof-analyzer upgrades hprof-redact in lockstep (the standalone
+# redactor is versioned with the repo, not independently).
+[workspace.package]
+version = "0.3.4"
+
 [package]
 name = "hprof-analyzer"
-version = "0.3.4"
+version.workspace = true
 edition = "2024"
 rust-version = "1.85"
 description = "Fast, low-memory Java HPROF heap-dump analyzer with Eclipse MAT-parity reports (System Overview, Leak Suspects, Top Consumers)."

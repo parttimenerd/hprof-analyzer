@@ -1534,7 +1534,7 @@ mod tests {
     #[test]
     fn cap_obj_arrays_truncates_and_records_totals() {
         let mut v = serde_json::json!({
-            "suspects": (0..30).map(|i| i).collect::<Vec<i32>>(),
+            "suspects": (0..30).collect::<Vec<i32>>(),
             "summary": { "objects": 1, "classes": 2 },
             "single": [1, 2, 3],
         });
@@ -1553,8 +1553,8 @@ mod tests {
     fn cap_obj_arrays_walks_nested_and_array_elements() {
         let mut v = serde_json::json!({
             "suspects": [
-                { "children": (0..25).map(|i| i).collect::<Vec<i32>>() },
-                { "children": (0..5).map(|i| i).collect::<Vec<i32>>() },
+                { "children": (0..25).collect::<Vec<i32>>() },
+                { "children": (0..5).collect::<Vec<i32>>() },
             ]
         });
         assert!(cap_obj_arrays(&mut v, 8));

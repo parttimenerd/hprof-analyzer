@@ -904,6 +904,10 @@ pub fn render_report_section(r: &report::Report, section: &str) -> String {
 /// (`GraphForCache`) stores for MCP `find_incoming_references` — a plain u32 CSR,
 /// not the blocked byte-offset form `build_from_fwd` produces for the dominator
 /// pass. `n` is the object count.
+// Only reached from the graph-cache write inside the `native` build
+// (`analyze_to_report_inner_with_cache`); the unit tests use it in every
+// configuration, so keep it compiled for tests too.
+#[cfg(any(feature = "native", test))]
 fn build_simple_inbound_csr(fwd_off: &[u32], fwd_tgt: &[u32], n: usize) -> (Vec<u32>, Vec<u32>) {
     let mut inb_off = vec![0u32; n + 1];
     for &t in fwd_tgt {
