@@ -47,7 +47,16 @@ fn oql_docs_every_example_parses_and_executes() {
             .collect::<Vec<_>>()
             .join("\n");
         for chunk in no_comments.split("\n\n") {
-            for stmt in chunk.trim().split("\nSELECT ") {
+            // A chunk that starts with WITH is ONE statement: its main query
+            // begins with a line-initial `SELECT ` that the naive split below
+            // would tear off, leaving a lone (unparseable) WITH clause.
+            let chunk_is_with = chunk.trim_start().to_ascii_uppercase().starts_with("WITH ");
+            let parts: Vec<&str> = if chunk_is_with {
+                vec![chunk.trim()]
+            } else {
+                chunk.trim().split("\nSELECT ").collect()
+            };
+            for stmt in parts {
                 let stmt = stmt.trim();
                 // Keep only statements that begin with SELECT/WITH; prose
                 // fragments (e.g. WHERE-clause usage lists) are not runnable.

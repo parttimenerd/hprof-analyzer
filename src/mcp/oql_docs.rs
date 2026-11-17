@@ -233,16 +233,19 @@ Window functions are evaluated after all filtering/grouping but before ORDER BY/
 ## WITH (CTEs)
 
 `WITH <name> AS (<subquery>)` binds a name you can use as a FROM target in the
-main query (and in later CTEs). Each reference runs its own copy of the body —
-results are correct, the body is not materialised once:
+main query. Each reference runs its own copy of the body — results are
+correct, the body is not materialised once:
 
 ```sql
 WITH big AS (
-  SELECT @objectId AS id, @usedHeapSize AS bytes
-  FROM java.lang.String WHERE @usedHeapSize > 10000
+  SELECT @objectId FROM java.lang.String WHERE @usedHeapSize > 10000
 )
-SELECT id, bytes FROM big ORDER BY bytes DESC LIMIT 10
+SELECT @objectId AS id, @usedHeapSize AS bytes
+FROM big ORDER BY bytes DESC LIMIT 10
 ```
+
+(CTE bodies must select whole objects or `@objectId` — the semi-join keys on
+object identity; project the outer attributes in the main query.)
 
 Rules: CTE names must be unique in the clause; a CTE must be self-contained
 (it cannot reference other CTEs — that would nest subqueries beyond one level;

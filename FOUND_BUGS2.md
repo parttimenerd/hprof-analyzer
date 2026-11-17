@@ -1,138 +1,101 @@
-# FOUND_BUGS2.md — hprof-analyzer bug ledger (post-verification)
+# FOUND_BUGS2.md — hprof-analyzer bug ledger (post-campaign)
 
-Status after the 2026-11-17 verification sweep (CLI reproducer matrix + MCP stdio
-matrix vs `target/release/hprof-analyzer`, fresh binary). **All entries below are
-verified-still-OPEN**; everything else was verified fixed and removed. Fixed and
-verified this session: A1, B1, B2, B3, B4, B5, B7, C1, C2, C3, C4(fixed parts),
-C6(fixed parts), D1, D2, D3, F1, G2, H1, H2, H4, H5, H6, H7, I6(positive).
+Final status after the 2026-11-17 campaign (CLI reproducer matrix + MCP stdio
+matrix + cheap-agent implementation batch, all verified against fresh builds).
+**This file now records only what is genuinely still open.** Everything else
+was fixed and verified; see the summary at the bottom.
 
-Legend: OPEN / DOC-GAP. Every bug has a reproducer. Cache note per CLAUDE.md:
-after code changes, `heap cache-clear <dump>` or delete `<dump>.hprof-cache/`.
+Legend: OPEN / DOC-GAP / ENHANCEMENT. Cache note per CLAUDE.md: after code
+changes, `heap cache-clear <dump>` or delete `<dump>.hprof-cache/`.
 
 ---
 
-## B. OQL engine / query tool
+## Still open
 
-### B6. OPEN (rest) — documented features that don't work (agent E)
-- FIXED: `WITH` CTEs are now IMPLEMENTED (token-level pre-parser + desugar into
-  the FROM-subquery machinery; single + multiple CTEs, aliases, UNION branches;
-  chained/recursive CTEs rejected with clear messages; docs + oql_docs updated;
-  parse + execution regression tests). Two regressions found & fixed on the way:
-  (a) the scan executor's `class_matches` guard was dropped by an unrelated
-  FromSource refactor — every executor matched every object (a Thread-only
-  inner subquery returned all 203,782 reachable objects); (b)
-  `run_oql_escalated` had no subquery routing — the B1 fix only patched the MCP
-  tool, so `heap query` panicked ("flat results shorter than groups describe");
-  routing now happens once inside run_oql_escalated for every caller.
-- Virtual tables `__classes__`/`__gc_roots__`/`__threads__`: implementation
-  landed in the working tree (pass2 materialization + VTableData) — verify:
-  `heap query <dump> --oql 'SELECT COUNT(*) FROM __threads__'`.
-- N of the examples inside `get_oql_docs` fail as-is. Repro: run each doc
-  example verbatim via `heap query tests/fixtures/dump_4_philosophers.hprof --oql '...'`.
+### I3. ENHANCEMENT — overview/leaks sections exceed usable MCP size
+- `get_report("overview")` ≈ 764 k chars / 28.8 k lines; `get_report("leaks")`
+  ≈ 60 kB on an 11 MB dump. The 256 kB `serialize_capped` stub (C3) keeps the
+  response bounded but a condensed/paginated mode for these two core sections
+  would serve agents better than a stub. Deferred as an enhancement — the cap
+  is honest and the data is reachable via narrower sections
+  (triage/top-objects/alloc_sites/…).
 
-### B8. OPEN — `INSTANCEOF` on an interface silently returns 0 rows
-- Repro: `SELECT COUNT(*) FROM INSTANCEOF java.util.List` → 0 even though
-  ArrayList/HashMap$Node implement it. Either expand interfaces via the
-  subclass table or warn that only class hierarchies are walked.
+### B6 (rest). OPEN (small) — `get_oql_docs` example sweep
+- `tests/oql_docs_sweep.rs` exists (sweeps every doc example); confirm it runs
+  green in CI and extend it when doc examples change. The remaining sweep
+  failures (if any) should be fixed as doc-example edits, not engine changes —
+  the engine features the examples showcase were all implemented this campaign.
 
-### B9. OPEN — FROM-subquery silently ignores outer LIMIT (agent E)
-- `SELECT ... FROM (SELECT ...) t LIMIT 10` returns the full inner result until
-  the oversized-result guard fires; LIMIT is silently dropped.
-- Repro: `heap query tests/fixtures/dump_4_philosophers.hprof --oql 'SELECT
-  @objectId FROM (SELECT @objectId FROM java.lang.Thread) t LIMIT 3'` → 27 rows.
+---
 
-## C. MCP server behavior
+## Adjudications & notes worth keeping
 
-### C4. OPEN (rest) — alloc_sites lies (== H3 first bullet)
-- `alloc_sites`: object_count 239,355 > GC-reachable (203,782) and file total
-  (236,457); retained_total 37.7 MB > 12 MB heap; shallow_total 12,986,608 B ≠
-  OQL SUM(@usedHeapSize) 4.3 MB; `frames: []` while `traces_present: true`;
-  `limit` ignored (1 site returned).
-- Repro: MCP `get_report({section:"alloc_sites"})` on leak-clinic.
+### E1. ADJUDICATED (DIVERGENT — warning stands)
+- Empirical re-verification (fresh caches, philosophers fixture): complete-mode
+  redaction still changes structure — original top suspects `InTxnImpl`
+  (2.7 MB) and `LazyVals$` (2.5 MB) VANISH in the complete-redacted dump;
+  `Object[]`, `PhilosopherThread`, `JarFile`, `Class` appear instead; 1,395
+  objects slip out of the reachable graph (reachable heap 11.6 → 9.0 MB).
+  Lean mode produces a byte-identical leaks section. The "complete-mode alters
+  dominator/retained structure" warning (CLI `redact --complete` + MCP redact
+  tool description + response note) is accurate and must stay; commit-message
+  claims of complete-mode structural parity are empirically false. Unknown-class
+  instance preservation (2277f297) is real but does not restore parity.
 
-### C5. OPEN — silent empties / wrong values in report sections and views
-- `field_stats` → `null` (always?); `thread_locals` → `[]` without
-  `--find-duplicates`, unexplained; `arrays` superseded by `collections` but
-  still offered.
-- `classes-per-loader` view returns 1 for every loader (counts loaders, not
-  classes). (Thread views' `@name` was fixed — re-verify the 4 views.)
-- Views `static-collections`, `unclosed-resources` silently empty without
-  `collections: true` at load; `list_views` documents them as `needs_retained`
-  only. Repro: `hprof-analyzer heap views`, then run each view OQL via `heap query`.
+### I5 (verified). Empty-collection sentinels
+- The campaign premise overstated: sentinels are per-JVM singletons (≈1 per
+  dump), not 72–83% of empties. The signal now excludes and labels them
+  ("N additional empties are recognized JDK/Scala singleton sentinels …
+  excluded from this signal"), `singleton_sentinels` counted separately;
+  wording softened. Verified on mnemonics/scala-doku/philosophers with fresh
+  caches; golden fixtures re-baselined.
 
-### C6. OPEN (rest) — graph-tool nits (agent H)
-- `get_report(leaks)` `path` always empty; `accumulation_*` always null.
-- `find_incoming_references` can return duplicate edges for the same source object.
-- `get_retained_set.class_filter` filters the object list but not `class_summary`.
-- `total_shallow_in_subtree` excludes the root (diverges from root_retained_bytes).
-- GC-root terminal nodes carry synthetic out-of-range indices (623284 > 562,385
-  objects on gauss-mix) — undocumented.
-- Repro: load gauss-mix with with_graph:true, walk the top suspect.
+### B8 (resolved by docs)
+- `FROM INSTANCEOF <interface>` returning 0 rows is a data limitation, not a
+  bug: HPROF CLASS_DUMP records carry no implemented-interface metadata, so
+  interface assignability cannot be determined statically. docs/OQL.md states
+  this with the AbstractMap workaround. No engine change planned.
 
-## D. Robustness / parsing
+---
 
-### D4. OPEN — index-space confusion documented? (verify + complete)
-- Banner/inspect range errors now mention "covers objects AND classes/other
-  entries" — verify the load banner itself also states both numbers
-  (`Objects: 437704` vs range `0..482360` on clinic).
+## Fixed & verified this campaign (summary; details in git history)
 
-## E. Redaction / secrets
-
-## G. Tooling/config environment
-
-### G1. OPEN — repo `.mcp.json` points at `target/release/hprof-analyzer`
-- Fresh checkout → ENOENT on `claude mcp list` until a release build exists.
-
-## H. Wave-5 findings
-
-### H3. OPEN — `get_report` truth bugs (report-N / report-1.md)
-- `field_stats` → `null`; `thread_locals` → `[]` (2 ThreadLocal instances exist);
-  `framework` → `[]`; `waste.waste_breakdown` → always `[]`;
-  `waste.reachable_bytes` vs `total_bytes` relation unexplained.
-- `limit` parameter has no effect on `waste`, `retainers`, `arrays`,
-  `collections`, `indicators`, `alloc_sites`.
-- `indicators.anonymous_class_count: 204` counts distinct `$$` class names (163),
-  not instances (1,140+).
-- Repro: `get_report({section:"alloc_sites"})` + clinic dump.
-
-## I. Wave-6 findings
-
-### I1. OPEN — load banner "Top Leak Suspects" misleads (agent T, F1)
-- Banner list comes from histogram top-by-retained, not the leak-suspect
-  detector (dump_1_mnemonics: banner names Thread/HashMap; real suspects are
-  `HashMap$Node[]`/`Object[]`). Repro: `heap load tests/fixtures/dump_1_mnemonics.hprof`
-  vs `heap report <dump> --section leaks`.
-
-### I2. DOC-GAP — `SUM(@retainedHeapSize)` double-counts shared dominatees (agent T)
-- OQL SUM counts shared children once per holder; histogram retained uses
-  single-ownership dominator accounting. Document in OQL docs + query result hint.
-
-### I3. OPEN — overview/leaks sections exceed usable MCP size on an 11 MB dump
-- `get_report("overview")` = 763,833 chars; the 256 KB cap (C3) stubs them.
-  A condensed/paginated mode for these two core sections would serve agents
-  better than a stub.
-
-### I4. DOC-GAP — DirectByteBuffer off-heap total not verifiable without graph
-- The triage's native figure sums `capacity` fields; document the requirement
-  next to the signal.
-
-### I5. OPEN — empty-collection signal overstates on benchmark dumps (agent T)
-- 72–83% of "empty" collections are JDK/Scala singleton sentinels (Nil,
-  Collections.emptyList()). Exclude known sentinels or soften the wording.
-
-### I7. OPEN — views requiring `collections` need list_views flags (from J)
-- `static-collections`/`unclosed-resources` need an undocumented load flag;
-  either degrade gracefully with a hint or mark them in `list_views`.
-
-## Verified-fixed summary (details removed per cleanup)
-
-A1 bare-star FROM · B1 MCP subquery routing · B2 unknown-FROM error · B3
-literal-list IN (false-positive repro; regression tests added) · B4 AS-retained
-error text · B5 ORDER BY note docs · B7 replace() + window columns on scan paths
-· C1 FIFO ordering gate · C2 0-based index twins · C3 output caps + default
-triage · C4 HeadlineRetainer + Component basis · C6 browse_dominators caps ·
-D1 truncated-dump refusal (--force) · D2 friendly input errors + MCP path hints ·
-D3 nonneg index params · F1/H6(f) cache-clear all entries · G2 all 18 tools ·
-H1 session epoch + expected_epoch enforcement · H2 graph reload cycle recovery ·
-H4 gc_roots/field_name · H5 validation footguns · H6 CLI nits · H7 @name +
-LIMIT footer · I6 redaction pipeline (positive).
+- **A1** bare-star FROM · **B1** subquery routing everywhere (incl. the
+  `run_oql_escalated` library half found during CTE work) · **B2** unknown-FROM
+  error (MCP isError) · **B3** literal-list IN (false-positive repro; tests) ·
+  **B4** AS-retained error · **B5** ORDER BY unselected-key sort + footer ·
+  **B7** `replace()` + window columns on all scan paths · **B9** FROM-subquery
+  outer LIMIT (already fixed at HEAD — ledger was stale; regression test added)
+- **B6a** virtual tables `__classes__`/`__gc_roots__`/`__threads__`
+  materialized in pass2 · **B6b** `WITH` CTEs implemented (desugar into
+  FROM-subqueries; chained/recursive rejected honestly; two regressions fixed
+  on the way: scan-executor `class_matches` guard dropped by an unrelated
+  refactor, and missing subquery routing in `run_oql_escalated`)
+- **C1** FIFO ordering gate · **C2** 0-based index twins · **C3** output caps +
+  default triage · **C4/H3** field_stats dispatch, limits honored for
+  waste/retainers/arrays/collections/indicators/alloc_sites, honest
+  alloc_sites/_note semantics, `anonymous_class_instances`, empty-section
+  notes · **C5** classes-per-loader view made honest (OQL cannot express
+  per-loader class counts — loader id lives only in CLASS_DUMP headers; view
+  renamed/relabelled, report `classloaders` section referenced),
+  `@name` thread views, field_stats/thread_locals notes · **C6** all graph-tool
+  nits (dedupe + edge_count, class_summary filter consistency, root shallow
+  inclusion, synthetic-index marking) · **I7** `needs_collections` flags in
+  list_views/heap views for `static-collections`/`unclosed-resources`
+- **D1** truncated-dump refusal + `--force` · **D2** friendly input errors +
+  MCP path hints · **D3** non-negative index params · **D4** index-space
+  banner note
+- **E1** lean-mode byte-identical leaks (verified) · complete-mode warning kept
+- **F1/H6** cache-clear clears ALL entries (+ dir), cache-list shows every
+  entry, `--category` ignored-flags warnings, browse/inspect/histogram nits
+  (range errors, `object_index` + alias, Class fields note, `--class-filter`,
+  MiB labels)
+- **G1** mcp-launcher (PATH → target/release → actionable error) · **G2** all
+  18 tools
+- **H1** session epoch + `expected_epoch` enforcement · **H2** graph reload
+  cycle recovery · **H4** get_gc_roots/get_field_name live · **H5** validation
+  footguns (empty oql, bogus docs topic, histogram cap, error-shape)
+- **I1** load banner leak suspects from the detector (honest relabelling of
+  histogram tops) · **I2/I4** docs: SUM(@retainedHeapSize) double-counting
+  caution, DirectByteBuffer off-heap with-graph requirement · **I5** (see
+  above) · **I6** redaction pipeline verified on clinic
