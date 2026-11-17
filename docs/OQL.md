@@ -81,6 +81,8 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 | `FROM INSTANCEOF java.lang.Object` | the class and all subclasses |
 | `FROM java.util.zip.ZipFile*` | prefix glob: the class itself plus subclasses and `$`-joined inner classes (`ZipFile$Source`) |
 | `FROM "java\.lang\..*"` | class-name regex (double-quoted) |
+| `FROM OBJECTS 0x1295e2f8` | single object by **heap address** (hex literal) |
+| `FROM OBJECTS 42` | single object by **dense index** (decimal literal — the `@objectId` value from a query result) |
 | `FROM ( SELECT … ) s` | subquery as the row source |
 | `FROM ENTRIES java.util.ArrayList`¹ | iterate logical entries of a collection — see [FROM ENTRIES](#from-entries) |
 | `FROM (VALUES (1, "a"), (2, "b")) AS t(n, s)` | inline literal rows — see [VALUES](#values-source) |
@@ -90,9 +92,9 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 `INNER JOIN` and `LEFT JOIN` attach extra columns from a second source to each matched row:
 
 ```
-SELECT x.@displayName, c.retained_total
-FROM java.lang.Object x
-JOIN __classes__ c ON x.@className = c.class_name
+SELECT classof(t), c.instance_count
+FROM java.lang.Thread t
+JOIN __classes__ c ON classof(t) = c.class_name
 ```
 
 Supported join sources:
@@ -103,6 +105,15 @@ Supported join sources:
 | `__classes__` | `class_name`, `instance_count`, `shallow_total`, `retained_total` |
 | `__gc_roots__` | `dense_idx`, `root_type`, `root_type_name` |
 | `__threads__` | `serial`, `obj_idx`, `name`, `is_daemon`, `priority` |
+
+The virtual tables also work as a FROM target — one row per class / GC root /
+thread record, materialized from the pipeline data with no heap-object scan:
+
+```
+SELECT class_name, instance_count, shallow_total
+FROM __classes__
+ORDER BY shallow_total DESC LIMIT 10
+```
 
 Bare `JOIN` means `INNER JOIN`. `LEFT JOIN` keeps outer rows that have no match (right-side columns become `NULL`).
 
@@ -340,8 +351,8 @@ marked ¹ require the full analysis pipeline.
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `@objectId` | Int | Dense object index (0-based) |
-| `@objectAddress` | Int | Raw HPROF heap address (hex) |
+| `@objectId` | Int | Dense object index (0-based); pass as `FROM OBJECTS N` (decimal) to look up a specific object |
+| `@objectAddress` | Int | Raw HPROF heap address; pass as `FROM OBJECTS 0x…` (hex) to look up a specific object |
 | `@usedHeapSize` | Int | Shallow heap size of this object |
 | `@retainedHeapSize`¹ | Int | Total heap retained exclusively by this object |
 | `@displayName` | Str | Class name (dot-form) |
@@ -482,6 +493,30 @@ $ hprof-analyzer query heap.hprof --query "SELECT COUNT(*) FROM OBJECTS java.lan
 COUNT(*)
 24760
 ```
+
+### Single-object lookup
+
+Use `FROM OBJECTS` with a numeric literal to inspect one specific object:
+
+- **Hex literal** → heap address (the `@objectAddress` value):
+  ```console
+  $ hprof-analyzer query heap.hprof --query "SELECT @displayName, @usedHeapSize FROM OBJECTS 0x1295e2f8"
+  @displayName | @usedHeapSize
+  java.lang.String | 24
+  ```
+
+- **Decimal literal** → dense index (the `@objectId` value from a prior query result):
+  ```console
+  $ hprof-analyzer query heap.hprof --query "SELECT @objectId FROM java.lang.String LIMIT 1"
+  @objectId
+  42
+
+  $ hprof-analyzer query heap.hprof --query "SELECT @displayName, @usedHeapSize FROM OBJECTS 42"
+  @displayName | @usedHeapSize
+  java.lang.String | 24
+  ```
+
+Zero rows are returned if the address or index does not match a live object.
 
 ### Attributes, ordering, and limits
 
@@ -893,7 +928,7 @@ These features are available in `hprof-analyzer` but not in Eclipse MAT's OQL:
 | `FROM ENTRIES <ClassName>`¹ — collection entry iteration (ArrayList, Vector, ArrayDeque, HashMap, LinkedHashMap, HashSet) | `SELECT index, element FROM ENTRIES java.util.ArrayList` |
 | SQL LIKE wildcards (`%`, `_`) auto-translated to regex | `LIKE "%error%"` works alongside `LIKE ".*error.*"` |
 | `(VALUES (…))` inline table source | `SELECT * FROM (VALUES (1, "a"), (2, "b")) AS t(n, s)` |
-| `INNER JOIN` / `LEFT JOIN` against `VALUES` tables or virtual tables (`__classes__`, `__gc_roots__`, `__threads__`) | `FROM java.lang.Object x JOIN __classes__ c ON x.@className = c.class_name` |
+| `INNER JOIN` / `LEFT JOIN` against `VALUES` tables or virtual tables (`__classes__`, `__gc_roots__`, `__threads__`) | `FROM java.lang.Thread t JOIN __classes__ c ON classof(t) = c.class_name` |
 | `NOT IN (subquery)` | `WHERE @objectAddress NOT IN (SELECT @objectAddress FROM Foo)` |
 | `GROUP BY` over reference-path hops and `@valueArray` | `GROUP BY x.key` |
 
@@ -906,7 +941,10 @@ These constructs produce results matching MAT (modulo the reachability note belo
 | `FROM <class>`, `FROM OBJECTS <class>` | `FROM java.lang.Thread` |
 | `FROM INSTANCEOF <class>` including subclasses | `FROM INSTANCEOF java.util.Map` |
 | `FROM "<regex>"` double-quoted class-name regex | `FROM "java\.util\..*"` |
+| `FROM OBJECTS 0x1295e2f8` (hex = heap address) | single object by address |
+| `FROM OBJECTS 42` (decimal = dense index / `@objectId`) | single object by index |
 | `FROM (subquery)` semi-join | `FROM (SELECT * FROM java.lang.Thread) t` |
+| `WITH <name> AS (<subquery>)` CTEs | `WITH big AS (SELECT …) SELECT … FROM big` (CTE bodies must be self-contained — CTE→CTE references and recursion are rejected; each reference runs its own copy) |
 | `WHERE`, `ORDER BY`, `LIMIT`, `UNION`, `SELECT DISTINCT` | standard SQL clauses |
 | `LIKE "pattern"` / `NOT LIKE` — SQL globs (`%`, `_`) and regex both accepted | `LIKE "%error%"`, `LIKE ".*error.*"` |
 | `WHERE x INSTANCEOF C` | |
@@ -929,7 +967,7 @@ These constructs produce results matching MAT (modulo the reachability note belo
 | **Integer `/0`** | Throws `ArithmeticException` | Returns `NULL` — analyzer never crashes on a bad row |
 | **`toString()` on non-String** | Calls JVM `toString()` via reflection | Returns `NULL` — static analysis cannot invoke live JVM methods |
 | **`get(n)` indexed access** | Works on arrays/collections | Rejected — dereference the backing field directly (e.g. `a.elementData`) |
-| **`SELECT COUNT(*) FROM (subquery)`** | Returns count | Rejected — aggregate the inner query instead |
+| **`SELECT COUNT(*) FROM (subquery)`** | Returns count | Pure `COUNT(*) FROM (<subquery>)` IS supported (short-circuits to the inner row count); other aggregates over a FROM-subquery are rejected with an actionable error |
 | **`LIKE` pattern syntax** | Regex only | Both SQL globs (`%`, `_`) and regex accepted; `%` auto-translates to `.*` |
 | **`FROM INSTANCEOF <interface>`** | Returns implementing classes | Returns 0 rows — HPROF CLASS_DUMP records do not include implemented-interface metadata; interface assignability cannot be determined statically. Use the concrete class or a common abstract superclass instead (e.g. `FROM INSTANCEOF java.util.AbstractMap` instead of `FROM INSTANCEOF java.util.Map`). |
 
@@ -937,7 +975,6 @@ These constructs produce results matching MAT (modulo the reachability note belo
 
 | Construct | Example | Notes |
 |-----------|---------|-------|
-| `FROM OBJECTS <decimal-id>` | `FROM OBJECTS 123456` | Hex address (`FROM OBJECTS 0x7f3a`) works; decimal object-id lookup requires a new lexer token to distinguish from hex at parse time |
 | `${snapshot}.getClasses()` | `FROM ${snapshot}.getClasses()` | Iterating class objects (not heap instances) — needs a new executor path |
 
 ### Silent NULLs (not an error, but worth knowing)

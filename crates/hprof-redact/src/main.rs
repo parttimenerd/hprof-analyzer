@@ -125,15 +125,16 @@ fn run(input: &str, output: &str, mode: RedactMode) -> io::Result<()> {
 
     let lower = output.to_ascii_lowercase();
 
-    if output == "-" {
+    let stats = if output == "-" {
         let stdout = io::stdout();
         let mut out = stdout.lock();
-        redact(&source, &mut out, mode, progress)?;
-        out.flush()
+        let stats = redact(&source, &mut out, mode, progress)?;
+        out.flush()?;
+        stats
     } else if lower.ends_with(".hprof.gz") {
         let file = std::fs::File::create(output)?;
         let gz = flate2::write::GzEncoder::new(file, flate2::Compression::best());
-        redact(&source, gz, mode, progress)
+        redact(&source, gz, mode, progress)?
     } else if lower.ends_with(".hprof.zip") {
         let file = std::fs::File::create(output)?;
         let mut zip = zip::ZipWriter::new(file);
@@ -141,11 +142,21 @@ fn run(input: &str, output: &str, mode: RedactMode) -> io::Result<()> {
             .compression_method(zip::CompressionMethod::Deflated);
         zip.start_file("dump.hprof", opts)
             .map_err(io::Error::other)?;
-        redact(&source, &mut zip, mode, progress)?;
+        let stats = redact(&source, &mut zip, mode, progress)?;
         zip.finish().map_err(io::Error::other)?;
-        Ok(())
+        stats
     } else {
         let file = std::fs::File::create(output)?;
-        redact(&source, file, mode, progress)
+        redact(&source, file, mode, progress)?
+    };
+
+    if stats.unknown_class_instances > 0 {
+        eprintln!(
+            "\x1b[1;33m⚠ {} instance(s) had no CLASS_DUMP in the file — their bodies were \
+             copied verbatim (primitive values not redacted). This should not occur in a \
+             valid HPROF.\x1b[0m",
+            stats.unknown_class_instances
+        );
     }
+    Ok(())
 }

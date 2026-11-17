@@ -1,0 +1,4 @@
+
+thread 'tokio-rt-worker' (3127754) panicked at src/query/run.rs:3509:22:
+flat results shorter than groups describe
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

@@ -13,11 +13,20 @@ after code changes, `heap cache-clear <dump>` or delete `<dump>.hprof-cache/`.
 
 ## B. OQL engine / query tool
 
-### B6. OPEN (docs) — documented features that don't work (agent E)
-- Virtual tables `__classes__`/`__gc_roots__`/`__threads__`: silently 0 rows
-  (docs/OQL.md ~102-104). Implement from model data or remove from docs + error.
-- `WITH` CTEs: rejected; error references the FROM-subquery form — reword to a
-  plain unsupported-feature message.
+### B6. OPEN (rest) — documented features that don't work (agent E)
+- FIXED: `WITH` CTEs are now IMPLEMENTED (token-level pre-parser + desugar into
+  the FROM-subquery machinery; single + multiple CTEs, aliases, UNION branches;
+  chained/recursive CTEs rejected with clear messages; docs + oql_docs updated;
+  parse + execution regression tests). Two regressions found & fixed on the way:
+  (a) the scan executor's `class_matches` guard was dropped by an unrelated
+  FromSource refactor — every executor matched every object (a Thread-only
+  inner subquery returned all 203,782 reachable objects); (b)
+  `run_oql_escalated` had no subquery routing — the B1 fix only patched the MCP
+  tool, so `heap query` panicked ("flat results shorter than groups describe");
+  routing now happens once inside run_oql_escalated for every caller.
+- Virtual tables `__classes__`/`__gc_roots__`/`__threads__`: implementation
+  landed in the working tree (pass2 materialization + VTableData) — verify:
+  `heap query <dump> --oql 'SELECT COUNT(*) FROM __threads__'`.
 - N of the examples inside `get_oql_docs` fail as-is. Repro: run each doc
   example verbatim via `heap query tests/fixtures/dump_4_philosophers.hprof --oql '...'`.
 
@@ -68,12 +77,6 @@ after code changes, `heap cache-clear <dump>` or delete `<dump>.hprof-cache/`.
   (`Objects: 437704` vs range `0..482360` on clinic).
 
 ## E. Redaction / secrets
-
-### E1. OPEN — complete-mode redaction changes the leak-suspects list (agent F)
-- Repro: redact philosophers with `--complete`; original top-2 suspects
-  (`InTxnImpl`, `LazyVals$`) disappear; `PhilosopherThread`/`JarFile` appear.
-- Per I6: print "complete-redacted dumps must not be used for structural leak
-  analysis" by the tool (minimal honest fix); deeper suspect-parity fix open.
 
 ## G. Tooling/config environment
 

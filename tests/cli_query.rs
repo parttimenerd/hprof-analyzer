@@ -5989,6 +5989,49 @@ fn not_in_numeric_literal_list_excludes_by_object_id() {
     }
 }
 
+/// B6b: WITH (CTE) references execute end-to-end as FROM-subqueries, including
+/// chained CTEs (a later CTE referencing an earlier one).
+#[test]
+fn with_cte_executes_as_from_subquery() {
+    let Some(hprof) = philosophers() else { return };
+    let hprof = hprof.as_str();
+    let direct = query_table(hprof, "SELECT COUNT(*) FROM java.lang.Thread");
+    assert!(
+        direct.error.is_none(),
+        "direct count failed: {:?}",
+        direct.error
+    );
+    let n: u64 = direct.rows[0][0].parse().expect("count parse");
+
+    let t = query_table(
+        hprof,
+        "WITH big AS (SELECT @objectId FROM java.lang.Thread) SELECT COUNT(*) FROM big",
+    );
+    assert!(t.error.is_none(), "CTE query failed: {:?}", t.error);
+    assert_eq!(t.rows[0][0].parse::<u64>().unwrap(), n, "single-CTE count");
+
+    // Chained CTEs are rejected with a CTE-specific message (they would nest
+    // subqueries beyond the supported single level).
+    let out = Command::new(BIN)
+        .arg("heap")
+        .arg("query")
+        .arg(hprof)
+        .args([
+            "--oql",
+            "WITH a AS (SELECT @objectId FROM java.lang.Thread), \
+                   b AS (SELECT @objectId FROM a) \
+             SELECT COUNT(*) FROM b",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "chained CTEs must exit non-zero");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("chained CTEs are not supported"),
+        "expected the chained-CTE error, got: {stderr}"
+    );
+}
+
 #[test]
 fn is_null_and_is_not_null_filter() {
     let Some(hprof) = mnemonics() else { return };

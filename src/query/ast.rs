@@ -382,10 +382,16 @@ pub struct ClassSpec {
 pub enum FromSource {
     Class(ClassSpec),
     Subquery(Box<Query>),
-    /// A single heap object identified by address (decimal or hex literal, e.g.
-    /// `FROM OBJECTS 0x1295e2f8`). Resolved to one dense index via the
-    /// address->index map; a missing address yields zero rows (MAT parity).
-    Object(u64),
+    /// A single heap object identified by address or dense index.
+    ///
+    /// Hex literals (`FROM OBJECTS 0x1295e2f8`) set `is_addr = true` and are
+    /// resolved via the address→dense-index map. Decimal literals
+    /// (`FROM OBJECTS 123456`) set `is_addr = false` and are used directly as a
+    /// dense index (matching `@objectId` values from OQL query results).
+    Object {
+        id: u64,
+        is_addr: bool,
+    },
     /// `FROM ENTRIES <ClassName>` — iterate over the logical *elements* of a
     /// known collection class (e.g. `java.util.ArrayList`). Each row is one
     /// element reference, not the collection object itself. `class` is the
@@ -399,6 +405,15 @@ pub enum FromSource {
         alias: String,
         columns: Vec<String>,
     },
+    /// A named virtual table as a FROM target: `FROM __classes__`,
+    /// `FROM __gc_roots__`, `FROM __threads__`. Rows come from the pipeline's
+    /// post-scan data (class histogram, GC roots, thread records), not from a
+    /// per-object heap scan. The name is stored WITHOUT the `__` delimiters
+    /// (matching `JoinSource::VirtualTable`), e.g. `"classes"`.
+    VirtualTable {
+        name: String,
+        alias: String,
+    },
 }
 
 impl FromSource {
@@ -408,9 +423,10 @@ impl FromSource {
         match self {
             FromSource::Class(c) => &c.class_name,
             FromSource::Subquery(_) => "",
-            FromSource::Object(_) => "",
+            FromSource::Object { .. } => "",
             FromSource::Entries { class } => class,
             FromSource::Values { .. } => "",
+            FromSource::VirtualTable { .. } => "",
         }
     }
     /// The class spec for a class FROM, or `None` for a subquery source.
@@ -418,9 +434,10 @@ impl FromSource {
         match self {
             FromSource::Class(c) => Some(c),
             FromSource::Subquery(_) => None,
-            FromSource::Object(_) => None,
+            FromSource::Object { .. } => None,
             FromSource::Entries { .. } => None,
             FromSource::Values { .. } => None,
+            FromSource::VirtualTable { .. } => None,
         }
     }
     /// Whether this is `FROM INSTANCEOF C` (subclasses included). `false` for a
@@ -433,9 +450,18 @@ impl FromSource {
         match self {
             FromSource::Subquery(q) => Some(q),
             FromSource::Class(_) => None,
-            FromSource::Object(_) => None,
+            FromSource::Object { .. } => None,
             FromSource::Entries { .. } => None,
             FromSource::Values { .. } => None,
+            FromSource::VirtualTable { .. } => None,
+        }
+    }
+    /// The virtual table name for a virtual-table source (WITHOUT the `__`
+    /// delimiters, e.g. `"classes"`), else `None`.
+    pub fn as_virtual_table(&self) -> Option<&str> {
+        match self {
+            FromSource::VirtualTable { name, .. } => Some(name),
+            _ => None,
         }
     }
 }

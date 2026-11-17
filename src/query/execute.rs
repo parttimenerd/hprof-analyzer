@@ -989,11 +989,18 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         } else {
             None
         };
-        // Resolve a `FROM OBJECTS <address>` seed to its single dense index once,
-        // here — not in the per-object hot path. A missing address stays `None`
-        // and no object matches (zero rows, MAT parity).
-        let target_index = if let FromSource::Object(addr) = &query.from {
-            resolver.index_of_addr(*addr)
+        // Resolve a `FROM OBJECTS <seed>` to its single dense index once, here —
+        // not in the per-object hot path. Hex literals are heap addresses resolved
+        // via the address→index map; decimal literals are dense indices directly
+        // (matching `@objectId` values from OQL query results). A missing address
+        // or out-of-range index stays `None` and produces zero rows (MAT parity).
+        let target_index = if let FromSource::Object { id, is_addr } = &query.from {
+            if *is_addr {
+                resolver.index_of_addr(*id)
+            } else {
+                let idx = *id as usize;
+                resolver.addr_of(idx).map(|_| idx)
+            }
         } else {
             None
         };
@@ -1070,8 +1077,13 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// `index-only` carry sized by the caller's cap; matched indices are pushed
     /// into it during the scan and extracted with `take_carry` at scan end.
     pub fn new_carry(query: &'a Query, plan: &'a QueryPlan, resolver: &'a R, carry: Carry) -> Self {
-        let target_index = if let FromSource::Object(addr) = &query.from {
-            resolver.index_of_addr(*addr)
+        let target_index = if let FromSource::Object { id, is_addr } = &query.from {
+            if *is_addr {
+                resolver.index_of_addr(*id)
+            } else {
+                let idx = *id as usize;
+                resolver.addr_of(idx).map(|_| idx)
+            }
         } else {
             None
         };
@@ -1159,11 +1171,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         }
         // A `FROM OBJECTS <address>` object may itself be an array — we don't know
         // its kind before resolving it — so the scan must deliver arrays too.
-        if matches!(self.query.from, FromSource::Object(_)) {
+        if matches!(self.query.from, FromSource::Object { .. }) {
             return true;
         }
         let from = self.query.from.class_name();
-        // A quoted regex could match an array class name (e.g. `.*` or
         // `java\.lang\..*\[\]`) without a literal `*`, so a regex FROM must see
         // arrays too. Compiling once and testing per-array would be cheaper to
         // gate, but arrays are a small minority; be conservative and include them.
@@ -2625,11 +2636,15 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     fn visit_instance(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
         // `FROM OBJECTS <address>`: only the single resolved dense index matches.
         // Gate only for an Object source so every other query is unaffected.
-        if let FromSource::Object(_) = &self.query.from {
+        if let FromSource::Object { .. } = &self.query.from {
             if Some(src_idx) != self.target_index {
                 return;
             }
         }
+        // Class filter: the FROM class/spec must match before anything else
+        // runs. (Was dropped in an unrelated FromSource::Object refactor, which
+        // made every executor emit one row per scanned object — a Thread-only
+        // inner subquery returned all 203,782 reachable objects.)
         if !self.class_matches(class_id) {
             return;
         }
@@ -2785,7 +2800,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     fn visit_array(&mut self, src_idx: usize, class_name: &str, length: u32) {
         // `FROM OBJECTS <address>`: only the single resolved dense index matches
         // (the target object may be an array). Gate only for an Object source.
-        if let FromSource::Object(_) = &self.query.from {
+        if let FromSource::Object { .. } = &self.query.from {
             if Some(src_idx) != self.target_index {
                 return;
             }
@@ -2793,7 +2808,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         // A FROM-subquery source matches every object (identity is constrained
         // by the outer semi-join), so it considers arrays too.
         let class_ok = self.query.from.as_subquery().is_some()
-            || matches!(self.query.from, FromSource::Object(_))
+            || matches!(self.query.from, FromSource::Object { .. })
             || match self.query.from.class_spec() {
                 Some(spec) if spec.instanceof => {
                     // Arrays are instances of Object, Cloneable, Serializable.

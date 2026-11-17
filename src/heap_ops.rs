@@ -127,7 +127,30 @@ pub fn report_section(
 }
 
 /// Like [`report_section`], but allows the caller to override the default row
-/// limit for sections that support it (`top-objects`, `top-classes`, `threads`).
+/// limit for sections that support it.
+///
+/// # Which sections honor `limit`
+///
+/// `limit` caps the size of LIST fields the section emits (the leading part of
+/// each list — they are all sorted most-significant-first, so the prefix is the
+/// significant slice); scalar/summary fields are never truncated:
+///
+/// | Section | `limit` caps |
+/// |---|---|
+/// | `threads` | thread rows |
+/// | `top-objects` / `top-classes` | rows |
+/// | `waste` | `waste_breakdown` rows |
+/// | `retainers` | rows |
+/// | `arrays` | `obj_array_buckets` + `prim_array_buckets` |
+/// | `collections` | each view's row/bucket list (fill ratios, size histogram, top arrays, constant arrays) |
+/// | `indicators` | `nio_buffer_owners` |
+/// | `alloc_sites` | `sites` |
+/// | `thread_locals` | rows |
+///
+/// `leaks`/`overview`/`dominators`/`references`/`all` and the synthesized
+/// sections other than `top-objects`/`top-classes` ignore `limit` (their shape
+/// is already bounded by build-time caps). `leaks` suspects are bounded at
+/// build time; use a focused section instead of `all` to shrink output.
 pub fn report_section_with_limit(
     sess: &CachedSession,
     section: &str,
@@ -199,14 +222,51 @@ pub fn report_section_with_limit(
                 }))
             }
         }
-        "indicators" => serde_json::to_value(&r.leak_indicators),
+        "indicators" => {
+            let cap = limit.unwrap_or(usize::MAX);
+            let mut li = r.leak_indicators.clone();
+            li.nio_buffer_owners.truncate(cap);
+            serde_json::to_value(&li)
+        }
         "retainers" => {
             let cap = limit.unwrap_or(usize::MAX);
             let rows: Vec<_> = r.top_retainers.iter().take(cap).collect();
             serde_json::to_value(&rows)
         }
-        "arrays" => serde_json::to_value(&r.arrays_by_size),
-        "collections" => serde_json::to_value(&r.collections),
+        "arrays" => {
+            // C5: `arrays` is superseded by `collections` (which includes the
+            // array fill ratios and top-array views). Kept for backward
+            // compatibility, explicitly flagged; `limit` caps the two bucket
+            // lists.
+            let cap = limit.unwrap_or(usize::MAX);
+            let mut abs = r.arrays_by_size.clone();
+            abs.obj_array_buckets.truncate(cap);
+            abs.prim_array_buckets.truncate(cap);
+            serde_json::to_value(serde_json::json!({
+                "_superseded": true,
+                "_note": "The `arrays` section is superseded by `collections` (object-array \
+                          and primitive-array length histograms live there alongside fill \
+                          ratios and top-array rows). This section is kept for backward \
+                          compatibility; prefer `get_report({section: \"collections\"}).`",
+                "obj_array_buckets": abs.obj_array_buckets,
+                "prim_array_buckets": abs.prim_array_buckets,
+                "zero_length_count": abs.zero_length_count,
+            }))
+        }
+        "collections" => {
+            let cap = limit.unwrap_or(usize::MAX);
+            let mut c = r.collections.clone();
+            c.collection_fill_ratio.buckets.truncate(cap);
+            c.collections_by_size.buckets.truncate(cap);
+            c.array_fill_ratio.buckets.truncate(cap);
+            c.map_collision_ratio.buckets.truncate(cap);
+            c.constant_primitive_arrays.rows.truncate(cap);
+            c.top_prim_arrays.top_individual.truncate(cap);
+            c.top_prim_arrays.top_by_class.truncate(cap);
+            c.top_obj_arrays.top_individual.truncate(cap);
+            c.top_obj_arrays.top_by_class.truncate(cap);
+            serde_json::to_value(&c)
+        }
         "references" => serde_json::to_value(&r.references),
         "dominators" => {
             // Serve-cap: the cached report keeps up to IMDOM_PAIRS_CAP (20k)
@@ -235,32 +295,53 @@ pub fn report_section_with_limit(
                 None => serde_json::to_value::<Option<()>>(None),
                 Some(a) => {
                     let sites: Vec<_> = a.sites.iter().take(cap).collect();
+                    let any_frames = a.sites.iter().any(|s| !s.frames.is_empty());
+                    let note = if !a.traces_present {
+                        "traces_present is false: this dump was captured without allocation \
+                         tracking (-agentlib:hprof=heap=dump,format=b is required to record \
+                         allocation stack traces), or no GC-reachable object carries a \
+                         non-zero allocation-trace serial. Counts would be meaningless."
+                    } else if !any_frames {
+                        "The dump records allocation-site serials, but the traces they \
+                         reference contain no frames, so per-site stacks are unavailable. \
+                         Capture with -agentlib:hprof=heap=dump,depth=8 to record \
+                         method-level allocation stacks."
+                    } else {
+                        "Counts cover GC-reachable objects only (unreachable garbage is \
+                         excluded, so totals can be cross-checked against the histogram / \
+                         OQL SUM(@usedHeapSize)). retained_total per site is the sum of \
+                         each object's individual dominator-tree retained size; it can \
+                         exceed total heap size because dominated sub-trees are counted \
+                         for each dominator along the chain."
+                    };
                     serde_json::to_value(serde_json::json!({
                         "traces_present": a.traces_present,
                         "sites": sites,
-                        "_note": if !a.traces_present {
-                            "traces_present is false: this dump was captured without allocation \
-                             tracking (-agentlib:hprof=heap=dump,format=b is required to record \
-                             allocation stack traces). All stack_trace_serial values are 0."
-                        } else {
-                            "retained_total per site is the sum of each object's individual \
-                             dominator-tree retained size; it can exceed total heap size because \
-                             dominated sub-trees are counted for each dominator along the chain."
-                        },
+                        "_note": note,
                     }))
                 }
             }
         }
         "thread_locals" => {
-            let rows = &r.thread_local_analysis;
+            let cap = limit.unwrap_or(usize::MAX);
+            let rows: Vec<_> = r.thread_local_analysis.iter().take(cap).collect();
             if rows.is_empty() {
                 serde_json::to_value(serde_json::json!({
                     "rows": rows,
-                    "_note": "thread_local_analysis is empty: re-analyze with --find-duplicates \
-                              (or DetailLevel::Full) to populate ThreadLocal entry breakdowns.",
+                    "_note": "thread_local_analysis is empty: no ThreadLocalMap$Entry \
+                              instances were found in this dump (the analyzer tallies them \
+                              in an always-on pass; an empty list means the heap contains \
+                              no ThreadLocalMap entries, e.g. no thread-local values were \
+                              live at dump time). ThreadLocal leak potential is still \
+                              reported by leak_indicators.thread_local_null_key_count.",
                 }))
             } else {
-                serde_json::to_value(rows)
+                serde_json::to_value(serde_json::json!({
+                    "rows": rows,
+                    "_note": "Per-value-class breakdown of ThreadLocalMap$Entry entries. \
+                              stale_count rows with entry_count == stale_count are the \
+                              classic thread-pool leak (key GC'd, value still held).",
+                }))
             }
         }
         "framework" => {
@@ -276,7 +357,15 @@ pub fn report_section_with_limit(
                 serde_json::to_value(rows)
             }
         }
-        "field_stats" => serde_json::to_value(&r.field_stats),
+        "field_stats" => match &r.field_stats {
+            Some(fs) => serde_json::to_value(fs),
+            None => serde_json::to_value(serde_json::json!({
+                "_note": "field_stats is null: per-class reference-field statistics are an \
+                          opt-in pass (re-analyze with --field-stats or --full-analysis); \
+                          they are not computed in the default report because the pass \
+                          needs the full forward-reference graph.",
+            })),
+        },
         "categories" => serde_json::to_value(&r.category_rollup),
         // ── Synthesized sections (matching MCP's get_report) ────────────
         "top-objects" => {
@@ -1609,6 +1698,129 @@ mod tests {
             path[2]["synthetic"],
             serde_json::json!(true),
             "terminal vroot node must be flagged synthetic, got {r}"
+        );
+    }
+
+    // ── H3: `limit` must cap the list fields it previously ignored ──────────
+
+    /// Every list-bearing section (`arrays`, `collections`, `indicators`,
+    /// `alloc_sites`) truncates its lists to `limit` entries (keeping the
+    /// most-significant prefix), while `limit: None` returns the full lists.
+    /// `arrays` additionally carries the `_superseded` note (C5).
+    #[test]
+    fn report_section_limit_caps_lists() {
+        let (_dir, mut sess) = base_fixture();
+        let size_b = crate::report::SizeHistogramBucket {
+            upper_len: 1,
+            objects: 1,
+            shallow: 10,
+        };
+        let fill_b = crate::report::FillRatioBucket {
+            lower_ratio_bp: 0,
+            upper_ratio_bp: 10_000,
+            objects: 1,
+            shallow: 10,
+            wasted: 0,
+        };
+        sess.report.arrays_by_size.obj_array_buckets = vec![size_b.clone(); 5];
+        sess.report.arrays_by_size.prim_array_buckets = vec![size_b.clone(); 5];
+        sess.report.collections.collections_by_size.buckets = vec![size_b.clone(); 5];
+        sess.report.collections.collection_fill_ratio.buckets = vec![fill_b.clone(); 5];
+        sess.report.collections.array_fill_ratio.buckets = vec![fill_b.clone(); 5];
+        sess.report.collections.map_collision_ratio.buckets = vec![fill_b.clone(); 5];
+        sess.report.leak_indicators.nio_buffer_owners = (0..5)
+            .map(|i| crate::report::NioBufferOwner {
+                capacity: i as u64,
+                obj_index_1based: i,
+                object_index: i,
+                display_class: "java.nio.DirectByteBuffer".into(),
+                retained: 0,
+                root_path: vec![],
+            })
+            .collect();
+        sess.report.alloc_sites = Some(crate::report::AllocSites {
+            traces_present: true,
+            sites: (0..2)
+                .map(|i| crate::report::AllocSite {
+                    stack_serial: i as u32 + 1,
+                    frames: vec![],
+                    object_count: 10 - i as u64,
+                    shallow_total: 100,
+                    retained_total: 100,
+                })
+                .collect(),
+        });
+
+        // Full lists when no limit is passed.
+        let full = report_section(&sess, "collections").expect("collections");
+        assert_eq!(
+            full["collections_by_size"]["buckets"]
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
+        let full_arr = report_section(&sess, "arrays").expect("arrays");
+        assert_eq!(
+            full_arr["_superseded"],
+            serde_json::json!(true),
+            "arrays section flagged superseded (C5)"
+        );
+        assert_eq!(full_arr["obj_array_buckets"].as_array().unwrap().len(), 5);
+
+        // limit = 2 caps every list in collections/arrays/indicators.
+        let capped =
+            report_section_with_limit(&sess, "collections", Some(2)).expect("collections capped");
+        for key in [
+            "collection_fill_ratio",
+            "collections_by_size",
+            "array_fill_ratio",
+            "map_collision_ratio",
+        ] {
+            assert_eq!(
+                capped[key]["buckets"].as_array().unwrap().len(),
+                2,
+                "{key} buckets must be capped at limit"
+            );
+        }
+        let capped_arr = report_section_with_limit(&sess, "arrays", Some(2)).expect("arrays");
+        assert_eq!(capped_arr["obj_array_buckets"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            capped_arr["prim_array_buckets"].as_array().unwrap().len(),
+            2
+        );
+        let capped_ind =
+            report_section_with_limit(&sess, "indicators", Some(2)).expect("indicators capped");
+        assert_eq!(
+            capped_ind["nio_buffer_owners"].as_array().unwrap().len(),
+            2,
+            "nio_buffer_owners must be capped at limit"
+        );
+
+        // alloc_sites: limit caps sites; the frameless-trace note explains why
+        // frames are empty (C4).
+        let capped_alloc =
+            report_section_with_limit(&sess, "alloc_sites", Some(1)).expect("alloc_sites capped");
+        assert_eq!(capped_alloc["sites"].as_array().unwrap().len(), 1);
+        assert!(
+            capped_alloc["_note"]
+                .as_str()
+                .unwrap()
+                .contains("no frames"),
+            "frameless-trace note must explain the empty frames, got {capped_alloc}"
+        );
+    }
+
+    /// `field_stats` is null on the default path; the section explains the
+    /// requirement instead of emitting a bare null (H3).
+    #[test]
+    fn field_stats_section_notes_requirement_when_absent() {
+        let (_dir, sess) = base_fixture();
+        assert!(sess.report.field_stats.is_none());
+        let v = report_section(&sess, "field_stats").expect("field_stats");
+        assert!(
+            v["_note"].as_str().unwrap().contains("--field-stats"),
+            "absent field_stats must carry an explanatory note, got {v}"
         );
     }
 }

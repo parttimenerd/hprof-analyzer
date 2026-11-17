@@ -397,10 +397,17 @@ pub fn default_view_name(q: &crate::query::ast::Query) -> Option<String> {
         } else {
             c.class_name.clone()
         }),
-        FromSource::Object(addr) => Some(format!("object 0x{addr:x}")),
+        FromSource::Object { id, is_addr } => {
+            if *is_addr {
+                Some(format!("object 0x{id:x}"))
+            } else {
+                Some(format!("object @{id}"))
+            }
+        }
         FromSource::Subquery(_) => None,
         FromSource::Entries { class } => Some(format!("ENTRIES {class}")),
         FromSource::Values { alias, .. } => Some(format!("VALUES {alias}")),
+        FromSource::VirtualTable { name, .. } => Some(format!("__{name}__")),
     }
 }
 

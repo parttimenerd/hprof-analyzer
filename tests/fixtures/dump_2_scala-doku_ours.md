@@ -15,6 +15,7 @@ _All sizes are binary (1 KB = 1024 bytes, 1 MB = 1024 KB, and so on)._
 - [Top Consumers](#top-consumers)
 - [Dominator Analysis](#dominator-analysis)
 - [Threads](#threads)
+- [ThreadLocal Analysis](#threadlocal-analysis)
 - [Top Components](#top-components)
 - [Arrays by Size](#arrays-by-size)
 - [Collections](#collections)
@@ -66,15 +67,16 @@ _Automated signals pointing to where memory concentrates and what to investigate
 - **Sparse Object Arrays:** 38,119 object arrays are ≤20% full (5.9 MB wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory. Replace with a `HashMap` / `SparseArray`, a `List` that grows on demand, or a dedicated sparse-matrix library. See [Collections](#collections).
 - **Fixed per-Object Header Overhead:** 10.9 MB (36.6% of heap) consumed by JVM object headers alone (952,666 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections. See [Object Header Overhead](#object-header-overhead).
 - **Hash-Map Collision Hotspot:** 6 of 533 tracked maps (1.1%) have a load factor > 90% — over-packed hash tables cause long collision chains and degrade lookup performance. Increase initial capacity or lower the load factor (pass `initialCapacity` and `loadFactor` to the constructor, default is 0.75). See [Collections](#collections).
-- **Empty-Collection Cemetery:** 5,822 of 6,491 tracked collections (89.7%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case. See [Collections](#collections).
+- **Empty-Collection Cemetery:** 5,821 of 6,491 tracked collections (89.7%) are empty (1 additional empties are recognized JDK/Scala singleton sentinels — e.g. `scala.Nil$`, `Collections.emptyList()` — expected runtime constants, counted separately in `singleton_sentinels` and excluded from this signal) — pre-allocated but never populated containers waste object-header overhead at scale. Check whether these containers are genuinely never used: allocate on first insert (lazy init) rather than pre-allocating fields that stay empty. See [Collections](#collections).
 - **Deep Retention Chain (Linked-List Shape):** The dominator tree's longest chain is 41,355 hops — this is a linked-list-shaped heap. Memory is being accumulated object-by-object in an unbounded chain (e.g. `LinkedList`, `ArrayDeque` backed by a linked structure, or a recursive data structure). Consider replacing with an array-backed container (`ArrayList`, `ArrayDeque`) or bounding growth. See [Dominator Analysis](#dominator-analysis).
 - **Self-Referential Class Accumulation:** `cafesat.asts.core.Trees$ConnectiveApplication` is self-referential — 35,073 of its 43,982 instances (79.7%) are nested inside another `cafesat.asts.core.Trees$ConnectiveApplication` instance, forming a recursive tree/chain shape that totals 3.9 MB (13.0% of reachable heap). This is a common OOM pattern for tree/graph data structures that grow without a size bound (e.g. a cache keyed by node, a session tree that never prunes). Check whether `cafesat.asts.core.Trees$ConnectiveApplication` has an unbounded self-referential field (a `List<cafesat.asts.core.Trees$ConnectiveApplication>`/`Map<K,cafesat.asts.core.Trees$ConnectiveApplication>` child collection, or a parent/sibling back-reference) and whether instances are ever removed once added. See [System Overview](#system-overview).
-- **Component Retention Imbalance:** Component `java/net/URLClassLoader` retains 209.0% of heap (62.3 MB) while the next largest component (`<boot>`) retains only 207.1%. In a multi-module or multi-app deployment (OSGi, EE, Tomcat) this imbalance means one component dominates the heap. Investigate whether a class-loader-scoped cache, static field, or event-listener registration in `java/net/URLClassLoader` is accumulating without a release path. See [Top Components](#top-components).
 - **Collection Waste Not Analyzed:** Collection waste not analyzed — re-run with `--collections` to check for wasted capacity.
 
 ## Waste Summary
 
 **6.3 MB** estimated reclaimable across the sources below — duplicate strings, duplicate primitive arrays, boxed primitives, and empty/singleton collection overhead. Fix the biggest category first for the highest impact. Figures are approximate; sources may overlap.
+
+_total_bytes counts waste across ALL objects (reachable + unreachable); reachable_bytes is the proportional estimate for GC-reachable objects only (total_bytes × 31251456 / 31940608, where reachable_shallow = 31251456 B and total_shallow = 31940608 B). Sources are approximate and may overlap._
 
 | Source                                     | Reclaimable |
 | ------------------------------------------ | ----------: |
@@ -86,9 +88,10 @@ _Automated signals pointing to where memory concentrates and what to investigate
 
 Reclaimable bytes broken down by waste category and rule:
 
-| Category            | Rule                                 | Reclaimable |
-| ------------------- | ------------------------------------ | ----------: |
-| Collection Capacity | [Sparse Object Arrays](#collections) |      5.9 MB |
+| Category            | Rule                                      | Reclaimable |
+| ------------------- | ----------------------------------------- | ----------: |
+| Collection Capacity | [Sparse Object Arrays](#collections)      |      5.9 MB |
+| Collection Capacity | [Empty-Collection Cemetery](#collections) |    454.8 KB |
 
 ## System Overview
 
@@ -1435,6 +1438,16 @@ _Frame percentages are of this thread's 160 B retained heap._
   - `java.lang.Class` retains 128 B (<0.1% of thread retained)
   - `jdk.internal.ref.CleanerImpl` retains 24 B (<0.1% of thread retained)
 
+## ThreadLocal Analysis
+
+_Values stored in thread-local slots, grouped by value class. Stale entries have a null key — the `ThreadLocal` object was GC'd but the value remains. In pooled threads (Tomcat, Netty) the thread rarely terminates, so stale values accumulate; call `ThreadLocal.remove()` to clean up._
+
+| Value Class                        | Entries | Stale | Retained |
+| ---------------------------------- | ------: | ----: | -------: |
+| `sun.nio.ch.Util$BufferCache`      |       1 |     0 |   4.0 KB |
+| `java.util.Collections$SetFromMap` |       1 |     0 |    160 B |
+| `sun.nio.fs.NativeBuffer[]`        |       1 |     0 |     32 B |
+
 ## Top Components
 
 _Retained heap grouped by class loader (component). `% Heap` is retained as a share of total shallow heap (may exceed 100% — retained sets overlap). `% Retained` is retained as a share of the sum of all histogram-retained sizes (always ≤ 100%)._
@@ -1536,7 +1549,7 @@ _Fraction of each collection's capacity in use — low fill wastes backing-array
 
 ### Collections by Size
 
-_Element-count distribution of collections, bucketed by size — 6,491 tracked; 5,822 empty._
+_Element-count distribution of collections, bucketed by size — 6,491 tracked; 5,821 empty; 1 additional empties are recognized JDK/Scala singleton sentinels (e.g. `scala.Nil$`, `Collections.emptyList()`) — expected runtime constants, not counted as empty._
 
 |    Size ≤ | Collections |     Shallow |
 | --------: | ----------: | ----------: |
@@ -2214,10 +2227,10 @@ _File, stream, and JDBC resource handle classes ranked by instance count. High c
 
 _Point-in-time counts for known Java leak patterns. Non-zero values are not always bugs — see the **What to Check** column for how to triage each one._
 
-| Indicator                            |    Value | What to Check                                                                                                                                         |
-| ------------------------------------ | -------: | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anonymous/generated classes          |      178 | High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by `$` to find the biggest offenders. |
-| `DirectByteBuffer` off-heap capacity | 134.3 MB | Native memory, excluded from JVM heap totals. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.           |
+| Indicator                            |    Value | What to Check                                                                                                                                                                                                                                           |
+| ------------------------------------ | -------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Anonymous/generated class types      |      178 | Distinct generated/anonymous CLASS DEFINITIONS (not instances — see `anonymous_class_instances`). High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by `$` to find the biggest offenders. |
+| `DirectByteBuffer` off-heap capacity | 134.3 MB | Native memory, excluded from JVM heap totals. Check for NIO buffer pools that leak on close, or Netty/gRPC allocators missing a buffer cap.                                                                                                             |
 
 **Top DirectByteBuffer owners:**
 

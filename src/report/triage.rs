@@ -1194,12 +1194,13 @@ impl Rule for WeakRefEscape {
     }
 }
 
-/// Proxy/lambda bloat. Reads `leak_indicators.anonymous_class_count` and
-/// `overview.classes_loaded`.
+/// Proxy/lambda bloat. Reads `leak_indicators.anonymous_class_types` (distinct
+/// generated class definitions) and `overview.classes_loaded` — both type
+/// counts, so the share is types-vs-types.
 struct ProxyLambdaBloat;
 impl Rule for ProxyLambdaBloat {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
-        let anon = r.leak_indicators.anonymous_class_count;
+        let anon = r.leak_indicators.anonymous_class_types;
         let loaded = r.overview.classes_loaded;
         if loaded < PROXY_MIN_CLASSES {
             return None;
@@ -2408,7 +2409,11 @@ impl Rule for HashCollisionHotspot {
 
 /// Empty-collection cemetery. Reads `collections.collections_by_size`. Always-on.
 /// Fires when most (or very many) tracked collections are empty — allocated but
-/// never populated, wasting object-header overhead at scale.
+/// never populated, wasting object-header overhead at scale. Empty collections
+/// that are known JDK/Scala/Kotlin/Guava singleton sentinels (shared read-only
+/// empty constants like `Collections.emptyList()` / `scala.Nil$`) are EXCLUDED
+/// from `empty_count` and reported separately in `singleton_sentinels`: they
+/// are expected runtime constants, not application waste.
 struct EmptyCollectionCemetery;
 impl Rule for EmptyCollectionCemetery {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
@@ -2420,22 +2425,51 @@ impl Rule for EmptyCollectionCemetery {
         if share_pct < EMPTY_COLL_SHARE_PCT && cbs.empty_count < EMPTY_COLL_FLOOR {
             return None;
         }
+        let sentinel_clause = if cbs.singleton_sentinels > 0 {
+            format!(
+                " ({} additional empties are recognized JDK/Scala singleton \
+                 sentinels — e.g. `scala.Nil$`, `Collections.emptyList()` — \
+                 expected runtime constants, counted separately in \
+                 `singleton_sentinels` and excluded from this signal)",
+                fmt_count(cbs.singleton_sentinels),
+            )
+        } else {
+            String::new()
+        };
         Some(signal(
             "empty-collection-cemetery",
             TriageSeverity::Info,
             "Empty-Collection Cemetery",
             format!(
-                "{} of {} tracked collections ({:.1}%) are empty — \
+                "{} of {} tracked collections ({:.1}%) are empty{} — \
                  pre-allocated but never populated containers waste object-header \
-                 overhead at scale. Use lazy initialization (allocate only when the \
-                 first element is added) or return `Collections.emptyList()` / \
-                 `List.of()` sentinels for the read-only empty case.",
+                 overhead at scale. Check whether these containers are genuinely \
+                 never used: allocate on first insert (lazy init) rather than \
+                 pre-allocating fields that stay empty.",
                 fmt_count(cbs.empty_count),
                 fmt_count(cbs.tracked),
                 share_pct,
+                sentinel_clause,
             ),
             Some(("collections", "Collections")),
         ))
+    }
+
+    fn waste_category(&self) -> Option<WasteCategory> {
+        Some(WasteCategory::CollectionCapacity)
+    }
+
+    /// Same per-wrapper estimate TinyCollectionOverhead uses: each empty
+    /// container's header + field overhead ≈ 80 B. Always-on (reads the
+    /// always-on `collections_by_size` tally), so the unified waste breakdown
+    /// is populated even when the opt-in `--collections` views were not run.
+    fn recoverable_bytes(&self, r: &Report) -> Option<u64> {
+        let bytes = r
+            .collections
+            .collections_by_size
+            .empty_count
+            .saturating_mul(80);
+        (bytes > 0).then_some(bytes)
     }
 }
 
@@ -5480,6 +5514,7 @@ mod tests {
         r.collections.collections_by_size = crate::report::model::CollectionsBySize {
             tracked: 1_000,
             empty_count: 800, // 80% — fires
+            singleton_sentinels: 0,
             buckets: vec![],
         };
         assert!(EmptyCollectionCemetery.eval(&r).is_some());
@@ -5495,9 +5530,58 @@ mod tests {
         r.collections.collections_by_size = crate::report::model::CollectionsBySize {
             tracked: 2_000_000,
             empty_count: 600_000, // only 30% but > 500k floor
+            singleton_sentinels: 0,
             buckets: vec![],
         };
         assert!(EmptyCollectionCemetery.eval(&r).is_some());
+    }
+
+    /// I5: recognized singleton sentinels are EXCLUDED from `empty_count`, so a
+    /// heap whose empties are overwhelmingly `Nil$`/`Collections.emptyList()`
+    /// style constants does not fire the cemetery — and the sentinels surface
+    /// separately in `singleton_sentinels`.
+    #[test]
+    fn empty_collection_cemetery_excludes_singleton_sentinels() {
+        let mut r = base_report();
+        // 80% of tracked collections empty, but ALL of them are sentinels.
+        r.collections.collections_by_size = crate::report::model::CollectionsBySize {
+            tracked: 100,
+            empty_count: 0,
+            singleton_sentinels: 80,
+            buckets: vec![],
+        };
+        assert!(
+            EmptyCollectionCemetery.eval(&r).is_none(),
+            "sentinel-only empties are expected runtime constants, not waste"
+        );
+        // Mixed: sentinels stay out of the share; 10 true empties of 100 is
+        // below both the 60% share and the 500k floor → silent.
+        r.collections.collections_by_size.empty_count = 10;
+        assert!(EmptyCollectionCemetery.eval(&r).is_none());
+        // Same 10 true empties with NO sentinels still stays silent (the
+        // sentinel exclusion did not shift the threshold semantics).
+        r.collections.collections_by_size.singleton_sentinels = 0;
+        assert!(EmptyCollectionCemetery.eval(&r).is_none());
+    }
+
+    /// The cemetery is a waste-category rule with an 80 B/empty recoverable
+    /// estimate, so the unified waste breakdown is populated from the
+    /// always-on collections_by_size tally (H3: waste_breakdown was always
+    /// empty on default-flag runs).
+    #[test]
+    fn empty_collection_cemetery_feeds_waste_breakdown() {
+        let mut r = base_report();
+        r.collections.collections_by_size = crate::report::model::CollectionsBySize {
+            tracked: 100,
+            empty_count: 50,
+            singleton_sentinels: 20,
+            buckets: vec![],
+        };
+        assert_eq!(
+            EmptyCollectionCemetery.waste_category(),
+            Some(crate::report::WasteCategory::CollectionCapacity)
+        );
+        assert_eq!(EmptyCollectionCemetery.recoverable_bytes(&r), Some(50 * 80));
     }
 
     #[test]

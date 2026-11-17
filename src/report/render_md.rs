@@ -238,7 +238,7 @@ fn render_root_path_brief(steps: &[crate::report::model::RootPathStep]) -> Strin
 /// capacity, and (when present) a per-buffer owner table. Only emitted when at
 /// least one indicator is non-zero.
 pub(crate) fn render_leak_indicators(li: &crate::report::LeakIndicators, out: &mut String) {
-    if li.anonymous_class_count == 0
+    if li.anonymous_class_types == 0
         && li.thread_local_null_key_count == 0
         && li.direct_byte_buffer_capacity_sum == 0
     {
@@ -254,11 +254,11 @@ always bugs — see the **What to Check** column for how to triage each one._\n\
         &["Indicator", "Value", "What to Check"],
         &[Align::Left, Align::Right, Align::Left],
     );
-    if li.anonymous_class_count > 0 {
+    if li.anonymous_class_types > 0 {
         t.row([
-            "Anonymous/generated classes".into(),
-            fmt_count(li.anonymous_class_count),
-            "High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by `$` to find the biggest offenders.".into(),
+            "Anonymous/generated class types".into(),
+            fmt_count(li.anonymous_class_types),
+            "Distinct generated/anonymous CLASS DEFINITIONS (not instances — see `anonymous_class_instances`). High counts signal class-loader leaks (e.g. dynamic proxies accumulating per request). In Top Consumers, filter by `$` to find the biggest offenders.".into(),
         ]);
     }
     if li.thread_local_null_key_count > 0 {
@@ -812,6 +812,9 @@ collection overhead. Fix the biggest category first for the highest impact. Figu
 approximate; sources may overlap.\n\n",
         format_bytes(w.total_bytes)
     ));
+    if !w.note.is_empty() {
+        out.push_str(&format!("_{}_\n\n", w.note));
+    }
     let mut t = crate::md::Table::new(
         &["Source", "Reclaimable"],
         &[crate::md::Align::Left, crate::md::Align::Right],
@@ -2721,11 +2724,22 @@ backing-array memory. {} collections analyzed ({} non-empty tracked)._\n\n",
 
     // ── Collections by Size ──────────────────────────────────────────────────
     out.push_str("### Collections by Size\n\n");
+    let sentinel_note = if c.collections_by_size.singleton_sentinels > 0 {
+        format!(
+            "; {} additional empties are recognized JDK/Scala singleton sentinels \
+             (e.g. `scala.Nil$`, `Collections.emptyList()`) — expected runtime \
+             constants, not counted as empty",
+            fmt_count(c.collections_by_size.singleton_sentinels)
+        )
+    } else {
+        String::new()
+    };
     out.push_str(&format!(
         "_Element-count distribution of collections, bucketed by size — \
-{} tracked; {} empty._\n\n",
+{} tracked; {} empty{}._\n\n",
         fmt_count(c.collections_by_size.tracked),
         fmt_count(c.collections_by_size.empty_count),
+        sentinel_note,
     ));
     if c.collections_by_size.buckets.is_empty() {
         out.push_str("_No size distribution data — all tracked collections may be empty._\n\n");

@@ -751,6 +751,13 @@ pub struct Suspect {
     /// Bounded by the `--detail` max-nodes / max-depth caps.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merged_paths: Option<MergedPathNode>,
+    /// One-line note for GROUP suspects: why `path`/`accumulation_*`/
+    /// `root_path` are empty here (those fields only apply to single suspects;
+    /// the group's dominator paths live in `merged_paths`). Empty for single
+    /// suspects, where those fields are populated. `#[serde(default)]` keeps
+    /// older JSON loadable.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path_note: String,
 }
 
 /// Aggregates for the "Leak Suspects" section.
@@ -1307,13 +1314,24 @@ pub struct CollectionFillRatio {
 }
 
 /// Histogram of collection element counts (reuses SizeHistogramBucket).
-/// `empty_count` = collections with size 0. Additive.
+/// `empty_count` = collections with size 0 that are NOT recognized singleton
+/// sentinels; recognized JDK/Scala singleton sentinel objects (e.g.
+/// `scala.Nil$`, `Collections.emptyList()`) are reported separately in
+/// `singleton_sentinels` so the empty-collection signal doesn't overstate.
+/// Additive.
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 pub struct CollectionsBySize {
     pub tracked: u64,
     pub empty_count: u64,
+    /// Empty collections whose class is a known JDK/Kotlin/Scala/Guava
+    /// singleton sentinel (shared read-only empty constant). These are
+    /// EXPECTED empties — runtime singletons created at class-init, not
+    /// application waste — so they are excluded from `empty_count` and listed
+    /// here instead. `#[serde(default)]` keeps older JSON loadable.
+    #[serde(default)]
+    pub singleton_sentinels: u64,
     pub buckets: Vec<SizeHistogramBucket>,
 }
 
@@ -1474,6 +1492,12 @@ pub struct WasteSummary {
     pub reachable_bytes: u64,
     /// Per-source breakdown, sorted by bytes desc. Only nonzero sources.
     pub sources: Vec<WasteSource>,
+    /// Explains how `reachable_bytes` relates to `total_bytes` (proportional
+    /// scaling by the reachable share of the heap) — rendered alongside the
+    /// summary so consumers never have to infer the formula. Constant for a
+    /// given summary; empty only in legacy JSON round-trips.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 /// One row of the unified "Where Is My Memory Going?" waste breakdown
@@ -1794,12 +1818,18 @@ pub struct NioBufferOwner {
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 pub struct LeakIndicators {
-    /// Count of anonymous/generated class definitions (names matching `$\d+`,
-    /// `$$Lambda$`, `$$Anon`, or `$Proxy` patterns).
-    pub anonymous_class_count: u64,
+    /// Count of DISTINCT anonymous/generated class definitions — i.e. class
+    /// TYPES, not instances (names matching `$\d+`, `$$Lambda$`, `$$Anon`, or
+    /// `$Proxy` patterns). Previously misnamed `anonymous_class_count`, which
+    /// read as an instance count; the instance figure is
+    /// `anonymous_class_instances` below. The serde alias keeps report JSONs
+    /// written under the old field name (e.g. stored/golden reports diffed via
+    /// `compare reports`) loadable.
+    #[serde(alias = "anonymous_class_count")]
+    pub anonymous_class_types: u64,
     /// Count of live object instances whose class is anonymous/generated
-    /// (i.e. class name matches the same patterns as `anonymous_class_count`).
-    /// Higher than `anonymous_class_count` when many instances share the same
+    /// (i.e. class name matches the same patterns as `anonymous_class_types`).
+    /// Higher than `anonymous_class_types` when many instances share the same
     /// anonymous class (e.g. thousands of lambda captures from one call site).
     #[serde(default)]
     pub anonymous_class_instances: u64,

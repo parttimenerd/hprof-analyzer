@@ -1689,4 +1689,56 @@ mod tests {
         assert!(ca.biggest_single.is_empty());
         assert!(!ca.truncated);
     }
+
+    // ── C4/H3: alloc-site accounting must be reachable-only ─────────────────
+
+    /// fixture(): obj0..obj3 reachable (shallow 100/100/50/20, retained
+    /// 1000/1000/50/200), obj4 UNREACHABLE (idom = u32::MAX, shallow 7). All
+    /// five share alloc-trace serial 7. The site totals must count ONLY the
+    /// reachable objects — garbage the histogram/OQL exclude must not inflate
+    /// the alloc-site figures.
+    #[test]
+    fn alloc_sites_counts_reachable_objects_only() {
+        let (mut g, _dc_off, _dc_tgt) = fixture();
+        g.alloc_stack_serial = vec![7, 7, 7, 7, 7];
+        let a = build_alloc_sites(&g, 10);
+        assert!(a.traces_present);
+        assert_eq!(a.sites.len(), 1);
+        let site = &a.sites[0];
+        assert_eq!(site.stack_serial, 7);
+        assert_eq!(site.object_count, 4, "unreachable object must be excluded");
+        assert_eq!(site.shallow_total, 100 + 100 + 50 + 20);
+        assert_eq!(site.retained_total, 1000 + 1000 + 50 + 200);
+    }
+
+    /// Every object with serial 0 (allocation tracking off) ⇒ traces_present
+    /// false with no sites — the section degrades to an explanatory note.
+    #[test]
+    fn alloc_sites_all_zero_serials_not_present() {
+        let (mut g, _dc_off, _dc_tgt) = fixture();
+        g.alloc_stack_serial = vec![0, 0, 0, 0, 0];
+        let a = build_alloc_sites(&g, 10);
+        assert!(!a.traces_present);
+        assert!(a.sites.is_empty());
+    }
+
+    /// `top_n` is honored: two distinct reachable serials with
+    /// `build_alloc_sites(g, 1)` keep only the leader (object_count desc,
+    /// tie-break retained desc, then serial asc).
+    #[test]
+    fn alloc_sites_top_n_is_honored() {
+        let (mut g, _dc_off, _dc_tgt) = fixture();
+        // obj0..obj3 reachable: serials 9, 9, 8, 8 → counts 2/2, retained
+        // sums 1050 vs 250 → serial 9 wins on the retained tie-break.
+        g.alloc_stack_serial = vec![9, 9, 8, 8, 9];
+        let a = build_alloc_sites(&g, 1);
+        assert_eq!(a.sites.len(), 1);
+        assert_eq!(a.sites[0].stack_serial, 9);
+        assert_eq!(a.sites[0].object_count, 2);
+        // Untruncated view returns both sites, sorted by count/retained.
+        let full = build_alloc_sites(&g, 10);
+        assert_eq!(full.sites.len(), 2);
+        assert_eq!(full.sites[0].stack_serial, 9);
+        assert_eq!(full.sites[1].stack_serial, 8);
+    }
 }

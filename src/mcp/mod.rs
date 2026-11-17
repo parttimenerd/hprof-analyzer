@@ -1223,9 +1223,11 @@ impl HprofMcpServer {
                         - complete (complete=true): two-pass, zeros everything lean does PLUS all primitive \
                           scalar fields on every object instance and static/constant-pool fields on classes. \
                           Strongest guarantee; roughly 2× slower. \
-                          Object reference fields are preserved in both modes, so the reference graph, \
-                          dominator tree, and retained-size analysis are identical to the original dump.\n\
-                        Both modes preserve the complete object graph: class names, field names, object IDs, \
+                          E1: complete mode ALTERS dominator/retained structure (objects can be \
+                          reclassified and leak suspects can differ from the original) — do NOT use a \
+                          complete-redacted dump for structural leak analysis; use lean mode for \
+                          suspect-preserving redaction.\n\
+                        Lean mode preserves the complete object graph: class names, field names, object IDs, \
                         reference links, and thread stacks are unchanged, so structural analyses \
                         (histogram, dominator tree, leak suspects, GC roots) remain accurate. \
                         The redacted file is fully readable by hprof-analyzer, Eclipse MAT, and jhat. \
@@ -1326,10 +1328,9 @@ impl HprofMcpServer {
         };
 
         let structure_note = if p.complete {
-            "\nℹ complete-mode redaction zeros primitive scalars but preserves all object \
-             reference fields, so the reference graph and dominator/retained structure are \
-             identical to the original. Duplicate-string and collection fill-ratio analyses \
-             are skipped because array data is zeroed.\n"
+            "\n⚠ complete-mode redaction alters dominator/retained structure — do NOT use \
+             this redacted dump for structural leak analysis; use lean mode for \
+             suspect-preserving redaction.\n"
         } else {
             ""
         };

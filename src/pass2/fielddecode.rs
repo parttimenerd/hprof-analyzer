@@ -686,6 +686,48 @@ fn pretty_name(class_id: u64, p1: &Pass1) -> String {
         .unwrap_or_else(|| format!("0x{class_id:x}"))
 }
 
+/// Classes whose EMPTY instances are known shared read-only singleton
+/// sentinels (JDK / Scala / Kotlin / Guava runtime constants). An empty
+/// collection of one of these classes is an EXPECTED empty — created once at
+/// class-init and shared — not pre-allocated application waste, so the
+/// empty-collection signal (`CollectionsBySize.empty_count` +
+/// `EmptyCollectionCemetery`) excludes it and reports it separately in
+/// `singleton_sentinels` instead.
+///
+/// Only empty instances count: we only consult this predicate when `size == 0`,
+/// so a class listed here with a genuinely populated instance is unaffected.
+/// The JDK 9+ `ImmutableCollections$ListN/SetN/MapN` classes are safe to list
+/// because a zero-element instance is by construction the shared `EMPTY_LIST`/
+/// `EMPTY_SET`/`EMPTY_MAP` constant (the factory APIs cannot build an empty
+/// `*N` instance any other way).
+fn is_singleton_sentinel_class(class_id: u64, p1: &Pass1) -> bool {
+    match p1
+        .class_map
+        .get(&class_id)
+        .and_then(|ci| p1.strings.get(&ci.name_id))
+    {
+        Some(name) => is_singleton_sentinel_name(name),
+        None => false,
+    }
+}
+
+/// Pure name-based half of [`is_singleton_sentinel_class`] (slash-form class
+/// name), so it can be unit-tested without a `Pass1` fixture.
+fn is_singleton_sentinel_name(name: &str) -> bool {
+    matches!(
+        name,
+        "scala/collection/immutable/Nil$" // scala.Nil$ — the shared empty List
+            | "kotlin/collections/EmptyList"
+            | "kotlin/collections/EmptySet"
+            | "kotlin/collections/EmptyMap"
+            | "java/util/ImmutableCollections$ListN"
+            | "java/util/ImmutableCollections$SetN"
+            | "java/util/ImmutableCollections$MapN"
+    ) || name.starts_with("java/util/Collections$Empty")
+        || name.starts_with("java/util/ImmutableCollections$Empty")
+        || name.starts_with("com/google/common/collect/EmptyImmutable")
+}
+
 /// Resolve the pretty class NAME of the object at dense index `i` in the id_map.
 /// kind 2 objects are primitive arrays (class_ids holds the element type code);
 /// kinds 0/1/3 index `class_addr_table` for the class-object address.
@@ -716,6 +758,11 @@ pub(crate) struct FieldDecodeState {
     // caches
     role_cache: HashMap<u64, ClassRole>,
     pretty_name_cache: HashMap<u64, String>,
+    /// class_id → true iff the class is a known JDK/Kotlin/Scala/Guava
+    /// singleton-sentinel class (shared read-only empty constant). Lazily
+    /// resolved on the first size-0 collection instance of that class; see
+    /// [`is_singleton_sentinel_class`].
+    sentinel_cache: HashMap<u64, bool>,
     ic: IndexCache,
 
     // collection views
@@ -843,6 +890,7 @@ impl FieldDecodeState {
             dbb_resolved: false,
             role_cache: HashMap::new(),
             pretty_name_cache: HashMap::new(),
+            sentinel_cache: HashMap::new(),
             ic: IndexCache::new(),
             coll_size_acc: SizeHistAcc::default(),
             coll_fill: FillAcc::default(),
@@ -1272,7 +1320,17 @@ impl FieldDecodeState {
                     .unwrap_or(0);
                 let size = size_off.and_then(|(off, ty)| read_int_field(blob, off, ty));
                 if let Some(size) = size {
-                    self.coll_size_acc.add(size, coll_shallow);
+                    // I5: a size-0 collection whose class is a known singleton
+                    // sentinel (`Collections.emptyList()`, `scala.Nil$`, …) is
+                    // an EXPECTED runtime constant, not pre-allocated waste.
+                    // Tally it separately so the empty-collection signal
+                    // doesn't claim the 70–80% sentinel share as app waste.
+                    let is_sentinel = size == 0
+                        && *self
+                            .sentinel_cache
+                            .entry(class_id)
+                            .or_insert_with(|| is_singleton_sentinel_class(class_id, p1));
+                    self.coll_size_acc.add(size, coll_shallow, is_sentinel);
                     self.coll_total += 1;
                     if is_map {
                         self.map_total += 1;
@@ -2033,19 +2091,27 @@ where
 }
 
 /// Size-histogram accumulator (power-of-two upper bounds + empty count).
+/// `sentinel` empties (known JDK/Kotlin/Scala/Guava singleton constants) are
+/// tallied separately from plain empties — see [`is_singleton_sentinel_class`].
 #[derive(Default)]
 struct SizeHistAcc {
     tracked: u64,
     empty: u64,
+    /// Empty collections whose class is a recognized singleton sentinel.
+    sentinel_empty: u64,
     /// upper_len → (objects, shallow).
     buckets: std::collections::BTreeMap<u64, (u64, u64)>,
 }
 
 impl SizeHistAcc {
-    fn add(&mut self, size: u64, shallow: u64) {
+    fn add(&mut self, size: u64, shallow: u64, sentinel: bool) {
         self.tracked += 1;
         if size == 0 {
-            self.empty += 1;
+            if sentinel {
+                self.sentinel_empty += 1;
+            } else {
+                self.empty += 1;
+            }
             return;
         }
         let upper = size_hist_upper(size);
@@ -2066,6 +2132,7 @@ impl SizeHistAcc {
         CollectionsBySize {
             tracked: self.tracked,
             empty_count: self.empty,
+            singleton_sentinels: self.sentinel_empty,
             buckets,
         }
     }
@@ -2573,5 +2640,56 @@ mod tests {
         assert_eq!(decode_prim_value(char_code, &[0x00, 0x41]), 65); // 'A'
         // Short with the same high-bit bytes is negative.
         assert_eq!(decode_prim_value(short_code, &[0xFF, 0xFF]), -1);
+    }
+
+    // ── I5: singleton-sentinel exclusion from the empty-collection tally ────
+
+    #[test]
+    fn singleton_sentinel_names_recognized() {
+        for name in [
+            "scala/collection/immutable/Nil$",
+            "kotlin/collections/EmptyList",
+            "kotlin/collections/EmptySet",
+            "kotlin/collections/EmptyMap",
+            "java/util/Collections$EmptyList",
+            "java/util/Collections$EmptySet",
+            "java/util/Collections$EmptyMap",
+            "java/util/Collections$EmptyNavigableSet",
+            "java/util/ImmutableCollections$EmptyImmutableList",
+            "java/util/ImmutableCollections$ListN",
+            "com/google/common/collect/EmptyImmutableList",
+        ] {
+            assert!(is_singleton_sentinel_name(name), "should match: {name}");
+        }
+        for name in [
+            "java/util/ArrayList",
+            "scala/collection/immutable/Vector",
+            "java/util/Collections$UnmodifiableList",
+            "java/util/ImmutableCollections$SubList",
+        ] {
+            assert!(
+                !is_singleton_sentinel_name(name),
+                "should NOT match: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn size_hist_acc_splits_sentinel_empties() {
+        let mut acc = SizeHistAcc::default();
+        // Two app-empty collections, three JDK sentinel empties, one populated.
+        acc.add(0, 80, false);
+        acc.add(0, 80, false);
+        acc.add(0, 64, true);
+        acc.add(0, 64, true);
+        acc.add(0, 64, true);
+        acc.add(3, 120, false);
+        let cbs = acc.into_by_size();
+        assert_eq!(cbs.tracked, 6);
+        assert_eq!(cbs.empty_count, 2, "sentinels must not inflate empty_count");
+        assert_eq!(cbs.singleton_sentinels, 3);
+        // Only the populated collection lands in a bucket.
+        assert_eq!(cbs.buckets.len(), 1);
+        assert_eq!(cbs.buckets[0].objects, 1);
     }
 }

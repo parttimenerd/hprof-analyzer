@@ -15,7 +15,7 @@ use logos::Logos;
 
 use crate::query::QueryError;
 use crate::query::ast::{
-    AggFunc, ArithOp, Attr, CastTarget, ClassSpec, CompareOp, Expr, FromSource, JoinClause,
+    AggFunc, ArithOp, Attr, CastTarget, ClassSpec, CompareOp, Cte, Expr, FromSource, JoinClause,
     JoinKind, JoinOn, JoinSource, OrderBy, PathOperand, Predicate, Query, RefRole, SelectItem,
     SortDir, UnaryOp, Value, WindowFunc, WindowSpec,
 };
@@ -121,12 +121,15 @@ pub enum Token {
         let s = lex.slice();
         s[1..s.len() - 1].chars().next().map(|c| c as i64)
     })]
-    // Hex: 0x… with optional L suffix. Parsed as u64 then reinterpreted as i64
-    // (bit-preserving) so high-bit heap addresses (> i64::MAX) round-trip.
+    // Hex: 0x… with optional L suffix. Separate token from decimal so that
+    // `FROM OBJECTS 0x...` (heap address) vs `FROM OBJECTS 123` (dense index)
+    // can be distinguished at parse time. Parsed as u64 then reinterpreted as
+    // i64 (bit-preserving) so high-bit heap addresses (> i64::MAX) round-trip.
     #[regex(r"0[xX][0-9a-fA-F]+[lL]?", |lex| {
         let s = lex.slice().trim_end_matches(['l', 'L']);
         u64::from_str_radix(&s[2..], 16).ok().map(|v| v as i64)
     }, priority = 3)]
+    HexInt(i64),
     // Octal: leading 0 followed by 1+ octal digits, optional L. (Lone `0` and
     // `08`/`09` fall through to the decimal arm — lenient MAT divergence.)
     // leading 0 is a valid octal digit; from_str_radix(_, 8) handles the full slice.
@@ -177,6 +180,7 @@ fn token_display(t: &Token) -> String {
         Token::Str(s) => format!("\"{s}\""),
         Token::Float(f) => format!("{f}"),
         Token::Int(i) => format!("{i}"),
+        Token::HexInt(i) => format!("0x{:x}", *i as u64),
         Token::Ident(s) => format!("'{s}'"),
     }
 }
@@ -414,6 +418,7 @@ where
     let expr = recursive(|expr| {
         let lit = select! {
             Token::Int(n) => Value::Int(n),
+            Token::HexInt(n) => Value::Int(n),
             Token::Float(f) => Value::Float(f),
             Token::Str(s) => Value::Str(s),
             Token::Ident(s) if s.eq_ignore_ascii_case("true") => Value::Bool(true),
@@ -593,10 +598,22 @@ where
         // `COUNT(*)`, `SUM(@field)`, etc. used in HAVING position.
         // Parses the same syntax as the select-item `agg` arm but produces
         // `Expr::Aggregate` so it can appear on either side of a comparison.
+        // `COUNT(DISTINCT x)` is accepted too (same shape as the select-item
+        // `count_distinct` arm) — previously it failed to parse here with a
+        // cryptic "unexpected '@attr'".
         let agg_star = just(Token::Star).to(SelectItem::Star);
         let agg_attr_arg = attr.clone().map(SelectItem::Attr);
         let agg_arg = agg_star.or(agg_attr_arg);
-        let agg_expr_arm = select! {
+        let having_count_distinct = ident_ci("COUNT")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(ident_ci("DISTINCT"))
+            .ignore_then(attr.clone().map(SelectItem::Attr))
+            .then_ignore(just(Token::RParen))
+            .map(|arg| Expr::Aggregate {
+                func: AggFunc::CountDistinct,
+                arg: Box::new(arg),
+            });
+        let agg_expr_arm = having_count_distinct.or(select! {
             Token::Ident(s) if agg_func(&s).is_some() => agg_func(&s).unwrap(),
         }
         .then_ignore(just(Token::LParen))
@@ -605,7 +622,7 @@ where
         .map(|(func, arg)| Expr::Aggregate {
             func,
             arg: Box::new(arg),
-        });
+        }));
 
         let primary = agg_expr_arm
             .or(method_call)
@@ -797,21 +814,28 @@ where
                     is_regex,
                 })
             });
-        // `FROM OBJECTS <address>`: a bare integer literal (decimal, hex, or
-        // octal — all collapse to `Token::Int`) names one heap object by address.
-        let from_object = select! { Token::Int(n) => n }.map(|n| FromSource::Object(n as u64));
+        // `FROM OBJECTS <address-or-index>`: hex literals (0x…) are heap
+        // addresses resolved via the address→dense-index map; decimal literals
+        // are dense indices used directly (matching `@objectId` OQL values).
+        let from_object = select! {
+            Token::HexInt(n) => FromSource::Object { id: n as u64, is_addr: true },
+            Token::Int(n) => FromSource::Object { id: n as u64, is_addr: false },
+        };
         // `FROM INSTANCEOF <address>` is a common mistake: INSTANCEOF takes a
         // class, not an address. Detect INSTANCEOF followed by an int and emit an
         // actionable error rather than a bare parse failure.
         let instanceof_addr = ident_ci("INSTANCEOF")
-            .ignore_then(select! { Token::Int(_) => () })
+            .ignore_then(select! { Token::Int(_) | Token::HexInt(_) => () })
             .validate(|_, e, emitter| {
                 emitter.emit(Rich::custom(
                     e.span(),
                     "INSTANCEOF <address> is not supported; use INSTANCEOF <class> \
                      (e.g. FROM INSTANCEOF java.lang.Thread)",
                 ));
-                FromSource::Object(0)
+                FromSource::Object {
+                    id: 0,
+                    is_addr: true,
+                }
             });
         // `FROM OBJECTS (<expr>)` (arithmetic/boolean seed expressions) is a
         // deferred MAT feature. A leading `(` here (after OBJECTS was consumed and
@@ -824,7 +848,10 @@ where
                 "arithmetic/boolean FROM-OBJECTS expressions are not yet supported; \
                  use FROM OBJECTS <address> (e.g. FROM OBJECTS 0x1295e2f8) or FROM <class>",
             ));
-            FromSource::Object(0)
+            FromSource::Object {
+                id: 0,
+                is_addr: true,
+            }
         });
         // `FROM ENTRIES <ClassName>` — iterate over the logical elements of a
         // known collection class (e.g. `java.util.ArrayList`). Each row is one
@@ -832,6 +859,27 @@ where
         let from_entries = ident_ci("ENTRIES")
             .ignore_then(any_ident().labelled("collection class name"))
             .map(|class| FromSource::Entries { class });
+        // `FROM __classes__ [AS alias]` etc. — virtual tables materialized from
+        // pipeline data (class histogram, GC roots, thread records). Mirrors the
+        // JOIN-RHS grammar: a double-underscore-delimited identifier, optional
+        // `AS alias`. The stored name is delimiter-stripped ("classes"), and any
+        // unknown `__name__` is kept so plan time can reject it with an explicit
+        // "not supported" error instead of silently matching 0 heap classes.
+        let from_vtable = any_ident()
+            .filter(|s: &String| s.starts_with("__") && s.ends_with("__") && s.len() > 4)
+            .then(
+                // Optional alias: `AS alias` or a bare non-reserved ident.
+                // Mirrors the FROM-alias grammar so `LIMIT`/`WHERE`/etc. are not
+                // swallowed as an alias.
+                ident_ci("AS")
+                    .ignore_then(any_ident())
+                    .or(any_ident().and_is(reserved_ident().not()))
+                    .or_not(),
+            )
+            .map(|(name, alias)| FromSource::VirtualTable {
+                name: name.trim_matches('_').to_string(),
+                alias: alias.unwrap_or_default(),
+            });
         // `FROM (VALUES (v1, v2, ...), ...) AS alias(col1, col2, ...)` — inline table.
         // Parsed BEFORE from_subquery since both start with '(', but this is nested
         // inside the FROM block after "FROM" is already consumed, so we just need to
@@ -840,6 +888,7 @@ where
         let value_lit = {
             let lit_val = select! {
                 Token::Int(n) => Value::Int(n),
+                Token::HexInt(n) => Value::Int(n),
                 Token::Float(f) => Value::Float(f),
                 Token::Str(s) => Value::Str(s),
             };
@@ -847,6 +896,7 @@ where
             // Use wrapping_neg for Int to handle -i64::MIN without panic (OQL-67).
             let neg_lit = just(Token::Minus).ignore_then(select! {
                 Token::Int(n) => Value::Int(n.wrapping_neg()),
+                Token::HexInt(n) => Value::Int(n.wrapping_neg()),
                 Token::Float(f) => Value::Float(-f),
             });
             let null_val = ident_ci("NULL").to(Value::Null);
@@ -895,6 +945,7 @@ where
             .or(instanceof_addr)
             .or(from_object_expr)
             .or(from_entries)
+            .or(from_vtable)
             .or(from_class);
 
         // Predicate grammar. Defined inside the `base_query` recursive closure so
@@ -939,12 +990,14 @@ where
             let in_list = {
                 let lit_val = select! {
                     Token::Int(n) => Value::Int(n),
+                    Token::HexInt(n) => Value::Int(n),
                     Token::Float(f) => Value::Float(f),
                     Token::Str(s) => Value::Str(s),
                 };
                 // P-07: allow negative literals like -1, -3.14 in IN(…) lists.
                 let neg_lit = just(Token::Minus).ignore_then(select! {
                     Token::Int(n) => Value::Int(-n),
+                    Token::HexInt(n) => Value::Int(-n),
                     Token::Float(f) => Value::Float(-f),
                 });
                 let null_val = ident_ci("NULL").to(Value::Null);
@@ -2562,19 +2615,6 @@ fn blank_query_message(src: &str) -> Option<String> {
     if src.trim().is_empty() {
         return Some("empty query — supply OQL, e.g. `SELECT * FROM java.lang.String`".to_string());
     }
-    // WITH/CTE is not yet supported; give a clear message instead of a cryptic
-    // "unexpected identifier" error from the chumsky parser.
-    let trimmed = src.trim();
-    if trimmed.len() >= 4
-        && trimmed[..4].eq_ignore_ascii_case("with")
-        && trimmed[4..].starts_with(|c: char| c.is_whitespace() || c == '(')
-    {
-        return Some(
-            "WITH (common table expressions) are not supported; \
-             inline the subquery in FROM: SELECT ... FROM (SELECT ...) t"
-                .to_string(),
-        );
-    }
     None
 }
 
@@ -2804,6 +2844,203 @@ fn rewrite_string_dot_method(src: &str) -> std::borrow::Cow<'_, str> {
 /// Tokenize (logos) → chumsky parse, returning a compact single-line message
 /// `unexpected <found> at <line>:<col>` (or the tokenizer's offset message) on
 /// failure. Backs [`parse`]; [`parse_or_report`] renders errors differently.
+// ── WITH (common table expressions) ─────────────────────────────────────────
+//
+// B6b: `WITH <name> AS (<query>), … <main query>` is implemented as a token-
+// level pre-pass + AST desugaring: every FROM reference to a CTE name becomes
+// `FromSource::Subquery(<cte body>)`, reusing the existing FROM-subquery
+// machinery end-to-end. Later CTEs may reference earlier ones; self-references
+// are rejected (no recursion). Each reference executes its own copy of the body
+// (not materialised once) — correct results, simple execution.
+
+/// True when `toks` starts with the keyword `WITH` (case-insensitive).
+fn starts_with_with(toks: &[(Token, SimpleSpan)]) -> bool {
+    matches!(toks.first(), Some((Token::Ident(w), _)) if w.eq_ignore_ascii_case("with"))
+}
+
+/// Split a leading `WITH name AS (…), name2 AS (…)` clause off `toks`.
+/// Returns `Ok(None)` when the tokens do not start with `WITH`.
+/// Inner slices borrow from `toks` (no copies).
+fn split_with_clause<'a>(
+    toks: &'a [(Token, SimpleSpan)],
+) -> Result<
+    Option<(
+        Vec<(String, &'a [(Token, SimpleSpan)])>,
+        &'a [(Token, SimpleSpan)],
+    )>,
+    String,
+> {
+    if !starts_with_with(toks) {
+        return Ok(None);
+    }
+    let mut i = 1usize; // past WITH
+    let mut ctes: Vec<(String, &[(Token, SimpleSpan)])> = Vec::new();
+    loop {
+        // <name>
+        let name = match toks.get(i) {
+            Some((Token::Ident(n), _)) => n.clone(),
+            Some((t, _)) => {
+                return Err(format!(
+                    "invalid WITH clause: expected a CTE name after WITH, found {}",
+                    token_display(t)
+                ));
+            }
+            None => return Err("invalid WITH clause: expected a CTE name after WITH".to_string()),
+        };
+        i += 1;
+        // AS
+        match toks.get(i) {
+            Some((Token::Ident(a), _)) if a.eq_ignore_ascii_case("as") => i += 1,
+            _ => {
+                return Err(format!(
+                    "invalid WITH clause: expected AS after CTE name '{name}' \
+                     (usage: WITH {name} AS (SELECT ...))"
+                ));
+            }
+        }
+        // ( … ) — scan to the matching paren. String/char literals are single
+        // tokens, so parens inside them cannot unbalance the count.
+        let open = match toks.get(i) {
+            Some((Token::LParen, _)) => i,
+            _ => {
+                return Err(format!(
+                    "invalid WITH clause: expected '(' after 'AS {name}' \
+                     (usage: WITH {name} AS (SELECT ...))"
+                ));
+            }
+        };
+        let mut depth = 0usize;
+        let mut j = open;
+        while j < toks.len() {
+            match toks[j].0 {
+                Token::LParen => depth += 1,
+                Token::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        if j >= toks.len() || depth != 0 {
+            return Err(format!(
+                "invalid WITH clause: unbalanced '(' in the body of CTE '{name}'"
+            ));
+        }
+        ctes.push((name, &toks[open + 1..j]));
+        i = j + 1;
+        // Comma → another CTE; anything else → the main query begins.
+        match toks.get(i) {
+            Some((Token::Comma, _)) => {
+                i += 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+    let main = &toks[i..];
+    if main.is_empty() {
+        return Err(
+            "invalid WITH clause: missing the main query after the CTE list \
+             (usage: WITH t AS (SELECT ...) SELECT ... FROM t)"
+                .to_string(),
+        );
+    }
+    Ok(Some((ctes, main)))
+}
+
+/// Substitute FROM references to `ctes` inside `q` (primary FROM, nested
+/// subqueries, UNION branches). A reference without an explicit alias keeps
+/// the CTE name as the alias so `SELECT big.id FROM big` resolves.
+fn substitute_ctes(q: &mut Query, ctes: &[Cte]) {
+    match &mut q.from {
+        FromSource::Class(spec) if !spec.instanceof && !spec.is_regex => {
+            if let Some(cte) = ctes
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&spec.class_name))
+            {
+                if q.alias.is_none() {
+                    q.alias = Some(cte.name.clone());
+                }
+                let body = cte.query.clone();
+                q.from = FromSource::Subquery(Box::new(body));
+            }
+        }
+        FromSource::Subquery(inner) => substitute_ctes(inner.as_mut(), ctes),
+        _ => {}
+    }
+    for b in q.union_branches.iter_mut() {
+        substitute_ctes(b, ctes);
+    }
+}
+
+/// True when any FROM in `q` (or nested subqueries / UNION branches) is a
+/// plain class reference to `name` — used to detect recursive CTEs after the
+/// earlier-CTE substitution pass.
+fn from_references_name(q: &Query, name: &str) -> bool {
+    let from_matches = match &q.from {
+        FromSource::Class(spec) => {
+            !spec.instanceof && !spec.is_regex && spec.class_name.eq_ignore_ascii_case(name)
+        }
+        FromSource::Subquery(inner) => from_references_name(inner, name),
+        _ => false,
+    };
+    from_matches
+        || q.union_branches
+            .iter()
+            .any(|b| from_references_name(b, name))
+}
+
+/// Parse a token slice, recursively handling a leading WITH clause.
+/// CTE bodies may themselves start with WITH (nested WITH inside parens).
+fn parse_tokens(toks: &[(Token, SimpleSpan)], src: &str) -> Result<Query, String> {
+    let Some((cte_parts, main_toks)) = split_with_clause(toks)? else {
+        let eoi: SimpleSpan = (src.len()..src.len()).into();
+        let stream = Stream::from_iter(toks.to_vec()).map(eoi, |(t, s)| (t, s));
+        return parser().parse(stream).into_result().map_err(|errs| {
+            errs.iter()
+                .map(|e| compact_error(src, e))
+                .collect::<Vec<_>>()
+                .join("; ")
+        });
+    };
+    let mut ctes: Vec<Cte> = Vec::new();
+    for (name, inner) in cte_parts {
+        if ctes.iter().any(|c| c.name.eq_ignore_ascii_case(&name)) {
+            return Err(format!(
+                "duplicate CTE name '{name}' in the WITH clause (names must be unique)"
+            ));
+        }
+        let mut body = parse_tokens(inner, src)?;
+        // Chained CTEs (a CTE referencing an earlier CTE) would desugar into a
+        // subquery nested inside a subquery, which the planner rejects
+        // (single-level FROM-subquery support). Fail here with a CTE-specific
+        // message instead of the confusing nested-subquery plan error.
+        if ctes.iter().any(|c| from_references_name(&body, &c.name)) {
+            let earlier: Vec<&str> = ctes.iter().map(|c| c.name.as_str()).collect();
+            return Err(format!(
+                "CTE '{name}' references another CTE ({earlier:?}) — chained CTEs are not \
+                 supported (they would nest subqueries beyond one level); inline the \
+                 earlier CTE's SELECT directly in {name}'s FROM"
+            ));
+        }
+        substitute_ctes(&mut body, &ctes);
+        if from_references_name(&body, &name) {
+            return Err(format!(
+                "recursive CTE '{name}' is not supported — a CTE cannot reference itself \
+                 (only earlier CTEs in the same WITH clause are visible)"
+            ));
+        }
+        ctes.push(Cte { name, query: body });
+    }
+    let mut main = parse_tokens(main_toks, src)?;
+    substitute_ctes(&mut main, &ctes);
+    main.ctes = ctes;
+    Ok(main)
+}
+
 fn parse_internal(src: &str) -> Result<Query, String> {
     if let Some(msg) = blank_query_message(src) {
         return Err(msg);
@@ -2811,14 +3048,7 @@ fn parse_internal(src: &str) -> Result<Query, String> {
     let src = rewrite_string_dot_method(src);
     let src = src.as_ref();
     let toks = tokenize_spanned(src)?;
-    let eoi: SimpleSpan = (src.len()..src.len()).into();
-    let stream = Stream::from_iter(toks).map(eoi, |(t, s): (Token, SimpleSpan)| (t, s));
-    parser().parse(stream).into_result().map_err(|errs| {
-        errs.iter()
-            .map(|e| compact_error(src, e))
-            .collect::<Vec<_>>()
-            .join("; ")
-    })
+    parse_tokens(&toks, src)
 }
 
 /// Production parse: chumsky over logos tokens. Returns a [`QueryError`] whose
@@ -2843,6 +3073,11 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
         Ok(t) => t,
         Err(e) => return Err(format!("tokenize error: {e}")),
     };
+    // WITH (CTE) queries: structural WITH errors and CTE-body errors come
+    // back as plain messages from parse_tokens — skip the caret renderer.
+    if starts_with_with(&toks) {
+        return parse_tokens(&toks, src);
+    }
     let eoi: SimpleSpan = (src.len()..src.len()).into();
     let stream = Stream::from_iter(toks).map(eoi, |(t, s): (Token, SimpleSpan)| (t, s));
     match parser().parse(stream).into_result() {
@@ -3068,17 +3303,28 @@ mod tests {
     #[test]
     fn parse_from_objects_numeric_id() {
         use super::FromSource;
+        // Decimal → dense index (is_addr: false)
         assert_eq!(
             super::parse("SELECT * FROM OBJECTS 1").unwrap().from,
-            FromSource::Object(1)
+            FromSource::Object {
+                id: 1,
+                is_addr: false
+            }
         );
+        // Hex → heap address (is_addr: true)
         assert_eq!(
             super::parse("SELECT * FROM OBJECTS 0x10").unwrap().from,
-            FromSource::Object(16)
+            FromSource::Object {
+                id: 16,
+                is_addr: true
+            }
         );
         assert_eq!(
             super::parse("SELECT * FROM OBJECTS 0x0").unwrap().from,
-            FromSource::Object(0)
+            FromSource::Object {
+                id: 0,
+                is_addr: true
+            }
         );
     }
     #[test]
@@ -4719,25 +4965,115 @@ mod tests {
     }
 
     #[test]
-    fn with_cte_gives_actionable_message() {
-        // B6b regression: `WITH` CTEs are rejected at parse time with a plain,
-        // honest unsupported-feature message that points at the FROM-subquery
-        // form — regardless of case or the following character.
-        for src in [
-            "WITH t AS (SELECT * FROM java.lang.Thread) SELECT * FROM t",
-            "with t AS (SELECT 1) SELECT * FROM t",
-            "WITH  (SELECT 1) SELECT 1",
-        ] {
-            let err = parse(src).expect_err("WITH query should error");
+    fn with_cte_desugars_from_reference() {
+        // B6b: `WITH t AS (…) SELECT … FROM t` now parses and the CTE
+        // reference desugars to a FROM-subquery with the CTE name as alias.
+        let q = parse("WITH t AS (SELECT @objectId FROM java.lang.Thread) SELECT COUNT(*) FROM t")
+            .expect("WITH query should parse");
+        assert!(
+            matches!(&q.from, FromSource::Subquery(_)),
+            "CTE reference must desugar to a subquery, got {:?}",
+            q.from
+        );
+        assert_eq!(
+            q.alias.as_deref(),
+            Some("t"),
+            "alias defaults to the CTE name"
+        );
+        assert_eq!(q.ctes.len(), 1);
+        assert_eq!(q.ctes[0].name, "t");
+    }
+
+    #[test]
+    fn with_cte_explicit_alias_and_non_cte_class_untouched() {
+        // `FROM big b` keeps the explicit alias; a FROM class that is NOT a
+        // CTE name stays a class reference.
+        let q = parse(
+            "WITH big AS (SELECT @objectId AS id FROM java.lang.Thread) \
+             SELECT b.id FROM big b",
+        )
+        .expect("aliased CTE reference should parse");
+        assert!(matches!(&q.from, FromSource::Subquery(_)));
+        assert_eq!(q.alias.as_deref(), Some("b"));
+
+        let q2 = parse(
+            "WITH big AS (SELECT @objectId FROM java.lang.Thread) \
+             SELECT COUNT(*) FROM java.lang.String",
+        )
+        .expect("non-CTE FROM stays a class");
+        assert!(matches!(&q2.from, FromSource::Class(_)));
+    }
+
+    #[test]
+    fn with_cte_chaining_rejected_and_union_branches() {
+        // Chained CTEs would nest subqueries beyond one level — rejected with a
+        // CTE-specific message at parse time.
+        let err = parse(
+            "WITH a AS (SELECT @objectId FROM java.lang.Thread), \
+                    b AS (SELECT @objectId FROM a) \
+             SELECT COUNT(*) FROM b",
+        )
+        .expect_err("chained CTEs must error");
+        assert!(
+            err.0.contains("chained CTEs are not supported"),
+            "expected the chained-CTE message, got: {}",
+            err.0
+        );
+        assert!(
+            err.0.contains("CTE 'b' references another CTE"),
+            "message must name the offending CTE, got: {}",
+            err.0
+        );
+
+        // Non-chained multiple CTEs still work: each referenced only by the
+        // main query.
+        let q = parse(
+            "WITH a AS (SELECT @objectId FROM java.lang.Thread), \
+                    b AS (SELECT @objectId FROM java.lang.String) \
+             SELECT COUNT(*) FROM a UNION ALL SELECT COUNT(*) FROM b",
+        )
+        .expect("independent CTEs should parse");
+        assert_eq!(q.ctes.len(), 2);
+
+        let q2 = parse(
+            "WITH t AS (SELECT @objectId FROM java.lang.Thread) \
+             SELECT COUNT(*) FROM t UNION ALL SELECT COUNT(*) FROM t",
+        )
+        .expect("CTE in UNION branches should parse");
+        assert!(matches!(&q2.from, FromSource::Subquery(_)));
+        assert!(
+            q2.union_branches
+                .iter()
+                .all(|b| matches!(&b.from, FromSource::Subquery(_))),
+            "UNION branch must also see the CTE"
+        );
+    }
+
+    #[test]
+    fn with_cte_structural_errors_are_actionable() {
+        // Recursive CTE, duplicate names, and malformed clauses all produce
+        // plain, actionable messages.
+        let cases = [
+            (
+                "WITH t AS (SELECT * FROM t) SELECT * FROM t",
+                "recursive CTE 't'",
+            ),
+            (
+                "WITH t AS (SELECT @objectId FROM java.lang.Thread), t AS (SELECT @objectId FROM java.lang.String) SELECT * FROM t",
+                "duplicate CTE name 't'",
+            ),
+            ("WITH t SELECT * FROM t", "expected AS after CTE name 't'"),
+            (
+                "WITH t AS (SELECT 1)",
+                "missing the main query after the CTE list",
+            ),
+            ("WITH t AS (SELECT 1 SELECT * FROM t", "unbalanced '('"),
+        ];
+        for (src, want) in cases {
+            let err = parse(src).expect_err("malformed WITH must error");
             assert!(
-                err.0
-                    .contains("WITH (common table expressions) are not supported"),
-                "expected the unsupported-WITH message, got: {}",
-                err.0
-            );
-            assert!(
-                err.0.contains("FROM (SELECT ...) t"),
-                "message must point at the FROM-subquery form, got: {}",
+                err.0.contains(want),
+                "expected '{want}' in error for {src:?}, got: {}",
                 err.0
             );
         }
@@ -5945,20 +6281,20 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        // High-bit address (> i64::MAX) lexes to one Int whose bits are the address.
+        // High-bit address (> i64::MAX) lexes to one HexInt whose bits are the address.
         let t = toks("0xffff800012345678");
         assert_eq!(t.len(), 1);
         match t[0] {
-            Int(x) => assert_eq!(x as u64, 0xffff_8000_1234_5678u64),
-            ref other => panic!("expected Int, got {other:?}"),
+            HexInt(x) => assert_eq!(x as u64, 0xffff_8000_1234_5678u64),
+            ref other => panic!("expected HexInt, got {other:?}"),
         }
 
         // u64::MAX round-trips to -1i64 and back.
         let t = toks("0xffffffffffffffff");
         assert_eq!(t.len(), 1);
         match t[0] {
-            Int(x) => assert_eq!(x as u64, u64::MAX),
-            ref other => panic!("expected Int, got {other:?}"),
+            HexInt(x) => assert_eq!(x as u64, u64::MAX),
+            ref other => panic!("expected HexInt, got {other:?}"),
         }
 
         // Full FROM query with a high-bit address resolves to the exact address.
@@ -5966,7 +6302,10 @@ mod tests {
             super::parse("SELECT * FROM OBJECTS 0xffff800012345678")
                 .unwrap()
                 .from,
-            super::FromSource::Object(0xffff_8000_1234_5678)
+            super::FromSource::Object {
+                id: 0xffff_8000_1234_5678,
+                is_addr: true
+            }
         );
 
         // A literal beyond u64::MAX still errors.

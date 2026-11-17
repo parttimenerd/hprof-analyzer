@@ -113,13 +113,15 @@ or used in UNION branches.
 
 ## dominators(x)
 
-Returns the immediate dominator set of an object in SELECT position:
+Returns the dominator-tree children of an object in SELECT position:
 
 ```sql
-SELECT @objectId AS idx, dominators(s) FROM java.lang.String s LIMIT 10
+SELECT dominators(s) FROM java.lang.String s LIMIT 10
 ```
 
-Useful to find which object dominates each string (i.e. what keeps it alive).
+Useful to find which objects each string keeps alive (i.e. what it dominates).
+`dominators(x)` must be the ONLY select item — it expands to one row per
+dominator-tree child object, not a scalar column.
 
 ## CAST
 
@@ -137,8 +139,8 @@ Supported target types: `STRING`, `INT`, `LONG`, `FLOAT`, `BOOL`.
 Create an in-memory table without scanning the heap dump:
 
 ```sql
-SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)
-SELECT id * 2 AS doubled FROM VALUES (10), (20), (30) AS t(id) ORDER BY id DESC
+SELECT * FROM (VALUES (1, "a"), (2, "b")) AS t(id, name)
+SELECT id * 2 AS doubled FROM (VALUES (10), (20), (30)) AS t(id) ORDER BY id DESC
 ```
 
 Useful for building lookup tables, constant sets, or testing query logic.
@@ -151,41 +153,49 @@ Combine heap query results with inline data (VALUES) or virtual tables:
 -- INNER JOIN: only keeps rows where the join condition matches
 SELECT t.name, v.label
   FROM java.lang.Thread t
-  INNER JOIN VALUES ('main', 'primary'), ('worker-1', 'pool') AS v(name, label)
+  INNER JOIN (VALUES ("main", "primary"), ("worker-1", "pool")) AS v(name, label)
   ON t.name = v.name
 
 -- LEFT JOIN: keeps all LHS rows; unmatched RHS columns are NULL
 SELECT t.name, v.label
   FROM java.lang.Thread t
-  LEFT JOIN VALUES ('main', 'primary') AS v(name, label)
+  LEFT JOIN (VALUES ("main", "primary")) AS v(name, label)
   ON t.name = v.name
 
 -- Bare JOIN is equivalent to INNER JOIN
 SELECT t.name, v.label
   FROM java.lang.Thread t
-  JOIN VALUES ('main', 'primary') AS v(name, label)
+  JOIN (VALUES ("main", "primary")) AS v(name, label)
   ON t.name = v.name
 ```
 
-The JOIN ON clause must use equality (`=`). Virtual tables (`classes`, `gc_roots`, `threads`)
-are also supported as the RHS source when querying a dump (not in VALUES-only queries):
+The JOIN ON clause must use equality (`=`). Virtual tables (`__classes__`,
+`__gc_roots__`, `__threads__`) are supported BOTH as the JOIN right-hand side
+and as a FROM target (no heap scan; rows come from the pipeline data):
 
 ```sql
--- Join heap objects with the classes virtual table
-SELECT c.class_name, c.instance_count, c.shallow_total
-  FROM classes c
-  ORDER BY c.shallow_total DESC LIMIT 10
+-- Class histogram as a FROM target: top classes by shallow bytes
+SELECT class_name, instance_count, shallow_total
+  FROM __classes__
+  ORDER BY shallow_total DESC LIMIT 10
 
--- Annotate threads with their class names via the classes virtual table
-SELECT t.name, t.serial, c.class_name
+-- GC roots: which objects are roots, and of what kind
+SELECT dense_idx, root_type_name FROM __gc_roots__ LIMIT 20
+
+-- Thread records: one row per thread with a stack trace
+SELECT serial, obj_idx, name, is_daemon, priority FROM __threads__ LIMIT 20
+
+-- Annotate threads with their class histogram row via the classes virtual table
+SELECT classof(t) AS cls, c.instance_count
   FROM java.lang.Thread t
-  LEFT JOIN classes c ON t.serial = c.instance_count
+  JOIN __classes__ c ON classof(t) = c.class_name
+  LIMIT 30
 ```
 
 Virtual table columns:
-- `classes`: `class_name`, `instance_count`, `shallow_total`, `retained_total`
-- `gc_roots`: `dense_idx`, `root_type`, `root_type_name`
-- `threads`: `serial`, `obj_idx`, `name`, `is_daemon`, `priority`
+- `__classes__`: `class_name`, `instance_count`, `shallow_total`, `retained_total`
+- `__gc_roots__`: `dense_idx`, `root_type`, `root_type_name`
+- `__threads__`: `serial`, `obj_idx`, `name`, `is_daemon`, `priority`
 
 ## String functions
 
@@ -222,16 +232,24 @@ Window functions are evaluated after all filtering/grouping but before ORDER BY/
 
 ## WITH (CTEs)
 
-Named subqueries defined before the main query:
+`WITH <name> AS (<subquery>)` binds a name you can use as a FROM target in the
+main query (and in later CTEs). Each reference runs its own copy of the body —
+results are correct, the body is not materialised once:
 
 ```sql
 WITH big AS (
-  SELECT @objectId FROM java.lang.String WHERE @usedHeapSize > 100
+  SELECT @objectId AS id, @usedHeapSize AS bytes
+  FROM java.lang.String WHERE @usedHeapSize > 10000
 )
-SELECT @objectId FROM big LIMIT 10
+SELECT id, bytes FROM big ORDER BY bytes DESC LIMIT 10
 ```
 
-Multiple CTEs can be chained with commas.
+Rules: CTE names must be unique in the clause; a CTE must be self-contained
+(it cannot reference other CTEs — that would nest subqueries beyond one level;
+recursive CTEs are rejected too); `FROM <name> [alias]` keeps an explicit alias
+(`FROM big b`), otherwise the CTE name doubles as the alias. Each CTE body is a
+full SELECT — UNION tails inside a CTE body are not allowed (same as inline
+FROM-subqueries).
 "#;
 
 // ── Attributes ────────────────────────────────────────────────────────────────
@@ -452,10 +470,10 @@ GROUP BY classof(x) ORDER BY class_count DESC
 ## Reference graph (@inbounds / @outbounds)
 
 ```sql
--- Objects that hold a reference to a specific address
+-- Objects whose address is in a subquery's projected address set
 SELECT @objectId AS idx, classof(x) AS class
 FROM INSTANCEOF java.lang.Object x
-WHERE <target_address> IN (SELECT @objectAddress FROM @outbounds)
+WHERE @objectAddress IN (SELECT t.@objectAddress FROM java.lang.Thread t)
 LIMIT 20
 ```
 
@@ -488,12 +506,12 @@ SELECT s[0:4] FROM byte[] s WHERE s.@length >= 4 LIMIT 5
 
 ```sql
 -- Basic inline table
-SELECT * FROM VALUES (1, 'low'), (2, 'medium'), (3, 'high') AS t(id, label)
+SELECT * FROM (VALUES (1, "low"), (2, "medium"), (3, "high")) AS t(id, label)
 ```
 
 ```sql
 -- Build a lookup table for known thread names
-SELECT id * 10 AS score FROM VALUES (1), (2), (3) AS t(id) ORDER BY score DESC
+SELECT id * 10 AS score FROM (VALUES (1), (2), (3)) AS t(id) ORDER BY score DESC
 ```
 
 ## JOIN with inline data
@@ -502,11 +520,11 @@ SELECT id * 10 AS score FROM VALUES (1), (2), (3) AS t(id) ORDER BY score DESC
 -- Enrich thread results with a label from an inline lookup table
 SELECT t.name, v.category
   FROM java.lang.Thread t
-  INNER JOIN VALUES
-    ('main',           'primary'),
-    ('Finalizer',      'jvm-internal'),
-    ('Reference Handler', 'jvm-internal')
-  AS v(name, category)
+  INNER JOIN (VALUES
+    ("main",              "primary"),
+    ("Finalizer",         "jvm-internal"),
+    ("Reference Handler", "jvm-internal")
+  ) AS v(name, category)
   ON t.name = v.name
 ```
 
@@ -514,7 +532,7 @@ SELECT t.name, v.category
 -- LEFT JOIN: see which threads are NOT in the known list (label = NULL)
 SELECT t.name, v.category
   FROM java.lang.Thread t
-  LEFT JOIN VALUES ('main', 'primary') AS v(name, category)
+  LEFT JOIN (VALUES ("main", "primary")) AS v(name, category)
   ON t.name = v.name
 ```
 
@@ -522,7 +540,7 @@ SELECT t.name, v.category
 
 ```sql
 -- Cast object ID to string for concatenation
-SELECT concat('obj-', CAST(@objectId AS STRING)) AS label FROM java.lang.String LIMIT 5
+SELECT concat("obj-", CAST(@objectId AS STRING)) AS label FROM java.lang.String LIMIT 5
 ```
 
 ```sql
@@ -547,21 +565,26 @@ SELECT @usedHeapSize / 1024 AS kb, @usedHeapSize % 1024 AS rem
   FROM java.lang.String WHERE @usedHeapSize > 1024 LIMIT 10
 ```
 
-## WITH (CTEs) and subqueries
+## FROM-subquery (or bind it with WITH)
 
 ```sql
--- CTE: identify large strings then count them
+-- Count large strings: inline the subquery in FROM …
+SELECT COUNT(*) AS large_string_count FROM (
+  SELECT * FROM java.lang.String WHERE @usedHeapSize > 200
+) t
+
+-- … or name it with a CTE and reference it in FROM
 WITH large AS (
-  SELECT @objectId FROM java.lang.String WHERE @usedHeapSize > 200
+  SELECT * FROM java.lang.String WHERE @usedHeapSize > 200
 )
 SELECT COUNT(*) AS large_string_count FROM large
 ```
 
 ```sql
--- Subquery in FROM: filter threads to those with a specific name pattern
-SELECT t.name FROM (
-  SELECT @objectId AS id, name FROM java.lang.Thread
-) t WHERE t.name LIKE '%worker%' LIMIT 20
+-- Subquery in FROM: project whole objects inside, filter/reorder outside
+SELECT @objectId AS idx, @usedHeapSize AS bytes FROM (
+  SELECT * FROM java.lang.String WHERE @usedHeapSize > 200
+) t ORDER BY bytes DESC LIMIT 20
 ```
 
 ## COUNT(DISTINCT ...) and HAVING

@@ -720,13 +720,14 @@ pub fn build_model(
     let top_retainers = build_top_retainers(&fields_by_size, &threads);
     t_bm!("top_retainers");
     crate::trace::probe("build_model: after top_retainers");
-    // ThreadLocal Leak Analyzer — gated on find_duplicates (same opt-in as dup
-    // analysis; also implicitly enabled by --full-analysis via the flag fold).
-    let thread_local_analysis = if opts.find_duplicates {
-        build_threadlocal_analysis(g)
-    } else {
-        Vec::new()
-    };
+    // ThreadLocal Leak Analyzer — always-on. The `(is_stale, val_idx)` records
+    // are captured in the always-on pass-2 field-decode scan (bounded by
+    // TL_ENTRY_CAP), and this aggregation is a single cheap pass over them, so
+    // there is no reason to gate it behind --find-duplicates: a dump with
+    // ThreadLocalMap$Entry instances now reports them unconditionally (the
+    // old gating silently returned `thread_locals: []` even when ThreadLocal
+    // instances were present).
+    let thread_local_analysis = build_threadlocal_analysis(g);
     t_bm!("thread_local_analysis");
     crate::trace::probe("build_model: after thread_local_analysis");
     // Framework Auto-Analysis — always-on; each framework only emits when its
@@ -951,6 +952,14 @@ fn build_waste_summary(report: &Report) -> Option<WasteSummary> {
         total_bytes,
         reachable_bytes,
         sources,
+        // Explains the reachable_bytes vs total_bytes relation inline so JSON
+        // consumers never have to guess (or invert the formula themselves).
+        note: format!(
+            "total_bytes counts waste across ALL objects (reachable + unreachable); \
+             reachable_bytes is the proportional estimate for GC-reachable objects only \
+             (total_bytes × {reachable} / {total_heap}, where reachable_shallow = {reachable} B \
+             and total_shallow = {total_heap} B). Sources are approximate and may overlap."
+        ),
     })
 }
 
@@ -1030,7 +1039,7 @@ fn build_nio_buffer_owners(g: &Graph, root_path_max_depth: usize) -> Vec<NioBuff
 
 fn build_leak_indicators(g: &Graph, nio_buffer_owners: Vec<NioBufferOwner>) -> LeakIndicators {
     // 1. Anonymous/generated class count — one entry per distinct class in class_names.
-    let anonymous_class_count = g
+    let anonymous_class_types = g
         .class_names
         .iter()
         .filter(|n| is_anonymous_class(n))
@@ -1064,7 +1073,7 @@ fn build_leak_indicators(g: &Graph, nio_buffer_owners: Vec<NioBufferOwner>) -> L
     let direct_byte_buffer_cap_buckets = g.direct_byte_buffer_cap_buckets;
 
     LeakIndicators {
-        anonymous_class_count,
+        anonymous_class_types,
         anonymous_class_instances,
         thread_local_null_key_count,
         direct_byte_buffer_capacity_sum,
@@ -2425,11 +2434,14 @@ fn thread_state_label(status: i32) -> String {
 }
 
 /// Aggregate per-object allocation stack-trace serials into per-site totals.
-/// Skips serial 0 (no allocation info). Returns `traces_present: false` with an
-/// empty site list when every object has serial 0 (allocation tracking off).
-/// Otherwise sorts by object count desc (tie-break retained_total desc, then
-/// stack_serial asc), keeps the top `top_n`, and resolves frame lines from
-/// `g.alloc_frames_by_serial`.
+/// Skips serial 0 (no allocation info) and unreachable objects (idom ==
+/// u32::MAX): only GC-reachable objects carry alloc-site statistics, so the
+/// totals stay cross-checkable against the histogram / OQL (`SUM(@usedHeapSize)`)
+/// instead of silently counting garbage the dominator pass already excluded.
+/// Returns `traces_present: false` with an empty site list when every reachable
+/// object has serial 0 (allocation tracking off). Otherwise sorts by object
+/// count desc (tie-break retained_total desc, then stack_serial asc), keeps the
+/// top `top_n`, and resolves frame lines from `g.alloc_frames_by_serial`.
 pub(crate) fn build_alloc_sites(g: &Graph, top_n: usize) -> AllocSites {
     build_alloc_sites_from(g, top_n, g.alloc_stack_serial.iter().copied())
 }
@@ -2470,6 +2482,14 @@ impl<'g> AllocAgg<'g> {
         // graph has objects, index directly would panic; skip the overrun
         // instead so aggregation degrades gracefully rather than crashing.
         if i >= self.g.shallow.len() {
+            return;
+        }
+        // Reachable-only accounting: an object with no dominator (idom ==
+        // u32::MAX) is garbage the rest of the report (histogram, leak
+        // suspects, OQL) excludes, so alloc-site totals must exclude it too.
+        // All four callers run with `g.idom` live (before build_model drops
+        // it); when `idom` is unavailable the fallback counts every object.
+        if i < self.g.idom.len() && self.g.idom[i] == u32::MAX {
             return;
         }
         let e = self.agg.entry(serial).or_insert((0, 0, 0));
@@ -4472,6 +4492,19 @@ pub(crate) fn build_leak_suspects(
                 root_path: None,
                 dominator_tree: dominator_tree_node,
                 merged_paths: None,
+                // Group suspects have no single dominator path: `path` /
+                // `accumulation_*` / `root_path` stay empty and the group's
+                // dominator chains live in `merged_paths` (attached below).
+                // The note makes that explicit in the JSON instead of leaving
+                // consumers to guess whether the empties are a bug.
+                path_note: if s.is_single {
+                    String::new()
+                } else {
+                    "Class-group suspect: `path`, `accumulation_*` and `root_path` apply only \
+                     to single-object suspects and are empty here; the group's merged \
+                     dominator paths to GC roots are in `merged_paths`."
+                        .to_string()
+                },
             }
         })
         .collect();

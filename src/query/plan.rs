@@ -62,6 +62,11 @@ pub enum StageKind {
     /// The outer scan is bypassed: the count is taken directly from the inner
     /// subquery's row count after the inner pass runs.
     CountFromSubquery,
+    /// `FROM __classes__` / `FROM __gc_roots__` / `FROM __threads__`: rows are
+    /// materialized post-scan from pipeline data (class histogram, GC roots,
+    /// thread records) — no per-object heap scan. pass2 arms no executor for
+    /// this kind and pushes the materialized result itself.
+    VirtualTable,
 }
 
 /// Which pipeline phase finalizes a query's rows. See canonical vocabulary.
@@ -986,6 +991,42 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         });
     }
 
+    // FROM virtual table (`__classes__` / `__gc_roots__` / `__threads__`):
+    // rows are materialized post-scan from pipeline data — no per-object scan.
+    // Returns a VirtualTable plan; pass2 arms no executor for it and pushes the
+    // materialized result itself (see pass2's virtual-table push).
+    if let FromSource::VirtualTable { name, .. } = &q.from {
+        validate_virtual_table_query(q, name)?;
+        let select_arity = if q.select.len() == 1 && matches!(q.select[0], SelectItem::Star) {
+            crate::query::vtable::arity(name).unwrap_or(q.select.len())
+        } else {
+            q.select.len()
+        };
+        return Ok(QueryPlan {
+            kind: StageKind::VirtualTable,
+            needs: QueryNeeds::default(),
+            where_terms: Vec::new(),
+            finalize_at: Phase::P1,
+            carry: CarryLayout::IndexOnly,
+            late_ops: Vec::new(),
+            limit: scan_limit(q),
+            scan_limit: None,
+            order_sensitive: q.order_by.is_some(),
+            select_arity,
+            union_branches: Vec::new(),
+            union_limit: None,
+            from_subplan: None,
+            in_subplans: Vec::new(),
+            exists_subplans: Vec::new(),
+            deferred_projections: Vec::new(),
+            group_by_exprs: Vec::new(),
+            having_terms: Vec::new(),
+            intersect_branch_plans: Vec::new(),
+            except_branch_plans: Vec::new(),
+            join_plans: Vec::new(),
+        });
+    }
+
     // Subqueries (FROM (...) and WHERE ... IN (...)) must be non-correlated:
     // the inner query may not reference an alias bound by the outer query.
     if let Some(inner) = q.from.as_subquery() {
@@ -1036,6 +1077,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
                         .into(),
                 ));
             }
+            reject_virtual_table_inner(&inner_plan, "FROM (<subquery>)")?;
             Some(Box::new(inner_plan))
         }
         None => None,
@@ -1264,7 +1306,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // is restricted to a single dense index — a gate that lives only in the
     // SingleScan `visit_*` path. Route it to SingleScan so the aggregate folds
     // over at most the one matched object (COUNT(*) ≤ 1).
-    let is_object_from = matches!(q.from, crate::query::ast::FromSource::Object(_));
+    let is_object_from = matches!(q.from, crate::query::ast::FromSource::Object { .. });
     let kind = if has_group_by {
         StageKind::GroupBy
     } else if is_aggregate
@@ -1802,6 +1844,94 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     })
 }
 
+/// Plan-time validation for `FROM <virtual table>` queries (B6a). Virtual
+/// tables materialize a fixed row set; v1 supports plain projection, WHERE on
+/// the table's columns, DISTINCT, ORDER BY, LIMIT/OFFSET. Everything that
+/// needs grouping, aggregation, or heap-object identity is rejected with an
+/// actionable error instead of silently degrading.
+fn validate_virtual_table_query(q: &Query, name: &str) -> Result<(), QueryError> {
+    if crate::query::vtable::arity(name).is_none() {
+        return Err(QueryError(format!(
+            "virtual table `__{name}__` is not supported; supported virtual tables: {}",
+            crate::query::vtable::VIRTUAL_TABLE_NAMES
+                .iter()
+                .map(|n| format!("__{n}__"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    if q.select
+        .iter()
+        .any(|it| matches!(it, SelectItem::Aggregate { .. }))
+    {
+        return Err(QueryError(
+            "aggregates over a virtual table are not supported; \
+             materialize the table rows and aggregate them directly \
+             (e.g. compute the total from the SELECTed rows)"
+                .into(),
+        ));
+    }
+    if !q.group_by.is_empty() || q.having.is_some() {
+        return Err(QueryError(
+            "GROUP BY / HAVING over a virtual table are not supported \
+             (the table is a fixed row set; filter with WHERE instead)"
+                .into(),
+        ));
+    }
+    if q.retained_set {
+        return Err(QueryError(
+            "AS RETAINED SET is not valid for a virtual table \
+             (its rows are not heap objects)"
+                .into(),
+        ));
+    }
+    if !q.joins.is_empty() {
+        return Err(QueryError(
+            "JOIN on a virtual-table FROM is not supported; use the virtual \
+             table as the JOIN right-hand side of a heap query instead \
+             (e.g. SELECT ... FROM java.lang.Object x JOIN __classes__ c ON ...)"
+                .into(),
+        ));
+    }
+    if pred_has_subquery(q.where_.as_ref()) {
+        return Err(QueryError(
+            "IN / EXISTS subqueries are not supported in a virtual-table \
+             WHERE (filter the materialized rows with plain comparisons, \
+             LIKE, or IS NULL)"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// True when any predicate in the tree contains an IN/EXISTS subquery.
+fn pred_has_subquery(pred: Option<&Predicate>) -> bool {
+    let Some(pred) = pred else {
+        return false;
+    };
+    match pred {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_has_subquery(Some(a)) || pred_has_subquery(Some(b))
+        }
+        Predicate::Not(a) => pred_has_subquery(Some(a)),
+        Predicate::InSubquery { .. } | Predicate::Exists { .. } => true,
+        Predicate::Compare { .. } | Predicate::InstanceOf(_) | Predicate::Bool(_) => false,
+    }
+}
+
+/// Reject a virtual-table inner query inside a subquery: the semi-join /
+/// membership materialization keys rows by heap-object identity (dense index /
+/// address), which a virtual table's rows don't carry.
+fn reject_virtual_table_inner(inner_plan: &QueryPlan, site: &str) -> Result<(), QueryError> {
+    if inner_plan.kind == StageKind::VirtualTable {
+        return Err(QueryError(format!(
+            "a virtual table cannot be used inside {site}: subqueries materialize \
+             heap-object identity sets. Query the virtual table directly instead."
+        )));
+    }
+    Ok(())
+}
+
 /// Build the list of `JoinPlan` entries from a query's JOIN clauses.
 /// Currently only VALUES and virtual-table RHS sources are accepted; a
 /// heap-class RHS is rejected with an actionable error.
@@ -1880,6 +2010,7 @@ fn collect_in_subplans(
                         .into(),
                 ));
             }
+            reject_virtual_table_inner(&inner_plan, "IN (<subquery>)")?;
             out.push(InSubplan {
                 lhs: lhs.clone(),
                 plan: inner_plan,
@@ -1925,6 +2056,7 @@ fn collect_exists_subplans(
                         .into(),
                 ));
             }
+            reject_virtual_table_inner(&inner_plan, "EXISTS (<subquery>)")?;
             out.push(ExistsSubplan {
                 negated: *negated,
                 plan: inner_plan,
@@ -2481,6 +2613,19 @@ fn attr_alias_head(a: &Attr) -> Option<&str> {
         Attr::Field(name) => name.split_once('.').map(|(head, _)| head),
         // A RefPath's alias head is its first hop; after the query's own alias
         // is stripped during parse, a leftover foreign head appears here.
+        // EXCEPT for the parser's built-in `@name` shape: `Attr::RefPath {
+        // hops: ["name"], tail: ToString("name") }`. That single hop is part of
+        // the attribute itself (decode the `name` field as a String), not a
+        // foreign alias — previously it made `@name` inside a subquery's inner
+        // query false-positive as a correlated reference to an outer alias
+        // `name` even when no such alias was ever bound.
+        Attr::RefPath { hops, tail, .. }
+            if hops.len() == 1
+                && hops[0] == "name"
+                && matches!(tail.as_ref(), Attr::ToString(f) if f == "name") =>
+        {
+            None
+        }
         Attr::RefPath { hops, .. } => hops.first().map(|s| s.as_str()),
         _ => None,
     }
@@ -2955,6 +3100,7 @@ impl QueryPlan {
             StageKind::SingleScan => "full heap scan",
             StageKind::GroupBy => "full heap scan + GROUP BY",
             StageKind::CountFromSubquery => "COUNT(*) over inner subquery (no outer scan)",
+            StageKind::VirtualTable => "virtual table materialization (no heap scan)",
         };
         let phase_label = match self.finalize_at {
             Phase::P1 => "Phase-1",

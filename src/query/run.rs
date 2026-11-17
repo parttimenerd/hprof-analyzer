@@ -1954,7 +1954,7 @@ fn resolve_join_lhs(
     eval_expr_on_row(expr, col_names, row)
 }
 
-fn eval_expr_on_row(
+pub(crate) fn eval_expr_on_row(
     expr: &crate::query::ast::Expr,
     col_names: &[String],
     row: &[crate::query::model::QueryValue],
@@ -1985,6 +1985,29 @@ fn eval_expr_on_row(
                 .and_then(|pos| row.get(pos))
                 .cloned()
                 .unwrap_or(QueryValue::Null)
+        }
+        Expr::Attr(Attr::RefPath { hops, tail, .. }) if hops.len() == 1 => {
+            // OQL-61: in a projected-row context (VALUES / JOIN / virtual-table
+            // rows) a SINGLE-hop `t.col` RefPath is table qualification, not a
+            // heap walk: resolve the tail field against the projected columns.
+            // Previously this fell to `_ => Null`, silently dropping rows whose
+            // WHERE used an alias-qualified virtual-table column.
+            if let Attr::Field(f) = tail.as_ref() {
+                let bare = f.rsplit_once('.').map(|(_, col)| col).unwrap_or(f.as_str());
+                let lookup = if let Some(pos) = col_names.iter().position(|c| c == f) {
+                    Some(pos)
+                } else if bare != f {
+                    col_names.iter().position(|c| c == bare)
+                } else {
+                    None
+                };
+                lookup
+                    .and_then(|pos| row.get(pos))
+                    .cloned()
+                    .unwrap_or(QueryValue::Null)
+            } else {
+                QueryValue::Null
+            }
         }
         Expr::Unary { op, arg } => {
             let v = eval_expr_on_row(arg, col_names, row);
@@ -2279,7 +2302,7 @@ fn eval_pred_on_row_with_sets(
 /// `Some(true)`/`Some(false)` are definite; `None` is UNKNOWN (a NULL comparison).
 /// The WHERE filter treats UNKNOWN as "not matching", so `NULL != 1` and
 /// `NOT (NULL = 2)` correctly exclude the NULL row.
-fn eval_pred_on_row(
+pub(crate) fn eval_pred_on_row(
     pred: &crate::query::ast::Predicate,
     col_names: &[String],
     row: &[crate::query::model::QueryValue],
@@ -2343,105 +2366,21 @@ fn materialise_join_source(
             let Some(g) = graph else {
                 return (Vec::new(), Vec::new());
             };
-            match name.to_ascii_lowercase().as_str() {
-                "classes" => {
-                    let cols = vec![
-                        "class_name".to_string(),
-                        "instance_count".to_string(),
-                        "shallow_total".to_string(),
-                        "retained_total".to_string(),
-                    ];
-                    let n = g.class_names.len();
-                    let mut inst = vec![0u64; n];
-                    let mut shallow = vec![0u64; n];
-                    for i in 0..g.n {
-                        let ci = g.class_idx[i] as usize;
-                        if ci < n {
-                            inst[ci] += 1;
-                            shallow[ci] += g.shallow[i] as u64;
-                        }
-                    }
-                    let mut retained = vec![0u64; n];
-                    if !g.retained.is_empty() {
-                        for i in 0..g.n {
-                            let ci = g.class_idx[i] as usize;
-                            if ci < n {
-                                retained[ci] += g.retained[i];
-                            }
-                        }
-                    }
-                    let rows = (0..n)
-                        .map(|ci| {
-                            vec![
-                                QueryValue::Str(g.class_names[ci].clone()),
-                                QueryValue::Int(inst[ci] as i64),
-                                QueryValue::Int(shallow[ci] as i64),
-                                QueryValue::Int(retained[ci] as i64),
-                            ]
-                        })
-                        .collect();
-                    (cols, rows)
-                }
-                "gc_roots" => {
-                    let cols = vec![
-                        "dense_idx".to_string(),
-                        "root_type".to_string(),
-                        "root_type_name".to_string(),
-                    ];
-                    let rows = g
-                        .gc_root_indices
-                        .iter()
-                        .zip(g.gc_root_types.iter())
-                        .map(|(&idx, &t)| {
-                            vec![
-                                QueryValue::Int(idx as i64),
-                                QueryValue::Int(t as i64),
-                                QueryValue::Str(gc_root_type_name(t)),
-                            ]
-                        })
-                        .collect();
-                    (cols, rows)
-                }
-                "threads" => {
-                    let cols = vec![
-                        "serial".to_string(),
-                        "obj_idx".to_string(),
-                        "name".to_string(),
-                        "is_daemon".to_string(),
-                        "priority".to_string(),
-                    ];
-                    let rows = g
-                        .thread_stacks
-                        .iter()
-                        .map(|ts| {
-                            let props = g.thread_props.get(&ts.thread_serial);
-                            vec![
-                                QueryValue::Int(ts.thread_serial as i64),
-                                QueryValue::Int(ts.thread_obj_idx as i64),
-                                QueryValue::Str(props.map(|p| p.name.clone()).unwrap_or_default()),
-                                QueryValue::Bool(props.map(|p| p.is_daemon).unwrap_or(false)),
-                                QueryValue::Int(props.map(|p| p.priority as i64).unwrap_or(0)),
-                            ]
-                        })
-                        .collect();
-                    (cols, rows)
-                }
-                _ => (Vec::new(), Vec::new()),
-            }
+            let data = crate::query::vtable::VTableData {
+                n: g.n,
+                class_names: &g.class_names,
+                class_idx: &g.class_idx,
+                shallow: &g.shallow,
+                retained: &g.retained,
+                gc_root_indices: &g.gc_root_indices,
+                gc_root_types: &g.gc_root_types,
+                thread_stacks: &g.thread_stacks,
+                thread_props: &g.thread_props,
+            };
+            crate::query::vtable::materialise(name, &data).unwrap_or((Vec::new(), Vec::new()))
         }
         // Subquery JOINs not yet supported; return empty (no crash).
         JoinSource::Subquery { .. } => (Vec::new(), Vec::new()),
-    }
-}
-
-fn gc_root_type_name(tag: u8) -> String {
-    match tag {
-        0x01 => "JNI Global".into(),
-        0x02 => "JNI Local".into(),
-        0x03 => "Java Frame".into(),
-        0x05 => "Sticky Class".into(),
-        0x08 => "Thread Object".into(),
-        _ => format!("root_type_0x{tag:02x}"),
     }
 }
 
@@ -4448,6 +4387,81 @@ mod tests {
                 assert!(addr != 0, "@objectAddress must not be 0 in carry mode");
             }
         }
+    }
+
+    #[test]
+    fn from_objects_decimal_dense_index_matches_hex_address() {
+        // Decimal `FROM OBJECTS N` treats N as a dense index (not a heap address).
+        // Pick the first object via hex address, then confirm the same object is
+        // returned by its decimal dense index.
+        let path = "tests/fixtures/dump_4_philosophers.hprof";
+
+        // Step 1: get the first row's @objectId and @objectAddress via a class scan.
+        let (q, plan) =
+            parse_plan_opt("SELECT @objectId, @objectAddress FROM java.lang.String LIMIT 1");
+        let results = crate::query::run::run_single_dump(path, &[(q, plan)], false).expect("run 1");
+        let row0 = &results[0];
+        assert!(row0.error.is_none(), "unexpected error: {:?}", row0.error);
+        assert_eq!(row0.row_count, 1, "expected exactly one row");
+
+        let id_col = row0
+            .columns
+            .iter()
+            .position(|c| c.name == "@objectId")
+            .unwrap();
+        let addr_col = row0
+            .columns
+            .iter()
+            .position(|c| c.name == "@objectAddress")
+            .unwrap();
+        let dense_idx = match row0.rows[0][id_col] {
+            QueryValue::Int(i) => i as u64,
+            _ => panic!("expected Int for @objectId"),
+        };
+        let addr = match row0.rows[0][addr_col] {
+            QueryValue::Int(i) => i as u64,
+            _ => panic!("expected Int for @objectAddress"),
+        };
+
+        // Step 2: look up by hex address — should return 1 row.
+        let hex_sql = format!("SELECT @objectId FROM OBJECTS 0x{addr:x}");
+        let (q2, plan2) = parse_plan_opt(&hex_sql);
+        let results2 =
+            crate::query::run::run_single_dump(path, &[(q2, plan2)], false).expect("run 2");
+        let r2 = &results2[0];
+        assert!(r2.error.is_none(), "hex: {:?}", r2.error);
+        assert_eq!(
+            r2.row_count, 1,
+            "hex address should match exactly one object"
+        );
+
+        // Step 3: look up by decimal dense index — should return the same object.
+        let dec_sql = format!("SELECT @objectId FROM OBJECTS {dense_idx}");
+        let (q3, plan3) = parse_plan_opt(&dec_sql);
+        let results3 =
+            crate::query::run::run_single_dump(path, &[(q3, plan3)], false).expect("run 3");
+        let r3 = &results3[0];
+        assert!(r3.error.is_none(), "decimal: {:?}", r3.error);
+        assert_eq!(
+            r3.row_count, 1,
+            "decimal dense index should match exactly one object"
+        );
+
+        // Both should return the same @objectId.
+        let id_col2 = r2
+            .columns
+            .iter()
+            .position(|c| c.name == "@objectId")
+            .unwrap();
+        let id_col3 = r3
+            .columns
+            .iter()
+            .position(|c| c.name == "@objectId")
+            .unwrap();
+        assert_eq!(
+            r2.rows[0][id_col2], r3.rows[0][id_col3],
+            "hex and decimal lookup must return the same object"
+        );
     }
 
     #[test]

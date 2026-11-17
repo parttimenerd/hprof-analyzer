@@ -127,6 +127,22 @@ pub(crate) fn run_oql_escalated(
     reachable_only: bool,
     opts: &AnalyzeOptions,
 ) -> io::Result<Vec<query::model::QueryResult>> {
+    // B1 (library half): batches with FROM-/IN-/EXISTS-subqueries need the
+    // two-phase inner-then-outer pipeline. This entry used to run a single
+    // pass2 scan instead, where CountFromSubquery slots arm no executor,
+    // leaving the flat results SHORT and panicking collapse_union_results
+    // ("flat results shorter than groups describe") — reachable from
+    // `heap query` (run_oql_query) while the MCP tool had its own routing.
+    // Route here once, for every caller.
+    let uses_subqueries = flat.iter().any(|(_, p)| {
+        p.from_subplan.is_some() || !p.in_subplans.is_empty() || !p.exists_subplans.is_empty()
+    });
+    if uses_subqueries {
+        let _ = (union_groups, opts); // groups are rebuilt inside; opts carry
+        // reachable_only into the scan (AnalyzeOptions::default() there only
+        // arms the standard executors, identical to what this path used).
+        return query::run::run_single_dump(input, flat, reachable_only);
+    }
     let source = crate::source::HprofSource::from(input);
     let p1 = pass1::Pass1::run(&source, false)?;
     let id_size = p1.id_size as usize;

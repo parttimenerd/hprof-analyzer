@@ -1671,6 +1671,57 @@ impl Pass2 {
             graph.class_ref_field_names = schema;
         }
 
+        // FROM virtual tables (__classes__ / __gc_roots__ / __threads__): their
+        // rows come from pipeline data, not a heap scan, so no executor is
+        // armed (the executor loop above skips non-SingleScan/GroupBy kinds).
+        // Materialize each virtual-table slot's result HERE — the single shared
+        // point every caller (heap query CLI, MCP, run_single_dump, REPL,
+        // server) funnels through — mirroring the HistogramOnly push above.
+        // Runs unconditionally: reachability pruning does not apply (the rows
+        // are not heap objects). retained_total is Null here because retained
+        // sizes are computed after build by callers that need them.
+        {
+            let has_vtable = queries
+                .iter()
+                .any(|(_, p)| p.kind == crate::query::plan::StageKind::VirtualTable);
+            let vtable_data: Option<crate::query::vtable::VTableData>;
+            // Pretty-print class names ONCE so `class_name` matches the
+            // dotted display form used everywhere else (FROM patterns, the
+            // JOIN materialization, report labels). Zero cost when no
+            // virtual-table query is present.
+            let pretty_names: Vec<String>;
+            if has_vtable {
+                pretty_names = graph
+                    .class_names
+                    .iter()
+                    .map(|n| crate::report::pretty_class_name(n))
+                    .collect();
+                vtable_data = Some(crate::query::vtable::VTableData {
+                    n,
+                    class_names: &pretty_names,
+                    class_idx: &graph.class_idx,
+                    shallow: &graph.shallow,
+                    retained: &graph.retained,
+                    gc_root_indices: &graph.gc_root_indices,
+                    gc_root_types: &graph.gc_root_types,
+                    thread_stacks: &graph.thread_stacks,
+                    thread_props: &graph.thread_props,
+                });
+            } else {
+                vtable_data = None;
+            }
+            for (slot, (q, plan)) in queries.iter().enumerate() {
+                if plan.kind == crate::query::plan::StageKind::VirtualTable {
+                    let r = crate::query::vtable::run_virtual_table_query(
+                        q,
+                        plan,
+                        vtable_data.as_ref(),
+                    );
+                    query_state.push_finished(slot, r);
+                }
+            }
+        }
+
         // Package the deferred inbound-CSR construction. Moves id_map,
         // class_addrs, field_plans and synthetic_edges out of build (all
         // unused here after the forward fill).

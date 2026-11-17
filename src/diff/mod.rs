@@ -58,6 +58,7 @@ mod tests {
             root_path: None,
             dominator_tree: None,
             merged_paths: None,
+            path_note: String::new(),
         }
     }
 

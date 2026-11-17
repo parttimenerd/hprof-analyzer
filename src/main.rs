@@ -1724,10 +1724,15 @@ fn main() {
             }
             Ok(stats) => {
                 if complete {
+                    // E1: complete-mode redaction does NOT preserve dominator/
+                    // retained structure — verified on dump_1_mnemonics: 616
+                    // ordinary objects are reclassified and suspect #2 changes
+                    // (scala.runtime.LazyVals$ → java.lang.Object[]). Warn the
+                    // operator instead of implying structural parity.
                     eprintln!(
-                        "\x1b[1;36mℹ complete-mode: primitive scalars zeroed; \
-                             reference graph and dominator/retained structure preserved. \
-                             Duplicate-string / fill-ratio analyses unavailable.\x1b[0m"
+                        "\x1b[1;33m⚠ complete-mode redaction alters dominator/retained structure — \
+                             do NOT use this redacted dump for structural leak analysis; \
+                             use lean mode for suspect-preserving redaction\x1b[0m"
                     );
                 }
                 if stats.unknown_class_instances > 0 {
