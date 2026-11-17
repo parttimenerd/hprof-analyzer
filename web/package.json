@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "node esbuild.config.mjs",
-    "watch": "node esbuild.watch.mjs"
+    "watch": "node esbuild.watch.mjs",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "@floating-ui/react-dom": "^2.1.9",

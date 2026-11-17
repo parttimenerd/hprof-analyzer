@@ -5344,6 +5344,7 @@ function WhoHoldsSankey({ pairs, initialTarget, totalHeap, externalTarget, onPiv
     retained: number; shallow: number; pairCount: number;
   } | null>(null);
   const [showChain, setShowChain] = React.useState(true);
+  const [fmtB] = useFmtBytes();
 
   // When a table row drives an external pivot, reset history and jump to it.
   const prevExternal = React.useRef(externalTarget);
