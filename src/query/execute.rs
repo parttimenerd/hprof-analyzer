@@ -2976,10 +2976,11 @@ fn count_exists_nodes(p: &crate::query::ast::Predicate) -> usize {
     }
 }
 
-/// Match an object's dotted class name against a FROM pattern (exact, or a
-/// trailing `.*` package-prefix wildcard). Allocation-free on the hot path:
-/// `/` and `.` are treated as equivalent separators so a slash-form pattern
-/// still matches a dot-form name without normalizing either into a new String.
+/// Match an object's dotted class name against a FROM pattern (exact, a
+/// trailing `.*` package-prefix wildcard, or a bare trailing `*` prefix glob).
+/// Allocation-free on the hot path: `/` and `.` are treated as equivalent
+/// separators so a slash-form pattern still matches a dot-form name without
+/// normalizing either into a new String.
 pub fn class_name_matches(name_dotted: &str, pattern: &str) -> bool {
     // Package-prefix wildcard `pkg.*`: the name must equal `pkg` or start with
     // `pkg` followed by a separator.
@@ -2995,6 +2996,23 @@ pub fn class_name_matches(name_dotted: &str, pattern: &str) -> bool {
                 name_dotted.as_bytes().get(prefix.len()),
                 Some(b'.') | Some(b'/')
             );
+    }
+    // Bare trailing `*` (MAT-style prefix glob): `Xyz*` matches `Xyz` itself
+    // plus any subclass or inner class (`Xyz$Inner`, `Xyz.Sub`). The extension
+    // character may be a separator OR `$` (inner-class joiner), so
+    // `java.util.zip.ZipFile*` matches `java.util.zip.ZipFile$Source`.
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        if !prefix.ends_with('*') {
+            if !sep_eq(name_dotted.get(..prefix.len()).unwrap_or(""), prefix) {
+                return false;
+            }
+            return name_dotted.len() == prefix.len()
+                || matches!(
+                    name_dotted.as_bytes().get(prefix.len()),
+                    Some(b'.') | Some(b'/') | Some(b'$')
+                );
+        }
+        // `**` degenerates to the exact-match arm below (matches nothing).
     }
     name_dotted.len() == pattern.len() && sep_eq(name_dotted, pattern)
 }
@@ -4486,6 +4504,66 @@ mod tests {
             &spec,
             re.as_ref()
         ));
+    }
+
+    #[test]
+    fn bare_trailing_star_is_prefix_glob() {
+        // Matches the class itself ...
+        assert!(class_name_matches(
+            "java.util.zip.ZipFile",
+            "java.util.zip.ZipFile*"
+        ));
+        // ... and inner classes ($ joiner) — the MAT-parity case users expect.
+        assert!(class_name_matches(
+            "java.util.zip.ZipFile$Source",
+            "java.util.zip.ZipFile*"
+        ));
+        assert!(class_name_matches(
+            "java.util.zip.ZipFile$Source$Key",
+            "java.util.zip.ZipFile*"
+        ));
+        // ... and dot-separated subclasses.
+        assert!(class_name_matches(
+            "com.example.Outer.Inner",
+            "com.example.Outer*"
+        ));
+        // Non-matching prefixes stay non-matching.
+        assert!(!class_name_matches(
+            "java.util.jar.JarFile",
+            "java.util.zip.ZipFile*"
+        ));
+        assert!(!class_name_matches(
+            "java.util.zip.Zip",
+            "java.util.zip.ZipFile*"
+        ));
+        // Separator-boundary, not raw string prefix.
+        assert!(!class_name_matches(
+            "java.util.zip.ZipFileFoo",
+            "java.util.zip.ZipFile*"
+        ));
+        // Slash-form name against dot-form pattern (separator equivalence).
+        assert!(class_name_matches(
+            "java/util/zip/ZipFile$Source",
+            "java.util.zip.ZipFile*"
+        ));
+        // `**` degenerates to exact match — matches nothing real.
+        assert!(!class_name_matches(
+            "java.lang.String",
+            "java.lang.String**"
+        ));
+        // Exact match still works when there is no star.
+        assert!(class_name_matches("java.lang.String", "java.lang.String"));
+        assert!(!class_name_matches("java.lang.String", "java.lang.Stringx"));
+    }
+
+    #[test]
+    fn pkg_dot_star_still_requires_separator_boundary() {
+        // Pre-existing behavior preserved: `pkg.*` extends only via `.`.
+        assert!(class_name_matches("java.lang.String", "java.lang.*"));
+        assert!(class_name_matches("java.lang", "java.lang.*"));
+        // Separator equivalence: slash-form name matches dot-form pattern.
+        assert!(class_name_matches("java/lang/String", "java.lang.*"));
+        assert!(!class_name_matches("java.langx.Foo", "java.lang.*"));
     }
 
     #[test]

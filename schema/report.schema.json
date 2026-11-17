@@ -171,6 +171,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "object_index": {
+          "default": 0,
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "retained": {
           "description": "Retained heap of the dominator node.",
           "format": "uint64",
@@ -234,6 +241,15 @@
         },
         "obj_index_1based": {
           "description": "1-based dense object index for Object Graph Explorer navigation.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "object_index": {
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1030,6 +1046,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "object_index": {
+          "default": 0,
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "retained": {
           "format": "uint64",
           "minimum": 0,
@@ -1057,6 +1080,13 @@
           "type": "string"
         },
         "obj_index_1based": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "object_index": {
+          "default": 0,
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -2380,6 +2410,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "object_index": {
+          "default": 0,
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "retained": {
           "description": "Retained heap bytes of this object (on-heap cost of keeping it alive).",
           "format": "uint64",
@@ -2630,6 +2667,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "object_index": {
+          "default": 0,
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "owner": {
           "default": null,
           "description": "Dominant incoming reference (`Class#field`) that holds this object.\n`None` when `--collections` was off or no attributed field points at it.",
@@ -2722,6 +2766,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "object_index": {
+          "default": 0,
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "retained": {
           "format": "uint64",
           "minimum": 0,
@@ -2757,6 +2808,13 @@
         },
         "obj_index_1based": {
           "description": "1-based object index of the pool object.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "object_index": {
+          "default": 0,
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -3345,6 +3403,13 @@
           ]
         },
         "obj_index_1based": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "object_index": {
+          "default": 0,
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -4170,6 +4235,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "object_index": {
+          "default": 0,
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "retained": {
           "format": "uint64",
           "minimum": 0,
@@ -4290,6 +4362,13 @@
           ]
         },
         "obj_index_1based": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "object_index": {
+          "default": 0,
+          "description": "0-based dense object index (twin of `obj_index_1based`, minus one) for\ndirect use with `browse_dominators`/`inspect_object` without off-by-one.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"

@@ -79,10 +79,11 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 | `FROM java.lang.String` | exact class name |
 | `FROM OBJECTS java.lang.String` | identical to the above (`OBJECTS` is an optional MAT no-op keyword) |
 | `FROM INSTANCEOF java.lang.Object` | the class and all subclasses |
+| `FROM java.util.zip.ZipFile*` | prefix glob: the class itself plus subclasses and `$`-joined inner classes (`ZipFile$Source`) |
 | `FROM "java\.lang\..*"` | class-name regex (double-quoted) |
 | `FROM ( SELECT … ) s` | subquery as the row source |
 | `FROM ENTRIES java.util.ArrayList`¹ | iterate logical entries of a collection — see [FROM ENTRIES](#from-entries) |
-| `FROM (VALUES (1, 'a'), (2, 'b')) AS t(n, s)` | inline literal rows — see [VALUES](#values-source) |
+| `FROM (VALUES (1, "a"), (2, "b")) AS t(n, s)` | inline literal rows — see [VALUES](#values-source) |
 
 ### JOIN
 
@@ -113,20 +114,18 @@ Bare `JOIN` means `INNER JOIN`. `LEFT JOIN` keeps outer rows that have no match 
   **regex** patterns interchangeably: `LIKE "%error%"` and `LIKE ".*error.*"` both work.
 - `<attr> INSTANCEOF <class>`.
 - `<attr> IN ( SELECT @objectAddress FROM … )` — membership against a subquery
-  that selects a single address-valued column. (`IN` takes a **subquery**, not a
-  literal value list.)
+  that selects a single address-valued column.
+- `<expr> IN (<v1>, <v2>, …)` — literal-list membership (desugars to `=` OR-chain).
 - `<attr> NOT IN ( SELECT @objectAddress FROM … )` — exclusion; equivalent to
   `NOT (<attr> IN (…))`.
+- `<expr> NOT IN (<v1>, <v2>, …)` — literal-list exclusion (desugars to `!=` AND-chain).
 - Combine with `AND`, `OR`, `NOT`, parentheses.
 
 ### Ordering, limiting, union
 
-- `ORDER BY <expr> [ASC|DESC]` sorts the full result before `LIMIT`. **The sort
-  key must be one of the projected (selected) columns.** If the key is not
-  selected, rows are returned in scan order and the result includes a note
-  explaining that the sort was not applied. To sort by `@usedHeapSize`, include
-  it in the `SELECT` list: `SELECT @displayName, @usedHeapSize FROM … ORDER BY
-  @usedHeapSize DESC`.
+- `ORDER BY <expr> [ASC|DESC]` sorts the full result before `LIMIT`. Sort keys
+  may be projected or unprojected expressions; unprojected keys are evaluated
+  internally for sorting and are not appended to output columns.
 - `LIMIT n` caps rows. In a `UNION`, a trailing `LIMIT` caps the combined result.
 - `UNION` concatenates branches. Aggregates are **not** allowed inside a UNION
   branch.
@@ -441,7 +440,7 @@ lookup tables inline, or to cross-join heap results with known constants.
 -- Map priority numbers to labels
 SELECT x.name, p.label
 FROM java.lang.Thread x
-JOIN (VALUES (1, 'MIN'), (5, 'NORM'), (10, 'MAX')) AS p(n, label)
+JOIN (VALUES (1, "MIN"), (5, "NORM"), (10, "MAX")) AS p(n, label)
   ON x.priority = p.n
 
 -- Inline threshold comparison
@@ -893,7 +892,7 @@ These features are available in `hprof-analyzer` but not in Eclipse MAT's OQL:
 | `pathToRoot(x)`¹ — walk idom[] upward to GC root | `SELECT pathToRoot(s) FROM … LIMIT 1` |
 | `FROM ENTRIES <ClassName>`¹ — collection entry iteration (ArrayList, Vector, ArrayDeque, HashMap, LinkedHashMap, HashSet) | `SELECT index, element FROM ENTRIES java.util.ArrayList` |
 | SQL LIKE wildcards (`%`, `_`) auto-translated to regex | `LIKE "%error%"` works alongside `LIKE ".*error.*"` |
-| `(VALUES (…))` inline table source | `SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(n, s)` |
+| `(VALUES (…))` inline table source | `SELECT * FROM (VALUES (1, "a"), (2, "b")) AS t(n, s)` |
 | `INNER JOIN` / `LEFT JOIN` against `VALUES` tables or virtual tables (`__classes__`, `__gc_roots__`, `__threads__`) | `FROM java.lang.Object x JOIN __classes__ c ON x.@className = c.class_name` |
 | `NOT IN (subquery)` | `WHERE @objectAddress NOT IN (SELECT @objectAddress FROM Foo)` |
 | `GROUP BY` over reference-path hops and `@valueArray` | `GROUP BY x.key` |
