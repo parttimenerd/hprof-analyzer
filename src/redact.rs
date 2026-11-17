@@ -47,6 +47,16 @@ pub enum RedactMode {
     Complete,
 }
 
+/// Statistics returned by [`redact`].
+#[derive(Debug, Default)]
+pub struct RedactStats {
+    /// Number of INSTANCE_DUMP records whose class had no CLASS_DUMP in the file.
+    /// In a valid HPROF this is always 0; a non-zero value means the field layout
+    /// was unknown so those instance bodies were copied verbatim (primitive values
+    /// not redacted, but object reference fields preserved).
+    pub unknown_class_instances: u64,
+}
+
 /// Redact `source` and write the result to `writer`.
 ///
 /// `progress(phase, fraction)` is called periodically; `fraction` is in [0,1].
@@ -55,7 +65,7 @@ pub fn redact<W: Write>(
     mut writer: W,
     mode: RedactMode,
     progress: impl Fn(&str, f64),
-) -> io::Result<()> {
+) -> io::Result<RedactStats> {
     let (class_fields, structural_string_ids) = if mode == RedactMode::Complete {
         progress("pass1", 0.0);
         let result = build_pass1_data(source)?;
@@ -70,6 +80,7 @@ pub fn redact<W: Write>(
     let id_size = r.id_size;
     let format = r.format.clone();
     let timestamp_ms = r.timestamp_ms;
+    let mut stats = RedactStats::default();
     write_redacted(
         r,
         &mut writer,
@@ -80,10 +91,12 @@ pub fn redact<W: Write>(
         &class_fields,
         &structural_string_ids,
         &progress,
+        &mut stats,
     )?;
     progress("pass2", 1.0);
 
-    writer.flush()
+    writer.flush()?;
+    Ok(stats)
 }
 
 // ── Pass 1: build class → flattened instance field types + structural string IDs ─
@@ -369,6 +382,7 @@ fn write_redacted<W: Write>(
     class_fields: &ClassFields,
     structural_string_ids: &HashSet<u64>,
     progress: &impl Fn(&str, f64),
+    stats: &mut RedactStats,
 ) -> io::Result<()> {
     // Write HPROF header (format string + NUL + u4 id_size + u8 timestamp).
     w.write_all(format.as_bytes())?;
@@ -396,7 +410,7 @@ fn write_redacted<W: Write>(
         let result = match tag {
             tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                 write_record_header(w, tag, length)?;
-                write_redacted_heap_segment(&mut r, w, id_size, length, mode, class_fields)
+                write_redacted_heap_segment(&mut r, w, id_size, length, mode, class_fields, stats)
             }
             // Skip any existing redaction marker — we already wrote one at the
             // top, so re-redacting an already-redacted dump produces exactly one.
@@ -469,6 +483,7 @@ fn write_redacted_heap_segment<W: Write>(
     length: u64,
     mode: RedactMode,
     class_fields: &ClassFields,
+    stats: &mut RedactStats,
 ) -> io::Result<()> {
     let ids = id_size as u64;
     let mut remaining = length;
@@ -494,7 +509,7 @@ fn write_redacted_heap_segment<W: Write>(
                 copy_exact(r, w, data_len)?;
                 ids + 4 + ids + 4 + data_len
             }
-            heap::INSTANCE_DUMP => redact_instance_dump(r, w, id_size, class_fields)?,
+            heap::INSTANCE_DUMP => redact_instance_dump(r, w, id_size, class_fields, stats)?,
             heap::PRIM_ARRAY_DUMP => redact_prim_array_dump(r, w, id_size)?,
             heap::CLASS_DUMP if mode == RedactMode::Lean => copy_class_dump(r, w, id_size)?,
             heap::CLASS_DUMP => redact_class_dump(r, w, id_size)?,
@@ -568,6 +583,7 @@ fn redact_instance_dump<W: Write>(
     w: &mut W,
     id_size: u8,
     class_fields: &ClassFields,
+    stats: &mut RedactStats,
 ) -> io::Result<u64> {
     let ids = id_size as u64;
 
@@ -615,6 +631,7 @@ fn redact_instance_dump<W: Write>(
         // Unknown class — copy verbatim to preserve any object-reference
         // fields inside (zeroing them would null the edges and corrupt the
         // heap graph). Primitive values in these instances are not redacted.
+        stats.unknown_class_instances += 1;
         copy_exact(r, w, data_len)?;
     }
 

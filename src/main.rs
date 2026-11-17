@@ -1082,7 +1082,11 @@ fn fail(msg: impl std::fmt::Display) -> ! {
     process::exit(1);
 }
 
-fn run_redact(input: &str, output: &str, complete: bool) -> io::Result<()> {
+fn run_redact(
+    input: &str,
+    output: &str,
+    complete: bool,
+) -> io::Result<hprof_analyzer::redact::RedactStats> {
     use hprof_analyzer::redact::RedactMode;
     use hprof_analyzer::source::HprofSource;
     use std::fs::File;
@@ -1108,9 +1112,9 @@ fn run_redact(input: &str, output: &str, complete: bool) -> io::Result<()> {
             .compression_method(zip::CompressionMethod::Deflated);
         zip.start_file("dump.hprof", opts)
             .map_err(io::Error::other)?;
-        hprof_analyzer::redact::redact(&source, &mut zip, mode, progress)?;
+        let stats = hprof_analyzer::redact::redact(&source, &mut zip, mode, progress)?;
         zip.finish().map_err(io::Error::other)?;
-        Ok(())
+        Ok(stats)
     } else {
         let file = File::create(output)?;
         hprof_analyzer::redact::redact(&source, file, mode, progress)
@@ -1713,25 +1717,29 @@ fn main() {
             input,
             output,
             complete,
-        }) => {
-            if let Err(e) = run_redact(&input, &output, complete) {
+        }) => match run_redact(&input, &output, complete) {
+            Err(e) => {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
-            if complete {
-                // Complete mode zeros primitive scalars (int/long/float/byte/boolean/
-                // short/char) but preserves all object reference fields (type 2).
-                // The dominator tree and retained sizes are built from reference edges
-                // only, so they are identical between original and complete-redacted
-                // dumps. Duplicate-string and collection fill-ratio analyses are
-                // unavailable because array data is zeroed.
-                eprintln!(
-                    "\x1b[1;36mℹ complete-mode: primitive scalars zeroed; \
-                     reference graph and dominator/retained structure preserved. \
-                     Duplicate-string / fill-ratio analyses unavailable.\x1b[0m"
-                );
+            Ok(stats) => {
+                if complete {
+                    eprintln!(
+                        "\x1b[1;36mℹ complete-mode: primitive scalars zeroed; \
+                             reference graph and dominator/retained structure preserved. \
+                             Duplicate-string / fill-ratio analyses unavailable.\x1b[0m"
+                    );
+                }
+                if stats.unknown_class_instances > 0 {
+                    eprintln!(
+                        "\x1b[1;33m⚠ {} instance(s) had no CLASS_DUMP in the file — \
+                             their bodies were copied verbatim (primitive values not redacted). \
+                             This should not occur in a valid HPROF.\x1b[0m",
+                        stats.unknown_class_instances
+                    );
+                }
             }
-        }
+        },
         Some(Cmd::CheckRedacted { input }) => {
             run_check_redacted(&input);
         }
@@ -2588,7 +2596,7 @@ fn run_heap_cmd(
                     );
                 }
             }
-            println!("## Top classes by retained size");
+            println!("## Top classes by retained size (not leak suspects)");
             if sess.report.top.biggest_classes.is_empty() {
                 println!("  (no class data)");
             } else {

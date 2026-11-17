@@ -402,7 +402,7 @@ Available subcommands:
 | Subcommand | Description |
 |------------|-------------|
 | `heap summary <dump>` | Top leak suspects + top classes by retained size |
-| `heap report <dump> [--section S]` | Full or section report. Sections: `leaks`, `top`, `threads`, `overview`, `triage`, `waste`, `indicators`, `retainers`, `arrays`, `collections`, `references`, `dominators`, `components`, `alloc_sites`, `thread_locals`, `framework`, `field_stats`, `all` |
+| `heap report <dump> [--section S]` | Full or section report. Sections: `leaks`, `top`, `threads`, `overview`, `triage`, `waste`, `indicators`, `retainers`, `collections`, `references`, `dominators`, `components`, `alloc_sites`, `thread_locals`, `framework`, `field_stats`, `all`. The legacy `arrays` section is still accepted but superseded by `collections` (emitted with a `_superseded` note). With `--limit N` (MCP `limit` param), list-bearing sections (`threads`, `top-objects`, `top-classes`, `waste`, `retainers`, `arrays`, `collections`, `indicators`, `alloc_sites`, `thread_locals`) cap their rows/lists; scalar and summary fields are never truncated. |
 | `heap histogram <dump> [--limit N]` | Class histogram with instance + retained counts |
 | `heap query <dump> --oql "..."` | Run an OQL query (add `--json` for machine-readable output) |
 | `heap browse <dump> [--index N] [--depth D] [--width W]` | Browse dominator tree (omit `--index` to start at root) |
@@ -583,6 +583,10 @@ hprof-analyzer redact heap.hprof - > safe.hprof
 ```
 
 Redacted dumps are readable by hprof-analyzer, Eclipse MAT, and jhat. A marker record (`REDACTED\x01`, tag `0xDE`) is embedded so hprof-analyzer shows a "Redacted dump" banner in reports.
+
+**Object graph preserved in both modes:**
+
+Both lean and complete mode preserve every object reference field, so the heap reference graph — and therefore dominator tree, retained sizes, and leak suspects — is identical between the original and the redacted dump. If a class's field layout is unknown (rare in valid HROFs) or the instance data is longer than the known layout (subclass fields from an incomplete super chain), those bytes are also copied verbatim rather than zeroed, ensuring no reference edges are silently severed.
 
 **Lean vs. complete mode:**
 

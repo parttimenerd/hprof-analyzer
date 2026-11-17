@@ -3,9 +3,9 @@
     "sites": [
       {
         "frames": [],
-        "object_count": 239355,
-        "retained_total": 37713704,
-        "shallow_total": 12986608,
+        "object_count": 233672,
+        "retained_total": 36878760,
+        "shallow_total": 12151664,
         "stack_serial": 1
       }
     ],
@@ -446,7 +446,8 @@
           "upper_len": 4096
         }
       ],
-      "empty_count": 5523,
+      "empty_count": 5522,
+      "singleton_sentinels": 1,
       "tracked": 6186
     },
     "constant_primitive_arrays": {
@@ -18760,8 +18761,8 @@
   },
   "generated": "__NORMALIZED__",
   "leak_indicators": {
-    "anonymous_class_count": 204,
     "anonymous_class_instances": 263,
+    "anonymous_class_types": 204,
     "direct_byte_buffer_cap_buckets": [
       6,
       0,
@@ -19047,6 +19048,7 @@
           "retained": 2791424
         },
         "path": [],
+        "path_note": "Class-group suspect: `path`, `accumulation_*` and `root_path` apply only to single-object suspects and are empty here; the group's merged dominator paths to GC roots are in `merged_paths`.",
         "pretty_class": "scala.concurrent.stm.ccstm.InTxnImpl",
         "retained": 2791424,
         "root_type_label": "",
@@ -59486,6 +59488,7 @@
           "retained": 1353616
         },
         "path": [],
+        "path_note": "Class-group suspect: `path`, `accumulation_*` and `root_path` apply only to single-object suspects and are empty here; the group's merged dominator paths to GC roots are in `merged_paths`.",
         "pretty_class": "java.util.zip.ZipFile$Source",
         "retained": 1353616,
         "root_type_label": "",
@@ -95917,6 +95920,38 @@
     }
   },
   "schema_version": 17,
+  "thread_local_analysis": [
+    {
+      "entry_count": 129,
+      "retained": 3830504,
+      "stale_count": 0,
+      "value_class": "scala.concurrent.stm.ccstm.InTxnImpl"
+    },
+    {
+      "entry_count": 1,
+      "retained": 4136,
+      "stale_count": 0,
+      "value_class": "sun.nio.ch.Util$BufferCache"
+    },
+    {
+      "entry_count": 1,
+      "retained": 160,
+      "stale_count": 0,
+      "value_class": "java.util.Collections$SetFromMap"
+    },
+    {
+      "entry_count": 1,
+      "retained": 32,
+      "stale_count": 0,
+      "value_class": "sun.nio.fs.NativeBuffer[]"
+    },
+    {
+      "entry_count": 129,
+      "retained": 0,
+      "stale_count": 0,
+      "value_class": ""
+    }
+  ],
   "threads": {
     "threads": [
       {
@@ -123956,7 +123991,7 @@
     {
       "anchor": "collections",
       "anchor_label": "Collections",
-      "detail": "5,523 of 6,186 tracked collections (89.3%) are empty — pre-allocated but never populated containers waste object-header overhead at scale. Use lazy initialization (allocate only when the first element is added) or return `Collections.emptyList()` / `List.of()` sentinels for the read-only empty case.",
+      "detail": "5,522 of 6,186 tracked collections (89.3%) are empty (1 additional empties are recognized JDK/Scala singleton sentinels — e.g. `scala.Nil$`, `Collections.emptyList()` — expected runtime constants, counted separately in `singleton_sentinels` and excluded from this signal) — pre-allocated but never populated containers waste object-header overhead at scale. Check whether these containers are genuinely never used: allocate on first insert (lazy init) rather than pre-allocating fields that stay empty.",
       "id": "empty-collection-cemetery",
       "severity": "info",
       "title": "Empty-Collection Cemetery"
@@ -123976,7 +124011,17 @@
       "title": "Collection Waste Not Analyzed"
     }
   ],
+  "waste_breakdown": [
+    {
+      "anchor": "collections",
+      "bytes": 441760,
+      "category": "Collection Capacity",
+      "rule_id": "empty-collection-cemetery",
+      "title": "Empty-Collection Cemetery"
+    }
+  ],
   "waste_summary": {
+    "note": "total_bytes counts waste across ALL objects (reachable + unreachable); reachable_bytes is the proportional estimate for GC-reachable objects only (total_bytes × 12186168 / 13022560, where reachable_shallow = 12186168 B and total_shallow = 13022560 B). Sources are approximate and may overlap.",
     "reachable_bytes": 4477452,
     "sources": [
       {

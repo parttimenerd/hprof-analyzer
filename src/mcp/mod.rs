@@ -1264,7 +1264,7 @@ impl HprofMcpServer {
         let input = p.input.clone();
         let output = p.output.clone();
         let complete = p.complete;
-        tokio::task::spawn_blocking(move || {
+        let redact_stats = tokio::task::spawn_blocking(move || {
             use crate::source::HprofSource;
             use std::{fs::File, io};
 
@@ -1288,9 +1288,9 @@ impl HprofMcpServer {
                     .compression_method(zip::CompressionMethod::Deflated);
                 zip.start_file("dump.hprof", opts)
                     .map_err(io::Error::other)?;
-                crate::redact::redact(&source, &mut zip, mode, progress)?;
+                let stats = crate::redact::redact(&source, &mut zip, mode, progress)?;
                 zip.finish().map_err(io::Error::other)?;
-                Ok(())
+                Ok(stats)
             } else {
                 let file = File::create(&output)?;
                 crate::redact::redact(&source, file, mode, progress)
@@ -1299,6 +1299,16 @@ impl HprofMcpServer {
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let unknown_class_note = if redact_stats.unknown_class_instances > 0 {
+            format!(
+                "\n⚠ {} instance(s) had no CLASS_DUMP in the file — their bodies were copied \
+                 verbatim (primitive values not redacted). This should not occur in a valid HPROF.\n",
+                redact_stats.unknown_class_instances
+            )
+        } else {
+            String::new()
+        };
 
         let mode_note = if p.complete {
             "Mode: complete (two-pass)\n\
@@ -1333,12 +1343,14 @@ impl HprofMcpServer {
              - Object IDs, class hierarchy, dominator tree\n\
              - Thread stacks and GC roots\n\n\
              {structure_note}\
+             {unknown_class_note}\
              The redacted file is safe to share. Load it with load_dump to verify the object graph \
              or run hprof-analyzer heap summary on it directly.\n\
              Note: duplicate-string and collection fill-ratio analyses will be skipped (data is zeroed).",
             output = p.output,
             mode_note = mode_note,
             structure_note = structure_note,
+            unknown_class_note = unknown_class_note,
         );
         Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
     }

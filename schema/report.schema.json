@@ -764,6 +764,7 @@
           "default": {
             "buckets": [],
             "empty_count": 0,
+            "singleton_sentinels": 0,
             "tracked": 0
           }
         },
@@ -806,7 +807,7 @@
       "type": "object"
     },
     "CollectionsBySize": {
-      "description": "Histogram of collection element counts (reuses SizeHistogramBucket).\n`empty_count` = collections with size 0. Additive.",
+      "description": "Histogram of collection element counts (reuses SizeHistogramBucket).\n`empty_count` = collections with size 0 that are NOT recognized singleton\nsentinels; recognized JDK/Scala singleton sentinel objects (e.g.\n`scala.Nil$`, `Collections.emptyList()`) are reported separately in\n`singleton_sentinels` so the empty-collection signal doesn't overstate.\nAdditive.",
       "properties": {
         "buckets": {
           "items": {
@@ -815,6 +816,13 @@
           "type": "array"
         },
         "empty_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "singleton_sentinels": {
+          "default": 0,
+          "description": "Empty collections whose class is a known JDK/Kotlin/Scala/Guava\nsingleton sentinel (shared read-only empty constant). These are\nEXPECTED empties — runtime singletons created at class-init, not\napplication waste — so they are excluded from `empty_count` and listed\nhere instead. `#[serde(default)]` keeps older JSON loadable.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -2187,15 +2195,15 @@
     "LeakIndicators": {
       "description": "Scalar indicators of common Java leak patterns. All fields are always\ncomputed; zero when the corresponding objects are absent.",
       "properties": {
-        "anonymous_class_count": {
-          "description": "Count of anonymous/generated class definitions (names matching `$\\d+`,\n`$$Lambda$`, `$$Anon`, or `$Proxy` patterns).",
+        "anonymous_class_instances": {
+          "default": 0,
+          "description": "Count of live object instances whose class is anonymous/generated\n(i.e. class name matches the same patterns as `anonymous_class_types`).\nHigher than `anonymous_class_types` when many instances share the same\nanonymous class (e.g. thousands of lambda captures from one call site).",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
-        "anonymous_class_instances": {
-          "default": 0,
-          "description": "Count of live object instances whose class is anonymous/generated\n(i.e. class name matches the same patterns as `anonymous_class_count`).\nHigher than `anonymous_class_count` when many instances share the same\nanonymous class (e.g. thousands of lambda captures from one call site).",
+        "anonymous_class_types": {
+          "description": "Count of DISTINCT anonymous/generated class definitions — i.e. class\nTYPES, not instances (names matching `$\\d+`, `$$Lambda$`, `$$Anon`, or\n`$Proxy` patterns). Previously misnamed `anonymous_class_count`, which\nread as an instance count; the instance figure is\n`anonymous_class_instances` below. The serde alias keeps report JSONs\nwritten under the old field name (e.g. stored/golden reports diffed via\n`compare reports`) loadable.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -2250,7 +2258,7 @@
         }
       },
       "required": [
-        "anonymous_class_count",
+        "anonymous_class_types",
         "thread_local_null_key_count",
         "direct_byte_buffer_capacity_sum"
       ],
@@ -3763,6 +3771,10 @@
           },
           "type": "array"
         },
+        "path_note": {
+          "description": "One-line note for GROUP suspects: why `path`/`accumulation_*`/\n`root_path` are empty here (those fields only apply to single suspects;\nthe group's dominator paths live in `merged_paths`). Empty for single\nsuspects, where those fields are populated. `#[serde(default)]` keeps\nolder JSON loadable.",
+          "type": "string"
+        },
         "pretty_class": {
           "type": "string"
         },
@@ -4848,6 +4860,10 @@
     "WasteSummary": {
       "description": "A single headline \"reclaimable N bytes\" figure folding every waste source\nthe report can quantify (under-filled collections & object arrays, duplicate\nString values, String backing-array slack, duplicate primitive arrays). The\nsources are approximate and may overlap slightly; `total_bytes` is their sum.\nPresent only when at least one source is nonzero. Additive; not part of MAT\nparity comparison.",
       "properties": {
+        "note": {
+          "description": "Explains how `reachable_bytes` relates to `total_bytes` (proportional\nscaling by the reachable share of the heap) — rendered alongside the\nsummary so consumers never have to infer the formula. Constant for a\ngiven summary; empty only in legacy JSON round-trips.",
+          "type": "string"
+        },
         "reachable_bytes": {
           "default": 0,
           "description": "Proportional estimate of waste attributable to reachable objects only.\nComputed as `total_bytes * reachable_shallow / (reachable_shallow + unreachable_shallow)`.\nApproximate because waste scans do not distinguish reachable from unreachable per-instance.",
@@ -4963,6 +4979,7 @@
         "collections_by_size": {
           "buckets": [],
           "empty_count": 0,
+          "singleton_sentinels": 0,
           "tracked": 0
         },
         "constant_primitive_arrays": {
@@ -5044,8 +5061,8 @@
     "leak_indicators": {
       "$ref": "#/$defs/LeakIndicators",
       "default": {
-        "anonymous_class_count": 0,
         "anonymous_class_instances": 0,
+        "anonymous_class_types": 0,
         "direct_byte_buffer_cap_buckets": [
           0,
           0,
