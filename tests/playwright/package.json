@@ -1,0 +1,7 @@
+{
+  "name": "hprof-report-smoke",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}
