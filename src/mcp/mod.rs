@@ -131,7 +131,8 @@ pub struct GetReportParams {
     ///   "static-collections" — collection classes with instances/shallow/retained/ratio; high ratio = accumulation
     ///   "resources"      — file/stream/JDBC handle classes by instance count; high count = unclosed leak
     ///
-    /// Default "all" (everything — very large, avoid in LLM workflows).
+    /// Default "triage" (severity-tagged signals — the fastest diagnosis).
+    /// "all" (everything merged) is very large; avoid in LLM workflows.
     pub section: Option<String>,
     /// Max rows for "top-objects" and "threads" (default 20, max 100).
     /// For "top-classes" default is 10 (holders data makes each row large).
@@ -370,7 +371,18 @@ struct DomNode {
     class: String,
     retained_bytes: u64,
     shallow_bytes: u32,
+    /// Total immediate children before width-truncation (0 when depth budget
+    /// prevented descending, i.e. we never read the child CSR at this node).
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    total_children: usize,
+    /// True when `children` was truncated to `width` siblings.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    children_truncated: bool,
     children: Vec<DomNode>,
+}
+
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
 }
 
 // ── MCP server ────────────────────────────────────────────────────────────────
@@ -378,6 +390,21 @@ struct DomNode {
 #[derive(Clone)]
 pub struct HprofMcpServer {
     session: Arc<Mutex<Option<CachedSession>>>,
+    /// FIFO gate serializing stateful tool handlers in request-arrival order.
+    ///
+    /// rmcp spawns one tokio task per incoming request, so handlers run
+    /// concurrently with no ordering guarantee. The session mutex protects
+    /// consistency but is only held at the very end of `load_dump`, so a
+    /// `get_session_info` arriving mid-load would acquire it, see `None`, and
+    /// wrongly report `loaded:false` while a load is seconds from finishing.
+    /// This gate is held for the *entire* duration of each stateful handler
+    /// (including `load_dump`'s slow `spawn_blocking` region), so a later read
+    /// queues behind an in-flight write and answers after it resolves.
+    ///
+    /// `tokio::sync::Mutex` is required (not `std`): it is fair (ordered
+    /// wakeups — that IS the fix) and its guard is `Send` across `.await`,
+    /// which a `std::sync::MutexGuard` is not.
+    gate: Arc<Mutex<()>>,
     #[allow(dead_code)]
     tool_router: ToolRouter<HprofMcpServer>,
 }
@@ -386,6 +413,7 @@ impl HprofMcpServer {
     pub fn new() -> Self {
         Self {
             session: Arc::new(Mutex::new(None)),
+            gate: Arc::new(Mutex::new(())),
             tool_router: Self::tool_router(),
         }
     }
@@ -432,6 +460,9 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<LoadDumpParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Held for the whole load (including the spawn_blocking region below) so a
+        // later get_session_info queues behind it and sees the loaded dump.
+        let _gate = self.gate.lock().await;
         let path = PathBuf::from(&p.path);
         // I-01: validate extension to prevent path traversal via symlinks to
         // arbitrary files (e.g. /etc/passwd).  Only .hprof, .hprof.gz, and
@@ -459,6 +490,11 @@ impl HprofMcpServer {
             collections,
             find_duplicates,
             categories,
+            // with_graph=true must build the field-name pool so get_field_name /
+            // heap field-name work. obj_graph is the switch that gates
+            // `want_field_names` in pass2 (capped at FIELD_NAME_EDGE_CAP there, so
+            // huge heaps stay safe); selecting CacheMode::Graph alone never set it.
+            obj_graph: p.with_graph,
             ..AnalyzeOptions::default()
         };
         let session_ref = Arc::clone(&self.session);
@@ -616,219 +652,26 @@ impl HprofMcpServer {
                           \n  \"resources\"    — file/stream/JDBC handle classes with instance counts; high counts reveal unclosed-resource leaks\
                           \n  \"alloc_sites\", \"thread_locals\", \"framework\", \"field_stats\", \"categories\"\
                           \n  \"top\"          — LARGE (full biggest-objects + biggest-classes); prefer \"top-objects\"/\"top-classes\"\
-                          \n  \"all\"          — everything merged (very large — avoid in LLM workflows)")]
+                          \n  \"all\"          — everything merged (very large — avoid in LLM workflows)\
+                          \n\nDEFAULT: omitting `section` returns \"triage\" (changed from \"all\" in 0.3.4 — use \"all\" explicitly for the full report).")]
     async fn get_report(
         &self,
         Parameters(p): Parameters<GetReportParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
-        let r = &sess.report;
-        let limit = p.limit.unwrap_or(20).min(100);
-        let json = match p.section.as_deref().unwrap_or("all") {
-            "top-objects" => {
-                let rows: Vec<_> = r.top.biggest_objects.iter().take(limit).collect();
-                serde_json::to_string_pretty(&rows)
-            }
-            "top-classes" => {
-                let rows: Vec<_> = r
-                    .top
-                    .biggest_classes
-                    .iter()
-                    .take(p.limit.unwrap_or(10).min(100))
-                    .collect();
-                serde_json::to_string_pretty(&rows)
-            }
-            "leaks" => {
-                // Serialize the leaks report, then:
-                // 1. cap dominator_tree depth+width to prevent 100KB+ trees
-                // 2. strip low-value fields from dominated_by_class to reduce bulk
-                let mut v = serde_json::to_value(&r.leaks)
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                truncate_dom_tree_depth(&mut v, 3);
-                strip_dominated_by_class_noise(&mut v);
-                serde_json::to_string_pretty(&v)
-            }
-            "top" => serde_json::to_string_pretty(&r.top),
-            "threads" => {
-                // Sort by retained desc; apply limit; truncate frames to 20 per thread.
-                let max_frames = 20usize;
-                let mut sorted: Vec<_> = r.threads.threads.iter().collect();
-                sorted.sort_by_key(|t| std::cmp::Reverse(t.retained));
-                let rows: Vec<serde_json::Value> = sorted
-                    .into_iter()
-                    .take(limit)
-                    .map(|t| {
-                        let frames_truncated = t.frames.len() > max_frames;
-                        let frames: Vec<_> = t.frames.iter().take(max_frames).cloned().collect();
-                        let mut v = serde_json::json!({
-                            "thread_serial": t.thread_serial,
-                            "name": t.name,
-                            "class_name": t.class_name,
-                            "retained": t.retained,
-                            "shallow": t.shallow,
-                            "local_root_count": t.local_root_count,
-                            "frames": frames,
-                        });
-                        if frames_truncated {
-                            v["frames_truncated"] = serde_json::json!(true);
-                        }
-                        if let Some(lo) = &t.local_objects {
-                            v["local_objects"] = serde_json::json!(lo);
-                        }
-                        v
-                    })
-                    .collect();
-                let total = r.threads.threads.len();
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "total_threads": total,
-                    "shown": rows.len(),
-                    "sorted_by": "retained_desc",
-                    "threads": rows,
-                }))
-            }
-            "overview" => serde_json::to_string_pretty(&r.overview),
-            "triage" => serde_json::to_string_pretty(&r.triage),
-            "waste" => serde_json::to_string_pretty(&serde_json::json!({
-                "waste_summary": r.waste_summary,
-                "waste_breakdown": r.waste_breakdown,
-            })),
-            "indicators" => serde_json::to_string_pretty(&r.leak_indicators),
-            "retainers" => serde_json::to_string_pretty(&r.top_retainers),
-            "arrays" => serde_json::to_string_pretty(&r.arrays_by_size),
-            "collections" => serde_json::to_string_pretty(&r.collections),
-            "references" => serde_json::to_string_pretty(&r.references),
-            "dominators" => serde_json::to_string_pretty(&r.dominator_analysis),
-            "components" => serde_json::to_string_pretty(&r.top_components),
-            "alloc_sites" => serde_json::to_string_pretty(&r.alloc_sites),
-            "thread_locals" => serde_json::to_string_pretty(&r.thread_local_analysis),
-            "framework" => serde_json::to_string_pretty(&r.framework_analysis),
-            "field_stats" => serde_json::to_string_pretty(&r.fields_by_size),
-            "categories" => serde_json::to_string_pretty(&r.category_rollup),
-            "gc-roots" => serde_json::to_string_pretty(&serde_json::json!({
-                "gc_roots": r.overview.gc_roots,
-                "gc_roots_by_type": r.overview.gc_roots_by_type,
-                "gc_roots_retained_by_type": r.overview.gc_roots_retained_by_type,
-            })),
-            "classloaders" => serde_json::to_string_pretty(&serde_json::json!({
-                "classloader_count": r.overview.classloaders_loaded,
-                "loader_rollup": r.overview.loader_rollup,
-                "duplicate_classes": r.overview.duplicate_classes,
-            })),
-            "strings" => {
-                let str_row = r.overview.histogram.iter().find(|h| h.pretty_class == "java.lang.String");
-                let backing_row = r.overview.histogram.iter()
-                    .find(|h| h.pretty_class == "byte[]" || h.pretty_class == "char[]");
-                let dup_strings = r.overview.duplicate_strings.as_ref();
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "string_count": str_row.map(|h| h.instances).unwrap_or(0),
-                    "string_shallow_bytes": str_row.map(|h| h.shallow).unwrap_or(0),
-                    "backing_array_count": backing_row.map(|h| h.instances).unwrap_or(0),
-                    "backing_array_shallow_bytes": backing_row.map(|h| h.shallow).unwrap_or(0),
-                    "duplicate_string_count": dup_strings.map(|d| d.duplicated_values).unwrap_or(0),
-                    "duplicate_wasted_bytes": dup_strings.map(|d| d.approx_wasted_bytes).unwrap_or(0),
-                }))
-            }
-            "packages" => serde_json::to_string_pretty(&r.top.biggest_packages),
-            "culprits" => serde_json::to_string_pretty(&r.primary_culprits),
-            "self-referential" => serde_json::to_string_pretty(&r.self_referential_classes),
-            "static-collections" => {
-                const COLL_NAMES: &[&str] = &[
-                    "ArrayList", "HashMap", "LinkedList", "ConcurrentHashMap",
-                    "CopyOnWriteArrayList", "HashSet", "LinkedHashSet", "TreeMap", "TreeSet",
-                    "ArrayDeque", "PriorityQueue", "LinkedHashMap", "Hashtable", "Vector",
-                ];
-                let mut rows: Vec<serde_json::Value> = r
-                    .overview
-                    .histogram
-                    .iter()
-                    .filter(|h| {
-                        let c = &h.pretty_class;
-                        !c.ends_with("[]") && COLL_NAMES.iter().any(|n| c.contains(n))
-                    })
-                    .map(|h| {
-                        let ratio = if h.shallow > 0 { h.retained as f64 / h.shallow as f64 } else { 0.0 };
-                        serde_json::json!({
-                            "class": h.pretty_class,
-                            "instances": h.instances,
-                            "shallow_bytes": h.shallow,
-                            "retained_bytes": h.retained,
-                            "retained_to_shallow_ratio": (ratio * 10.0).round() / 10.0,
-                        })
-                    })
-                    .collect();
-                rows.sort_by(|a, b| {
-                    let ra = a["retained_bytes"].as_u64().unwrap_or(0);
-                    let rb = b["retained_bytes"].as_u64().unwrap_or(0);
-                    rb.cmp(&ra)
-                });
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "_hint": "retained_to_shallow_ratio >> 1 indicates the collection holds large objects. \
-                              Use query({oql:\"static-collections\"}) for a grouped OQL view, or \
-                              check get_report({section:\"leaks\"}) to see which object holds the biggest instance.",
-                    "collection_classes": rows,
-                }))
-            }
-            "resources" => {
-                const RESOURCE_NAMES: &[&str] = &[
-                    "FileInputStream", "FileOutputStream", "FileDescriptor", "FileChannel",
-                    "Statement", "ResultSet", "Connection", "Socket",
-                    "java.io.InputStream", "java.io.OutputStream",
-                ];
-                let mut rows: Vec<serde_json::Value> = r
-                    .overview
-                    .histogram
-                    .iter()
-                    .filter(|h| {
-                        let c = &h.pretty_class;
-                        !c.ends_with("[]")
-                            && !c.contains("Weak")
-                            && !c.contains("Reference")
-                            && !c.contains("Buffered")
-                            && RESOURCE_NAMES.iter().any(|n| c.contains(n))
-                    })
-                    .map(|h| {
-                        serde_json::json!({
-                            "class": h.pretty_class,
-                            "instances": h.instances,
-                            "shallow_bytes": h.shallow,
-                            "retained_bytes": h.retained,
-                        })
-                    })
-                    .collect();
-                rows.sort_by(|a, b| {
-                    let ia = a["instances"].as_u64().unwrap_or(0);
-                    let ib = b["instances"].as_u64().unwrap_or(0);
-                    ib.cmp(&ia)
-                });
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "_hint": "High instance counts suggest resources acquired but never closed. \
-                              Fix: wrap in try-with-resources. Use query({oql:\"unclosed-resources\"}) \
-                              for a focused OQL view, or check triage for connection-leak / unclosed-resource-leak signals.",
-                    "resource_classes": rows,
-                }))
-            }
-            section => {
-                if section != "all" {
-                    return Err(McpError::invalid_params(
-                        format!(
-                            "Unknown section {:?}. Valid sections: top-objects, top-classes, \
-                             leaks, top, threads, overview, triage, waste, indicators, retainers, \
-                             arrays, collections, references, dominators, components, alloc_sites, \
-                             thread_locals, framework, field_stats, categories, gc-roots, \
-                             classloaders, strings, packages, culprits, self-referential, \
-                             static-collections, resources, all",
-                            section
-                        ),
-                        None,
-                    ));
-                }
-                serde_json::to_string_pretty(r)
-            }
-        }
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let section = p.section.as_deref().unwrap_or("triage");
+        let result = crate::heap_ops::report_section_with_limit(sess, section, p.limit)
+            .map_err(ops_to_mcp)?;
+        let hint = format!(
+            "Report section '{section}' exceeded the {MAX_TOOL_OUTPUT_BYTES}-byte output cap and was \
+             replaced with this stub. Request a focused section (triage, top-objects, top-classes, \
+             leaks) or pass a smaller limit instead."
+        );
+        let json = serialize_capped(&result, &hint)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
@@ -844,38 +687,26 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<GetHistogramParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
         let limit = p.limit.unwrap_or(50).min(500) as usize;
-        let rows: Vec<serde_json::Value> = sess
-            .report
-            .top
-            .biggest_classes
-            .iter()
-            .take(limit)
-            .map(|row| {
-                serde_json::json!({
-                    "class": row.pretty_class,
-                    "instances": row.instances,
-                    "retained_bytes": row.retained,
-                })
-            })
-            .collect();
-        let json = serde_json::to_string_pretty(&rows)
+        let result = crate::heap_ops::histogram(sess, limit).map_err(ops_to_mcp)?;
+        let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
     /// Run an OQL query against the loaded dump. Returns {columns, rows, truncated, row_count}.
     /// Rows are arrays of plain JSON values (strings, numbers, null). Object references
-    /// appear as "ClassName@index" — use the index with inspect_object or browse_dominators.
+    /// appear as {"class":"ClassName","index":N} — use the index with inspect_object or browse_dominators.
     #[tool(description = "Run an OQL query OR a built-in view by name. \
                        SHORTCUT: pass a view name like \"top-retained-by-class\" instead of writing OQL. \
                        All 28 view names are listed in the oql parameter description — use them directly. \
                        Returns {columns, rows, truncated, row_count, view_name?}. \
-                       Rows are plain JSON. Objects appear as 'ClassName@index' — the number after '@' is object_index. \
+                       Rows are plain JSON. Object references appear as {\"class\":\"ClassName\",\"index\":N} — use 'index' as object_index. \
                        Always SELECT @objectId AS idx to get indices for browse_dominators/inspect_object. \
                        Tip: SELECT jsonify(x) FROM ... expands objects to JSON trees (requires load_dump to have been called first, \
                        which builds the needed offset index automatically). \
@@ -886,6 +717,7 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<QueryParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let dump_path = {
             let guard = self.session.lock().await;
             guard
@@ -903,11 +735,36 @@ impl HprofMcpServer {
         let vname = view_name.map(|s| s.to_string());
         let include_all = p.all.unwrap_or(false);
 
-        let result =
-            tokio::task::spawn_blocking(move || run_query_on_dump(&dump_path, &oql, include_all))
-                .await
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let result = tokio::task::spawn_blocking(move || {
+            // Defense in depth: even with subquery routing fixed, a latent panic
+            // in parse/plan/run must not unwind through the stdio dispatch loop
+            // and take down the whole server. Convert it to a per-request JSON
+            // error row instead. (Effective only under `panic = "unwind"`; the
+            // release profile uses `panic = "abort"`, where the real safeguard is
+            // correct subquery routing in run_query_on_dump, not this guard.)
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_query_on_dump(&dump_path, &oql, include_all)
+            }));
+            match caught {
+                Ok(r) => r,
+                Err(panic) => {
+                    let msg = panic
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "query evaluation panicked".to_string());
+                    Ok(serde_json::json!({
+                        "columns": [],
+                        "rows": [],
+                        "truncated": false,
+                        "error": format!("internal error evaluating OQL (recovered): {msg}"),
+                    }))
+                }
+            }
+        })
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         // Inject view_name into result so LLM knows which view ran.
         let result = if let (Some(name), Some(obj)) = (&vname, result.as_object()) {
@@ -926,8 +783,12 @@ impl HprofMcpServer {
                 m.insert("_hint".to_string(), serde_json::Value::String(h));
             }
         }
-        let output = serde_json::to_string_pretty(&result)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let output = serialize_capped(
+            &result,
+            "Query result exceeded the 256000-byte output cap and was replaced with this stub. \
+             Narrow the query (add a WHERE filter or smaller LIMIT, select fewer columns) \
+             instead of fetching every row.",
+        )?;
         Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
     }
 
@@ -937,98 +798,26 @@ impl HprofMcpServer {
                        Omit object_index to start at the GC root (recommended first call). \
                        The 'index' field in results is 0-based — use directly with browse_dominators or inspect_object. \
                        NOTE: obj_index_1based from get_report (dominator_tree/root_path) is 1-BASED — subtract 1 before using here. \
-                       Children sorted by retained_bytes desc — follow the largest child to find the root cause. \
-                       retained_bytes = everything kept alive exclusively by this object/subtree."
+                        Children sorted by retained_bytes desc — follow the largest child to find the root cause. \
+                        retained_bytes = everything kept alive exclusively by this object/subtree. \
+                        NOTE: width is clamped to 50 (depth to 8); when siblings were dropped, the node \
+                        reports children_truncated:true and total_children (count before truncation). \
+                        To see more of a wide node, re-call browse_dominators on that node's index."
     )]
     async fn browse_dominators(
         &self,
         Parameters(p): Parameters<BrowseDominatorsParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
-
-        let (dc_off, dc_tgt) = sess
-            .cache
-            .read_dominator_children()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("arrays.bin missing from cache".to_string(), None)
-            })?;
-        let retained = sess
-            .cache
-            .read_retained()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("retained missing from cache".to_string(), None)
-            })?;
-        let shallow = sess
-            .cache
-            .read_shallow()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("shallow missing from cache".to_string(), None)
-            })?;
-        let class_idx = sess
-            .cache
-            .read_class_idx()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("class_idx missing from cache".to_string(), None)
-            })?;
-
         let depth = p.depth.unwrap_or(3).min(8);
         let width = p.width.unwrap_or(10).min(50) as usize;
-        let n = shallow.len();
-        let start = p.object_index.unwrap_or(n as u64);
-
-        // I-03: validate object_index is in [0, n] (n = virtual root).
-        if start > n as u64 {
-            return Err(McpError::invalid_params(
-                format!(
-                    "object_index {start} is out of range; heap has {n} objects (valid range: 0..={n})"
-                ),
-                None,
-            ));
-        }
-
-        // Build class name lookup from the session's class_names table (index → name).
-        let class_by_idx: std::collections::HashMap<u32, String> = sess
-            .class_names
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (i as u32, n.clone()))
-            .collect();
-
-        let tree = build_node(
-            start,
-            depth,
-            width,
-            n,
-            &dc_off,
-            &dc_tgt,
-            &retained,
-            &shallow,
-            &class_idx,
-            &class_by_idx,
-        );
-        let mut tree = serde_json::to_value(&tree)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        // Add hint as a JSON field so it doesn't break json.loads() on the response.
-        if let serde_json::Value::Object(ref mut m) = tree {
-            m.insert(
-                "_hint".to_string(),
-                serde_json::Value::String(
-                    "Each node has an 'index' field (0-based). \
-                     Use browse_dominators({\"object_index\": <index>}) to expand a node, \
-                     or inspect_object({\"object_index\": <index>}) for class and size. \
-                     Children are sorted by retained_bytes desc — follow the largest child to find the root cause."
-                        .to_string(),
-                ),
-            );
-        }
-        let json = serde_json::to_string_pretty(&tree)
+        let result =
+            crate::heap_ops::browse(sess, p.object_index, depth, width).map_err(ops_to_mcp)?;
+        let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
@@ -1042,161 +831,20 @@ impl HprofMcpServer {
                        When the dump was loaded with load_dump (which builds the offset index automatically), \
                        also returns 'fields': [{class, name, value}] for instance objects. \
                        When the dump was loaded with load_dump({with_graph: true}), also returns \
-                       'inbound_refs': up to 20 objects that directly reference this one (class + retained_bytes). \
+                       'inbound_refs': {total, shown, truncated, refs:[{object_index, class, shallow_bytes, retained_bytes}]} \
+                       — up to 20 objects that directly reference this one. \
                        For the full inbound list (all referrers, no cap), call find_incoming_references. \
                        After inspect, call browse_dominators({object_index: <same>}) to see what it retains.")]
     async fn inspect_object(
         &self,
         Parameters(p): Parameters<InspectObjectParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
-
-        let shallow = sess
-            .cache
-            .read_shallow()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("shallow missing from cache".to_string(), None)
-            })?;
-        let retained = sess
-            .cache
-            .read_retained()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("retained missing from cache".to_string(), None)
-            })?;
-        let class_idx = sess
-            .cache
-            .read_class_idx()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("class_idx missing from cache".to_string(), None)
-            })?;
-
-        let idx = p.object_index as usize;
-        if idx >= shallow.len() {
-            return Err(McpError::invalid_params(
-                format!("object_index {idx} out of range (0..{})", shallow.len()),
-                None,
-            ));
-        }
-
-        let cidx = class_idx[idx];
-        let class_name = sess
-            .class_names
-            .get(cidx as usize)
-            .map(|s| s.as_str())
-            .unwrap_or("<unknown>");
-
-        // In Graph mode, read inbound CSR to list up to 20 objects that reference this one.
-        let inbound_refs: Option<Vec<serde_json::Value>> = if sess.mode == CacheMode::Graph {
-            match sess.cache.read_inbound_csr() {
-                Ok(Some((inb_off, inb_tgt))) if !inb_off.is_empty() && idx + 1 < inb_off.len() => {
-                    let start = inb_off[idx] as usize;
-                    let end = inb_off[idx + 1] as usize;
-                    let refs: Vec<serde_json::Value> = inb_tgt[start..end]
-                        .iter()
-                        .take(20)
-                        .map(|&src| {
-                            let src = src as usize;
-                            let src_cidx = class_idx[src];
-                            let src_class = sess
-                                .class_names
-                                .get(src_cidx as usize)
-                                .map(|s| s.as_str())
-                                .unwrap_or("<unknown>");
-                            serde_json::json!({
-                                "object_index": src,
-                                "class": src_class,
-                                "retained_bytes": retained[src],
-                            })
-                        })
-                        .collect();
-                    let truncated = (end - start) > 20;
-                    Some(if truncated {
-                        let mut v = refs;
-                        v.push(
-                            serde_json::json!({"note": format!("... {} more", end - start - 20)}),
-                        );
-                        v
-                    } else {
-                        refs
-                    })
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-
-        let mut result = serde_json::json!({
-            "object_index": idx,
-            "class": class_name,
-            "shallow_bytes": shallow[idx],
-            "retained_bytes": retained[idx],
-            "_hint": format!(
-                "To see what this {} retains: browse_dominators({{\"object_index\":{}}}). \
-                 To find objects that reference it: find_incoming_references({{\"object_index\": {}}}) (requires with_graph=true on load_dump).",
-                class_name, idx, idx
-            ),
-        });
-
-        // Append field values when offsets.bin is present and the object is an instance.
-        if let Ok(Some(offsets)) = sess.cache.read_hprof_offsets() {
-            if let Some(&offset) = offsets.get(idx).filter(|&&o| o != 0) {
-                let dump_path = &sess.dump_path;
-                let id_size = sess.pass1.id_size as usize;
-                let class_map = &sess.pass1.class_map;
-                let strings_map = &sess.pass1.strings;
-                let fields_result =
-                    if crate::objread::is_gz_path(dump_path) && sess.cache.has_gz_index() {
-                        crate::objread::open_for_offset(dump_path, &sess.cache, offset)
-                            .ok()
-                            .and_then(|mut r| {
-                                crate::objread::read_instance_via(
-                                    r.as_mut(),
-                                    offset,
-                                    class_map,
-                                    strings_map,
-                                    id_size,
-                                )
-                                .ok()
-                                .flatten()
-                            })
-                    } else {
-                        crate::objread::read_instance_at(
-                            dump_path,
-                            offset,
-                            class_map,
-                            strings_map,
-                            id_size,
-                        )
-                        .ok()
-                        .flatten()
-                    };
-                if let Some((_class_addr, _stack_serial, fields)) = fields_result {
-                    let fields_json: Vec<serde_json::Value> = fields
-                        .iter()
-                        .map(|f| {
-                            serde_json::json!({
-                                "class": f.owner,
-                                "name": f.name,
-                                "value": field_value_to_json(&f.value),
-                            })
-                        })
-                        .collect();
-                    result["fields"] = serde_json::json!(fields_json);
-                }
-            }
-        }
-
-        if let Some(refs) = inbound_refs {
-            result["inbound_refs"] = serde_json::json!(refs);
-        }
-
+        let result = crate::heap_ops::inspect(sess, p.object_index).map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -1208,9 +856,9 @@ impl HprofMcpServer {
                           (MAT's \"List Objects with incoming References\"). \
                           Requires that the dump was loaded with load_dump({with_graph: true}); \
                           returns an error with instructions otherwise. \
-                          Each result row has: src_idx (dense index of the referrer), \
-                          src_class, src_shallow, src_retained. \
-                          Use src_idx with browse_dominators to follow the retainer chain upward. \
+                          Each result row has: object_index (dense index of the referrer), \
+                          class, shallow_bytes, retained_bytes. \
+                          Use object_index with browse_dominators to follow the retainer chain upward. \
                           Typical workflow: find a suspicious object with query/browse_dominators, \
                           then call find_incoming_references to see which field of which class holds it alive."
     )]
@@ -1218,96 +866,14 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<FindIncomingReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
-
-        if sess.mode != CacheMode::Graph {
-            return Err(McpError::invalid_params(
-                "Incoming reference data not available — the dump was not loaded with with_graph=true. \
-                 Reload with load_dump({\"path\": \"<same path>\", \"with_graph\": true}) to enable this tool.",
-                None,
-            ));
-        }
-
-        let (inb_off, inb_tgt) = sess
-            .cache
-            .read_inbound_csr()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("graph.bin missing from cache".to_string(), None)
-            })?;
-
-        let retained = sess
-            .cache
-            .read_retained()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::internal_error("retained missing".to_string(), None))?;
-        let shallow = sess
-            .cache
-            .read_shallow()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::internal_error("shallow missing".to_string(), None))?;
-        let class_idx = sess
-            .cache
-            .read_class_idx()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::internal_error("class_idx missing".to_string(), None))?;
-
-        let idx = p.object_index as usize;
-        let n = shallow.len();
-        if idx >= n {
-            return Err(McpError::invalid_params(
-                format!("object_index {idx} out of range (heap has {n} objects)"),
-                None,
-            ));
-        }
-        if idx + 1 >= inb_off.len() {
-            return Err(McpError::invalid_params(
-                format!("object_index {idx} has no inbound edge data in graph.bin"),
-                None,
-            ));
-        }
-
         let limit = p.limit.unwrap_or(50).min(200);
-        let start = inb_off[idx] as usize;
-        let end = inb_off[idx + 1] as usize;
-        let total_incoming = end - start;
-
-        let refs: Vec<serde_json::Value> = inb_tgt[start..end]
-            .iter()
-            .take(limit)
-            .map(|&src| {
-                let src = src as usize;
-                let src_cidx = class_idx[src] as usize;
-                let src_class = sess
-                    .class_names
-                    .get(src_cidx)
-                    .map(|s| s.as_str())
-                    .unwrap_or("<unknown>");
-                serde_json::json!({
-                    "src_idx": src,
-                    "src_class": src_class,
-                    "src_shallow": shallow[src],
-                    "src_retained": retained[src],
-                })
-            })
-            .collect();
-
-        let result = serde_json::json!({
-            "object_index": p.object_index,
-            "total_incoming_references": total_incoming,
-            "shown": refs.len(),
-            "truncated": total_incoming > limit,
-            "refs": refs,
-            "_hint": format!(
-                "Each 'src_idx' is a dense object index. Use browse_dominators({{\"object_index\": <src_idx>}}) \
-                 to explore what retains the referrer, or inspect_object({{\"object_index\": <src_idx>}}) for its class/size. \
-                 To follow the full chain upward: browse_dominators on each src_idx until you reach a GC root."
-            ),
-        });
-
+        let result =
+            crate::heap_ops::find_incoming(sess, p.object_index, limit).map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -1330,147 +896,15 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<FindIncomingRefsByClassParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
 
-        if sess.mode != CacheMode::Graph {
-            return Err(McpError::invalid_params(
-                "Incoming reference data not available — the dump was not loaded with with_graph=true. \
-                 Reload with load_dump({\"path\": \"<same path>\", \"with_graph\": true}) to enable this tool.",
-                None,
-            ));
-        }
-
-        let (inb_off, inb_tgt) = sess
-            .cache
-            .read_inbound_csr()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("graph.bin missing from cache".to_string(), None)
-            })?;
-        let retained = sess
-            .cache
-            .read_retained()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::internal_error("retained missing".to_string(), None))?;
-        let shallow = sess
-            .cache
-            .read_shallow()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::internal_error("shallow missing".to_string(), None))?;
-        let class_idx = sess
-            .cache
-            .read_class_idx()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::internal_error("class_idx missing".to_string(), None))?;
-
-        let limit = p.limit.unwrap_or(20).min(100);
-        let needle = p.class_name.to_lowercase();
-        let n = shallow.len();
-
-        // Find all objects whose class name contains the search term (substring,
-        // case-insensitive). This mirrors find_incoming_references: the inbound
-        // CSR covers EVERY object, not just the obj-graph's "significant" subset.
-        let mut target_indices: Vec<u32> = Vec::new();
-        for i in 0..n {
-            let cidx = class_idx[i] as usize;
-            if sess
-                .class_names
-                .get(cidx)
-                .is_some_and(|name| name.to_lowercase().contains(&needle))
-            {
-                target_indices.push(i as u32);
-            }
-        }
-
-        if target_indices.is_empty() {
-            let result = serde_json::json!({
-                "class_name": p.class_name,
-                "matched_instances": 0,
-                "rows": [],
-                "_hint": format!(
-                    "No objects with class matching {:?} found. \
-                     Try a broader class name or check spelling.",
-                    p.class_name,
-                ),
-            });
-            let json = serde_json::to_string_pretty(&result)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-            return Ok(CallToolResult::success(vec![ContentBlock::text(json)]));
-        }
-
-        // Aggregate inbound references across all matching target instances.
-        #[derive(Default)]
-        struct SrcAgg {
-            ref_count: u64,
-            total_src_retained: u64,
-            total_src_shallow: u64,
-        }
-        let mut by_src: std::collections::HashMap<String, SrcAgg> =
-            std::collections::HashMap::new();
-        let mut matched_instances = 0usize;
-
-        for &idx in &target_indices {
-            let i = idx as usize;
-            if i + 1 >= inb_off.len() {
-                continue;
-            }
-            let start = inb_off[i] as usize;
-            let end = inb_off[i + 1] as usize;
-            if start == end {
-                // No inbound edges (GC root or unreferenced) — count it toward the
-                // "no captured inbound edges" note, not as a matched instance.
-                continue;
-            }
-            matched_instances += 1;
-            for &src in &inb_tgt[start..end] {
-                let s = src as usize;
-                let src_cidx = class_idx[s] as usize;
-                let src_class = sess
-                    .class_names
-                    .get(src_cidx)
-                    .map(|s| s.as_str())
-                    .unwrap_or("<unknown>");
-                let agg = by_src.entry(src_class.to_string()).or_default();
-                agg.ref_count += 1;
-                agg.total_src_retained += retained[s];
-                agg.total_src_shallow += shallow[s] as u64;
-            }
-        }
-
-        let mut rows: Vec<_> = by_src
-            .into_iter()
-            .map(|(src_class, agg)| {
-                serde_json::json!({
-                    "src_class": src_class,
-                    "ref_count": agg.ref_count,
-                    "total_src_retained": agg.total_src_retained,
-                    "total_src_shallow": agg.total_src_shallow,
-                })
-            })
-            .collect();
-        rows.sort_by(|a, b| {
-            b["ref_count"]
-                .as_u64()
-                .unwrap_or(0)
-                .cmp(&a["ref_count"].as_u64().unwrap_or(0))
-        });
-        rows.truncate(limit);
-
-        let result = serde_json::json!({
-            "class_name": p.class_name,
-            "matched_instances": matched_instances,
-            "total_target_nodes": target_indices.len(),
-            "rows": rows,
-            "_note": if target_indices.len() > matched_instances {
-                format!("{} matched nodes had no captured inbound edges (e.g. GC roots or objects with no referrers)",
-                    target_indices.len() - matched_instances)
-            } else {
-                String::new()
-            },
-        });
+        let limit = p.limit.unwrap_or(20);
+        let result = crate::heap_ops::find_incoming_by_class(sess, &p.class_name, limit)
+            .map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1486,6 +920,9 @@ impl HprofMcpServer {
                        Useful when you don't have a specific file path (e.g. 'analyze the dump I already loaded')."
     )]
     async fn get_session_info(&self) -> Result<CallToolResult, McpError> {
+        // Queue behind any in-flight load_dump so a mid-load status poll answers
+        // after the load resolves instead of wrongly reporting loaded:false.
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let result = match guard.as_ref() {
             None => serde_json::json!({
@@ -1565,6 +1002,9 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<RedactParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Serialize against other cache/dump operations so concurrent runs don't
+        // thrash the same on-disk cache directory.
+        let _gate = self.gate.lock().await;
         // I-01: validate input extension to prevent reading arbitrary files.
         let input_ext_ok = p.input.ends_with(".hprof")
             || p.input.ends_with(".hprof.gz")
@@ -1673,6 +1113,8 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<CompareDumpsParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Serialize against other cache/dump operations (shares the on-disk cache).
+        let _gate = self.gate.lock().await;
         let baseline_path = PathBuf::from(&p.baseline);
         let current_path = PathBuf::from(&p.current);
         let limit = p.limit.unwrap_or(20).min(100);
@@ -1863,93 +1305,13 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<GetDominatorPathParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
 
-        let idom = sess
-            .cache
-            .read_idom()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::internal_error("idom missing from cache".to_string(), None))?;
-        let retained = sess
-            .cache
-            .read_retained()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("retained missing from cache".to_string(), None)
-            })?;
-        let shallow = sess
-            .cache
-            .read_shallow()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("shallow missing from cache".to_string(), None)
-            })?;
-        let class_idx = sess
-            .cache
-            .read_class_idx()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("class_idx missing from cache".to_string(), None)
-            })?;
-
-        let n = shallow.len();
-        let idx = p.object_index as usize;
-        if idx >= n {
-            return Err(McpError::invalid_params(
-                format!("object_index {idx} out of range (heap has {n} objects)"),
-                None,
-            ));
-        }
-
-        // Walk idom[] upward.  Virtual root = n, UNDEFINED = u32::MAX.
-        let vroot = n as u32;
-        let mut path: Vec<serde_json::Value> = Vec::new();
-        let mut cur = idx as u32;
-        let max_steps = 1000; // safety cap
-        for _ in 0..max_steps {
-            if cur == u32::MAX {
-                // Undefined dominator (unreachable object): stop without emitting
-                // a bogus "<GC Root>" entry at index u32::MAX.
-                break;
-            }
-            let i = cur as usize;
-            let (class, sh, ret) = if i < n {
-                let cidx = class_idx[i] as usize;
-                let cname = sess
-                    .class_names
-                    .get(cidx)
-                    .map(|s| s.as_str())
-                    .unwrap_or("<unknown>");
-                (cname.to_string(), shallow[i], retained[i])
-            } else {
-                // i == n: the virtual GC root.
-                ("<GC Root>".to_string(), 0u32, 0u64)
-            };
-            path.push(serde_json::json!({
-                "index": i,
-                "class": class,
-                "shallow_bytes": sh,
-                "retained_bytes": ret,
-            }));
-            if cur == vroot {
-                break;
-            }
-            cur = idom[i];
-        }
-
-        let result = serde_json::json!({
-            "object_index": p.object_index,
-            "path_length": path.len(),
-            "path": path,
-            "_hint": "Path goes from the queried object (index 0) up to the GC root (last entry). \
-                      Each node dominates the starting object — every path from a GC root to the \
-                      starting object passes through every node in this chain. \
-                      Use inspect_object on any node for field details, or browse_dominators to \
-                      see its other children (siblings of the next node in the chain).",
-        });
+        let result = crate::heap_ops::dominator_path(sess, p.object_index).map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1973,94 +1335,15 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<GetOutboundReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
 
-        if sess.mode != CacheMode::Graph {
-            return Err(McpError::invalid_params(
-                "Forward reference data not available — the dump was not loaded with with_graph=true. \
-                 Reload with load_dump({\"path\": \"<same path>\", \"with_graph\": true}) to enable this tool.",
-                None,
-            ));
-        }
-
-        let (fwd_off, fwd_tgt) = sess
-            .cache
-            .read_forward_edges()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("graph.bin missing from cache".to_string(), None)
-            })?;
-
-        let retained = sess
-            .cache
-            .read_retained()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::internal_error("retained missing".to_string(), None))?;
-        let shallow = sess
-            .cache
-            .read_shallow()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::internal_error("shallow missing".to_string(), None))?;
-        let class_idx = sess
-            .cache
-            .read_class_idx()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::internal_error("class_idx missing".to_string(), None))?;
-
-        let idx = p.object_index as usize;
-        let n = shallow.len();
-        if idx >= n {
-            return Err(McpError::invalid_params(
-                format!("object_index {idx} out of range (heap has {n} objects)"),
-                None,
-            ));
-        }
-        if idx + 1 >= fwd_off.len() {
-            return Err(McpError::invalid_params(
-                format!("object_index {idx} has no forward edge data in graph.bin"),
-                None,
-            ));
-        }
-
-        let limit = p.limit.unwrap_or(50).min(200);
-        let start = fwd_off[idx] as usize;
-        let end = fwd_off[idx + 1] as usize;
-        let total_outbound = end - start;
-
-        let refs: Vec<serde_json::Value> = (start..end)
-            .take(limit)
-            .map(|j| {
-                let tgt = fwd_tgt[j] as usize;
-                let tgt_cidx = class_idx.get(tgt).copied().unwrap_or(0) as usize;
-                let tgt_class = sess
-                    .class_names
-                    .get(tgt_cidx)
-                    .map(|s| s.as_str())
-                    .unwrap_or("<unknown>");
-                serde_json::json!({
-                    "target_index": tgt,
-                    "target_class": tgt_class,
-                    "target_shallow": shallow.get(tgt).copied().unwrap_or(0),
-                    "target_retained": retained.get(tgt).copied().unwrap_or(0),
-                })
-            })
-            .collect();
-
-        let result = serde_json::json!({
-            "object_index": p.object_index,
-            "total_outbound_references": total_outbound,
-            "shown": refs.len(),
-            "truncated": total_outbound > limit,
-            "refs": refs,
-            "_hint": format!(
-                "Each 'target_index' is a dense object index. Use inspect_object({{\"object_index\": <target_index>}}) \
-                 for field details, browse_dominators({{\"object_index\": <target_index>}}) to see what it retains, \
-                 or get_dominator_path({{\"object_index\": <target_index>}}) for its retention chain."
-            ),
-        });
+        let limit = p.limit.unwrap_or(50);
+        let result = crate::heap_ops::outbound_references(sess, p.object_index, limit)
+            .map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -2083,81 +1366,13 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<GetFieldNameParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
-
-        if sess.mode != CacheMode::Graph {
-            return Err(McpError::invalid_params(
-                "Field name data not available — the dump was not loaded with with_graph=true. \
-                 Reload with load_dump({\"path\": \"<same path>\", \"with_graph\": true}) to enable this tool.",
-                None,
-            ));
-        }
-
-        let pool = match sess.field_name_pool.as_deref() {
-            Some(p) if p.len() > 1 => p,
-            _ => {
-                return Err(McpError::invalid_params(
-                    "Field name pool not available for this dump. The dump may have been cached \
-                     without --ref-paths, or field names were not captured during analysis. \
-                     Re-analyze with load_dump to rebuild the cache with field names.",
-                    None,
-                ));
-            }
-        };
-
-        let (fwd_off, _fwd_tgt) = sess
-            .cache
-            .read_forward_edges()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("graph.bin missing from cache".to_string(), None)
-            })?;
-
-        let fwd_field_idx = sess
-            .cache
-            .read_fwd_field_idx()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::invalid_params(
-                    "Per-edge field-name indices not in cache. The dump was loaded without \
-                     --ref-paths; re-analyze to capture field names.",
-                    None,
-                )
-            })?;
-
-        let src = p.src_object_index as usize;
-        let n = fwd_off.len().saturating_sub(1);
-        if src >= n {
-            return Err(McpError::invalid_params(
-                format!("src_object_index {src} out of range (heap has {n} objects)"),
-                None,
-            ));
-        }
-
-        let edge_start = fwd_off[src] as usize;
-        let edge_end = fwd_off[src + 1] as usize;
-        let total_edges = edge_end - edge_start;
-        let ei = p.edge_index as usize;
-        if ei >= total_edges {
-            return Err(McpError::invalid_params(
-                format!(
-                    "edge_index {ei} out of range — object {src} has {total_edges} outbound edge(s)"
-                ),
-                None,
-            ));
-        }
-
-        let pool_idx = fwd_field_idx[edge_start + ei] as usize;
-        let field_name = pool.get(pool_idx).map(|s| s.as_str()).unwrap_or("");
-
-        let result = serde_json::json!({
-            "src_object_index": src,
-            "edge_index": ei,
-            "field_name": field_name,
-        });
+        let result = crate::heap_ops::field_name(sess, p.src_object_index, p.edge_index)
+            .map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -2181,181 +1396,16 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<GetRetainedSetParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
 
-        let (dc_off, dc_tgt) = sess
-            .cache
-            .read_dominator_children()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("arrays.bin missing from cache".to_string(), None)
-            })?;
-        let retained = sess
-            .cache
-            .read_retained()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("retained missing from cache".to_string(), None)
-            })?;
-        let shallow = sess
-            .cache
-            .read_shallow()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("shallow missing from cache".to_string(), None)
-            })?;
-        let class_idx = sess
-            .cache
-            .read_class_idx()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("class_idx missing from cache".to_string(), None)
-            })?;
-
-        let n = shallow.len();
-        let idx = p.object_index as usize;
-        if idx >= n {
-            return Err(McpError::invalid_params(
-                format!("object_index {idx} out of range (heap has {n} objects)"),
-                None,
-            ));
-        }
-
-        let limit = p.limit.unwrap_or(50).min(500);
-        let class_filter = p.class_filter.as_deref().map(|s| s.to_lowercase());
-
-        // BFS/DFS over dominator children, sorted by retained desc at each level.
-        // We use a priority queue (BinaryHeap) to always visit the largest-retained
-        // objects first across the whole subtree, regardless of depth.
-        use std::cmp::Reverse;
-        use std::collections::BinaryHeap;
-
-        // (retained_bytes, depth, object_index) — BinaryHeap is max-heap, so
-        // the largest retained rises to the top naturally.
-        let mut heap: BinaryHeap<(u64, Reverse<u16>, u32)> = BinaryHeap::new();
-
-        // Seed with immediate children of the root object.
-        let root_i = idx;
-        if root_i + 1 < dc_off.len() {
-            let start = dc_off[root_i] as usize;
-            let end = dc_off[root_i + 1] as usize;
-            for j in start..end {
-                let child = dc_tgt[j];
-                let ret = retained.get(child as usize).copied().unwrap_or(0);
-                heap.push((ret, Reverse(1), child));
-            }
-        }
-
-        let mut results: Vec<serde_json::Value> = Vec::new();
-        let mut total_objects_visited = 0u64;
-        let mut total_shallow = 0u64;
-
-        // Class summary: class_name → (count, total_retained, total_shallow)
-        let mut class_summary: std::collections::HashMap<String, (u64, u64, u64)> =
-            std::collections::HashMap::new();
-
-        // Cap total nodes visited to prevent runaway on huge subtrees.
-        let max_visit = 100_000usize;
-
-        while let Some((ret, Reverse(depth), obj)) = heap.pop() {
-            let i = obj as usize;
-            if i >= n {
-                continue;
-            }
-            total_objects_visited += 1;
-
-            let cidx = class_idx[i] as usize;
-            let cname = sess
-                .class_names
-                .get(cidx)
-                .map(|s| s.as_str())
-                .unwrap_or("<unknown>");
-            let sh = shallow[i];
-
-            // Always count in summary.
-            let entry = class_summary.entry(cname.to_string()).or_default();
-            entry.0 += 1;
-            entry.1 += ret;
-            entry.2 += sh as u64;
-            total_shallow += sh as u64;
-
-            // Apply class filter for the results list.
-            let passes_filter = match &class_filter {
-                Some(f) => cname.to_lowercase().contains(f),
-                None => true,
-            };
-            if passes_filter && results.len() < limit {
-                results.push(serde_json::json!({
-                    "index": i,
-                    "class": cname,
-                    "shallow_bytes": sh,
-                    "retained_bytes": ret,
-                    "depth": depth,
-                }));
-            }
-
-            // Enqueue children if we haven't visited too many nodes.
-            if (total_objects_visited as usize) < max_visit && depth < 100 {
-                if i + 1 < dc_off.len() {
-                    let start = dc_off[i] as usize;
-                    let end = dc_off[i + 1] as usize;
-                    for j in start..end {
-                        let child = dc_tgt[j];
-                        let child_ret = retained.get(child as usize).copied().unwrap_or(0);
-                        heap.push((child_ret, Reverse(depth + 1), child));
-                    }
-                }
-            }
-        }
-
-        // Build class summary sorted by total retained desc.
-        let mut class_rows: Vec<serde_json::Value> = class_summary
-            .into_iter()
-            .map(|(class, (count, total_ret, total_sh))| {
-                serde_json::json!({
-                    "class": class,
-                    "count": count,
-                    "total_retained": total_ret,
-                    "total_shallow": total_sh,
-                })
-            })
-            .collect();
-        class_rows.sort_by(|a, b| {
-            b["total_retained"]
-                .as_u64()
-                .unwrap_or(0)
-                .cmp(&a["total_retained"].as_u64().unwrap_or(0))
-        });
-        class_rows.truncate(20);
-
-        let root_class = {
-            let cidx = class_idx[idx] as usize;
-            sess.class_names
-                .get(cidx)
-                .map(|s| s.as_str())
-                .unwrap_or("<unknown>")
-        };
-
-        let result = serde_json::json!({
-            "object_index": p.object_index,
-            "root_class": root_class,
-            "root_retained_bytes": retained[idx],
-            "total_objects_in_subtree": total_objects_visited,
-            "total_shallow_in_subtree": total_shallow,
-            "shown": results.len(),
-            "objects": results,
-            "class_summary": class_rows,
-            "_hint": format!(
-                "The retained set is the dominator subtree: all objects that would be freed if {} \
-                 (object {}) were garbage collected. class_summary shows where the retained memory \
-                 goes. Use inspect_object on individual entries, or re-call with class_filter to \
-                 focus on a specific class.",
-                root_class, idx
-            ),
-        });
+        let limit = p.limit.unwrap_or(50);
+        let result =
+            crate::heap_ops::retained_set(sess, p.object_index, limit, p.class_filter.as_deref())
+                .map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -2375,55 +1425,15 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<GetGcRootsParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
         let guard = self.session.lock().await;
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
 
         let limit = p.limit.unwrap_or(500);
-        let n = sess.report.overview.total_objects as usize;
+        let result = crate::heap_ops::gc_roots(sess, limit).map_err(ops_to_mcp)?;
 
-        let idom = sess
-            .cache
-            .read_idom()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("idom array not found in cache".to_string(), None)
-            })?;
-        let class_idx = sess
-            .cache
-            .read_class_idx()
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| {
-                McpError::internal_error("class_idx array not found in cache".to_string(), None)
-            })?;
-
-        // GC roots are objects whose immediate dominator is the virtual root (index n).
-        // idom has length n+1; idom[n] = n (vroot dominates itself, sentinel).
-        let vroot = n as u32;
-        let roots: Vec<serde_json::Value> = idom[..n]
-            .iter()
-            .enumerate()
-            .filter(|(_, d)| **d == vroot)
-            .take(limit)
-            .map(|(i, _)| {
-                let cidx = class_idx[i] as usize;
-                let class = sess
-                    .class_names
-                    .get(cidx)
-                    .cloned()
-                    .unwrap_or_else(|| "<unknown>".into());
-                serde_json::json!({ "object_index": i, "class": class })
-            })
-            .collect();
-
-        let total_gc_roots = sess.report.overview.gc_roots;
-        let result = serde_json::json!({
-            "total_gc_roots": total_gc_roots,
-            "shown": roots.len(),
-            "truncated": roots.len() == limit && (total_gc_roots as usize) > limit,
-            "roots": roots,
-        });
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -2533,11 +1543,47 @@ impl ServerHandler for HprofMcpServer {
              DO NOT use get_report({\"section\":\"top\"}) or get_report({\"section\":\"all\"}) — they return megabytes of data.\n\n\
              QUERY TIPS:\n\
              - Always SELECT @objectId to get indices for follow-up calls\n\
-             - Objects in results appear as 'ClassName@index' — the number after '@' is the object_index\n\
+             - Object references in results appear as {\"class\":\"ClassName\",\"index\":N} — use 'index' as object_index\n\
              - @retainedHeapSize = everything kept alive by this object (most useful for leak detection)\n\
              - Use INSTANCEOF to match subclasses; GROUP BY classof(x) to aggregate"
                 .to_string(),
         )
+    }
+}
+
+// ── Error mapping ─────────────────────────────────────────────────────────────
+
+/// Transport-level safety net: serialized tool output above this many bytes is
+/// replaced with a small `{_truncated:true, _hint:...}` stub instead of
+/// flooding the model context (the 3.8 MB "all" report and megabyte
+/// "dominators"/query payloads).
+const MAX_TOOL_OUTPUT_BYTES: usize = 256_000;
+
+/// Serialize `val` to pretty JSON; if the result exceeds
+/// [`MAX_TOOL_OUTPUT_BYTES`], return a compact `{"_truncated": true, "_hint": hint}`
+/// stub instead. Well-behaved responses pass through byte-for-byte unchanged.
+fn serialize_capped(val: &serde_json::Value, hint: &str) -> Result<String, McpError> {
+    let json = serde_json::to_string_pretty(val)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    if json.len() <= MAX_TOOL_OUTPUT_BYTES {
+        return Ok(json);
+    }
+    let stub = serde_json::json!({
+        "_truncated": true,
+        "_bytes": json.len(),
+        "_limit_bytes": MAX_TOOL_OUTPUT_BYTES,
+        "_hint": hint,
+    });
+    serde_json::to_string_pretty(&stub).map_err(|e| McpError::internal_error(e.to_string(), None))
+}
+
+fn ops_to_mcp(e: crate::heap_ops::HeapOpsError) -> McpError {
+    use crate::heap_ops::HeapOpsError;
+    match e {
+        HeapOpsError::BadParam(s) => McpError::invalid_params(s, None),
+        HeapOpsError::CacheMissing(s) | HeapOpsError::Internal(s) => {
+            McpError::internal_error(s, None)
+        }
     }
 }
 
@@ -2607,17 +1653,21 @@ fn build_node(
     };
 
     let mut children = Vec::new();
+    let mut total_children = 0usize;
+    let mut children_truncated = false;
     if depth > 0 {
         let i = idx as usize;
         if i + 1 < dc_off.len() {
             let start = dc_off[i] as usize;
             let end = dc_off[i + 1] as usize;
+            total_children = end - start;
             let mut ch: Vec<u64> = (start..end).map(|j| dc_tgt[j] as u64).collect();
             ch.sort_by(|&a, &b| {
                 let ra = retained.get(a as usize).copied().unwrap_or(0);
                 let rb = retained.get(b as usize).copied().unwrap_or(0);
                 rb.cmp(&ra)
             });
+            children_truncated = ch.len() > width;
             ch.truncate(width);
             for child_idx in ch {
                 children.push(build_node(
@@ -2641,6 +1691,8 @@ fn build_node(
         class,
         retained_bytes: ret,
         shallow_bytes: sh,
+        total_children,
+        children_truncated,
         children,
     }
 }
@@ -2667,6 +1719,9 @@ fn run_query_on_dump(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.0))?;
     let plan = query::optimize::optimize(plan, &q, &query::optimize::SchemaStats::default());
     let flat_plans = vec![(q, plan)];
+    let uses_subqueries = flat_plans.iter().any(|(_, p)| {
+        p.from_subplan.is_some() || !p.in_subplans.is_empty() || !p.exists_subplans.is_empty()
+    });
     // VALUES-only queries have no heap FROM source; short-circuit them before the
     // heap scan so `SELECT * FROM (VALUES ...)` returns inline rows (mirrors
     // `run_oql_query` in lib.rs).
@@ -2683,10 +1738,106 @@ fn run_query_on_dump(
         reachable_only,
         ..AnalyzeOptions::default()
     };
-    let results =
-        run_oql::run_oql_escalated(dump_str, &flat, &union_groups, reachable_only, &opts)?;
+    // Subquery-bearing plans must run through the two-phase pipeline to resolve
+    // FROM/IN/EXISTS subplans before outer execution. The escalated single-pass
+    // path expects those predicates pre-resolved and can panic if invoked here.
+    let results = if uses_subqueries {
+        query::run::run_single_dump(dump_str, &flat_plans, reachable_only)?
+    } else {
+        run_oql::run_oql_escalated(dump_str, &flat, &union_groups, reachable_only, &opts)?
+    };
 
-    Ok(serialize_query_results(results))
+    let out = serialize_query_results(results);
+    if out
+        .get("row_count")
+        .and_then(|v| v.as_u64())
+        .is_some_and(|n| n == 0)
+        && out.get("error").is_none()
+    {
+        if let Some(missing) = missing_exact_from_class(dump_path, &flat_plans[0].0)? {
+            return Ok(serde_json::json!({
+                "columns": [],
+                "rows": [],
+                "truncated": false,
+                "row_count": 0,
+                "error": format!("class `{missing}` not present in dump")
+            }));
+        }
+    }
+
+    Ok(out)
+}
+
+fn missing_exact_from_class(
+    dump_path: &std::path::Path,
+    q: &crate::query::ast::Query,
+) -> std::io::Result<Option<String>> {
+    use crate::query::ast::{FromSource, Predicate};
+
+    fn collect_exact_from_classes(q: &crate::query::ast::Query, out: &mut Vec<String>) {
+        if let FromSource::Class(spec) = &q.from {
+            if !spec.is_regex && !spec.class_name.contains('*') {
+                out.push(spec.class_name.clone());
+            }
+        }
+        if let FromSource::Subquery(inner) = &q.from {
+            collect_exact_from_classes(inner, out);
+        }
+        for b in &q.union_branches {
+            collect_exact_from_classes(b, out);
+        }
+        for b in &q.intersect_branches {
+            collect_exact_from_classes(b, out);
+        }
+        for b in &q.except_branches {
+            collect_exact_from_classes(b, out);
+        }
+        if let Some(pred) = &q.where_ {
+            collect_exact_from_classes_in_pred(pred, out);
+        }
+        if let Some(pred) = &q.having {
+            collect_exact_from_classes_in_pred(pred, out);
+        }
+    }
+
+    fn collect_exact_from_classes_in_pred(pred: &Predicate, out: &mut Vec<String>) {
+        match pred {
+            Predicate::And(a, b) | Predicate::Or(a, b) => {
+                collect_exact_from_classes_in_pred(a, out);
+                collect_exact_from_classes_in_pred(b, out);
+            }
+            Predicate::Not(a) => collect_exact_from_classes_in_pred(a, out),
+            Predicate::InSubquery { inner, .. } | Predicate::Exists { inner, .. } => {
+                collect_exact_from_classes(inner, out)
+            }
+            Predicate::Compare { .. } | Predicate::InstanceOf(_) | Predicate::Bool(_) => {}
+        }
+    }
+
+    let mut wanted = Vec::new();
+    collect_exact_from_classes(q, &mut wanted);
+    wanted.sort();
+    wanted.dedup();
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+
+    let source =
+        crate::source::HprofSource::from(dump_path.to_str().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "non-UTF8 path")
+        })?);
+    let p1 = crate::pass1::Pass1::run(&source, false)?;
+
+    let mut known = std::collections::HashSet::with_capacity(p1.class_map.len());
+    for ci in p1.class_map.values() {
+        if let Some(raw) = p1.strings.get(&ci.name_id) {
+            known.insert(raw.replace('/', "."));
+        }
+    }
+
+    Ok(wanted
+        .into_iter()
+        .find(|name| !known.contains(&name.replace('/', "."))))
 }
 
 /// Serialize a single-query result list (first result) into the MCP `query`
@@ -2718,19 +1869,9 @@ fn serialize_query_results(results: Vec<crate::query::model::QueryResult>) -> se
 }
 
 /// Convert a QueryValue to a plain JSON value suitable for LLM consumption.
-/// ObjRef renders as "ClassName@index" (a human-readable string).
+/// ObjRef renders as {"class": "ClassName", "index": N} (a structured JSON object).
 fn query_value_to_json(v: &crate::query::model::QueryValue) -> serde_json::Value {
-    use crate::query::model::QueryValue;
-    match v {
-        QueryValue::Null => serde_json::Value::Null,
-        QueryValue::Bool(b) => serde_json::Value::Bool(*b),
-        QueryValue::Int(n) => serde_json::json!(n),
-        QueryValue::Float(f) => serde_json::json!(f),
-        QueryValue::Str(s) => serde_json::Value::String(s.clone()),
-        QueryValue::ObjRef { index, class, .. } => {
-            serde_json::Value::String(format!("{class}@{index}"))
-        }
-    }
+    crate::heap_ops::query_value_to_json(v)
 }
 
 /// Resolve a view name or "/run name" shortcut to its OQL.
@@ -2797,7 +1938,7 @@ fn build_query_hint(result: &serde_json::Value) -> Option<String> {
 /// Recursively cap `dominator_tree` / `children` depth and width in a JSON value.
 /// Any `children` array found at depth >= max_depth is replaced with a truncation marker.
 /// At any depth, children arrays are also capped to max_width entries.
-fn truncate_dom_tree_depth(v: &mut serde_json::Value, max_depth: usize) {
+pub(crate) fn truncate_dom_tree_depth(v: &mut serde_json::Value, max_depth: usize) {
     truncate_dom_tree_inner(v, 0, max_depth, 20);
 }
 
@@ -2853,7 +1994,7 @@ fn truncate_dom_tree_inner(
 /// Remove low-signal fields from `dominated_by_class` entries in the leaks JSON.
 /// Keeps: pretty_class, instances, retained. Drops: loader_id, loader_label,
 /// max_instance_shallow, incoming_ref_count (rarely actionable for LLMs).
-fn strip_dominated_by_class_noise(v: &mut serde_json::Value) {
+pub(crate) fn strip_dominated_by_class_noise(v: &mut serde_json::Value) {
     const KEEP: &[&str] = &["pretty_class", "instances", "retained"];
     if let Some(suspects) = v.get_mut("suspects").and_then(|s| s.as_array_mut()) {
         for suspect in suspects.iter_mut() {
@@ -2918,15 +2059,7 @@ pub fn run_mcp_server(preload_dump: Option<PathBuf>) -> anyhow::Result<()> {
         })
 }
 
-fn field_value_to_json(fv: &crate::objread::FieldValue) -> serde_json::Value {
-    use crate::objread::FieldValue;
-    match fv {
-        FieldValue::Prim(v) => v.clone(),
-        FieldValue::Ref(addr) => serde_json::json!({"address": format!("0x{addr:x}")}),
-        FieldValue::Null => serde_json::Value::Null,
-    }
-}
-
+/// Delegate to the shared implementation in [`crate::heap_ops`].
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3240,6 +2373,144 @@ mod tests {
     }
 
     #[test]
+    fn query_values_string_literals_use_double_quotes() {
+        // OQL string literals are double-quoted. This ensures VALUES examples
+        // using strings work as documented.
+        let dir = std::env::temp_dir();
+        let mut path = dir;
+        path.push(format!(
+            "hprof_mcp_values_strings_test_{}.hprof",
+            std::process::id()
+        ));
+        let mut h = b"JAVA PROFILE 1.0.2\0".to_vec();
+        h.extend_from_slice(&8u32.to_be_bytes());
+        h.extend_from_slice(&0u64.to_be_bytes());
+        std::fs::write(&path, &h).unwrap();
+
+        let result = run_query_on_dump(
+            &path,
+            "SELECT * FROM (VALUES (1, \"a\"), (2, \"b\")) AS t(n, s)",
+            false,
+        )
+        .expect("VALUES string query should execute");
+        let _ = std::fs::remove_file(&path);
+
+        let rows = result
+            .get("rows")
+            .and_then(|r| r.as_array())
+            .unwrap_or_else(|| panic!("expected rows array, got {result}"));
+        assert_eq!(rows.len(), 2, "expected two inline VALUES rows: {result}");
+    }
+
+    #[test]
+    fn query_join_values_works() {
+        // JOIN against an inline VALUES table should parse and execute.
+        let dir = std::env::temp_dir();
+        let mut path = dir;
+        path.push(format!(
+            "hprof_mcp_join_values_test_{}.hprof",
+            std::process::id()
+        ));
+        let mut h = b"JAVA PROFILE 1.0.2\0".to_vec();
+        h.extend_from_slice(&8u32.to_be_bytes());
+        h.extend_from_slice(&0u64.to_be_bytes());
+        std::fs::write(&path, &h).unwrap();
+
+        let result = run_query_on_dump(
+            &path,
+            "SELECT t.n, p.label FROM (VALUES (1), (5)) AS t(n) JOIN (VALUES (1, \"MIN\"), (5, \"NORM\")) AS p(n, label) ON t.n = p.n",
+            false,
+        )
+        .expect("JOIN VALUES query should execute");
+        let _ = std::fs::remove_file(&path);
+
+        let rows = result
+            .get("rows")
+            .and_then(|r| r.as_array())
+            .unwrap_or_else(|| panic!("expected rows array, got {result}"));
+        assert_eq!(rows.len(), 2, "expected two joined rows: {result}");
+        assert!(
+            result.get("error").is_none(),
+            "JOIN VALUES should not return an error: {result}"
+        );
+    }
+
+    #[test]
+    fn query_values_in_literal_list_works() {
+        // Reproducer for IN-literal-list behavior on inline VALUES rows.
+        let dir = std::env::temp_dir();
+        let mut path = dir;
+        path.push(format!(
+            "hprof_mcp_values_in_list_test_{}.hprof",
+            std::process::id()
+        ));
+        let mut h = b"JAVA PROFILE 1.0.2\0".to_vec();
+        h.extend_from_slice(&8u32.to_be_bytes());
+        h.extend_from_slice(&0u64.to_be_bytes());
+        std::fs::write(&path, &h).unwrap();
+
+        let result = run_query_on_dump(
+            &path,
+            "SELECT n FROM (VALUES (1), (2), (3)) AS t(n) WHERE n IN (1, 3)",
+            false,
+        )
+        .expect("IN-list query should execute");
+        let _ = std::fs::remove_file(&path);
+
+        let rows = result
+            .get("rows")
+            .and_then(|r| r.as_array())
+            .unwrap_or_else(|| panic!("expected rows array, got {result}"));
+        assert_eq!(
+            rows.len(),
+            2,
+            "expected two rows matching IN list: {result}"
+        );
+        assert!(
+            result.get("error").is_none(),
+            "IN-list query should not return an error: {result}"
+        );
+    }
+
+    #[test]
+    fn query_subquery_uses_two_phase_path_without_crash() {
+        let result = run_query_on_dump(
+            std::path::Path::new("tests/fixtures/dump_4_philosophers.hprof"),
+            "SELECT s.@displayName FROM java.lang.String s WHERE s.@objectId IN (SELECT x.@objectId FROM java.lang.Thread x)",
+            false,
+        )
+        .expect("subquery query should execute and return JSON");
+
+        assert!(
+            result.get("error").is_none(),
+            "subquery query unexpectedly returned an error: {result}"
+        );
+        assert!(
+            result.get("row_count").and_then(|v| v.as_u64()).is_some(),
+            "expected row_count in result: {result}"
+        );
+    }
+
+    #[test]
+    fn query_unknown_exact_class_returns_explicit_error() {
+        let result = run_query_on_dump(
+            std::path::Path::new("tests/fixtures/dump_4_philosophers.hprof"),
+            "SELECT * FROM com.does.not.Exist",
+            false,
+        )
+        .expect("query should return JSON payload");
+
+        let err = result
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("expected explicit error for unknown class, got: {result}"));
+        assert!(
+            err.contains("not present in dump"),
+            "unexpected error text: {err}"
+        );
+    }
+
+    #[test]
     fn truncate_dom_tree_strips_deep_children() {
         let mut tree = serde_json::json!({
             "name": "root",
@@ -3474,5 +2745,77 @@ mod tests {
         };
         let result = cache.read_field_name_pool().unwrap();
         assert!(result.is_none(), "should return None when pool file absent");
+    }
+
+    /// serialize_capped passes small payloads through unchanged.
+    #[test]
+    fn serialize_capped_small_payload_passthrough() {
+        let val = serde_json::json!({"a": 1});
+        let out = serialize_capped(&val, "hint").unwrap();
+        assert!(out.contains("\"a\": 1"));
+        assert!(!out.contains("_truncated"));
+    }
+
+    /// serialize_capped replaces oversized payloads with a truncation stub.
+    #[test]
+    fn serialize_capped_oversized_payload_becomes_stub() {
+        let big = serde_json::json!({"blob": "x".repeat(300_000)});
+        let out = serialize_capped(&big, "too big hint").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["_truncated"], serde_json::json!(true));
+        assert!(parsed["_hint"].as_str().unwrap().contains("too big hint"));
+        assert!(parsed["_bytes"].as_u64().unwrap() > 256_000);
+    }
+
+    /// build_node records total_children/children_truncated when the width cap
+    /// drops siblings, and omits both on untruncated nodes.
+    #[test]
+    fn browse_node_reports_truncated_children() {
+        // 4 objects, virtual root = index 4; vroot -> [0,1,2,3]; width cap = 2.
+        // CSR convention (retained.rs build_dom_children_csr): offsets len n+2,
+        // the vroot's children occupy row n = child_off[4]..child_off[5].
+        let n = 4usize;
+        let dc_off = vec![0u32, 0, 0, 0, 0, 4];
+        let dc_tgt = vec![0u32, 1, 2, 3];
+        let shallow = vec![10u32; n];
+        let retained = vec![10u64; n];
+        let class_idx = vec![0u32; n];
+        let class_by_idx: std::collections::HashMap<u32, String> = [(0u32, "A")]
+            .into_iter()
+            .map(|(k, v)| (k, v.to_string()))
+            .collect();
+
+        let tree = browse_tree(
+            4,
+            1,
+            2,
+            n,
+            &dc_off,
+            &dc_tgt,
+            &retained,
+            &shallow,
+            &class_idx,
+            &class_by_idx,
+        );
+
+        assert_eq!(
+            tree["total_children"].as_u64(),
+            Some(4),
+            "root must report 4 total children, got {tree}"
+        );
+        assert_eq!(
+            tree["children_truncated"],
+            serde_json::json!(true),
+            "root with 4 children > width 2 must be marked truncated"
+        );
+        assert_eq!(
+            tree["children"].as_array().unwrap().len(),
+            2,
+            "children must be capped at width"
+        );
+        // Leaf nodes did not descend (depth 1 exhausted): no markers emitted.
+        let leaf = &tree["children"][0];
+        assert!(leaf.get("total_children").is_none());
+        assert!(leaf.get("children_truncated").is_none());
     }
 }

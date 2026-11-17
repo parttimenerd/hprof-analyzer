@@ -100,6 +100,44 @@ impl HprofType {
             Self::Double | Self::Long => 8,
         }
     }
+
+    /// Returns None for Object (size depends on id_size, caller must handle it),
+    /// or Some(n) for all fixed-size primitive types.
+    pub fn fixed_size(self) -> Option<usize> {
+        match self {
+            Self::Object => None,
+            Self::Boolean | Self::Byte => Some(1),
+            Self::Char | Self::Short => Some(2),
+            Self::Float | Self::Int => Some(4),
+            Self::Double | Self::Long => Some(8),
+        }
+    }
+}
+
+impl std::fmt::Display for HprofType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::Object => "Object",
+            Self::Boolean => "boolean",
+            Self::Char => "char",
+            Self::Float => "float",
+            Self::Double => "double",
+            Self::Byte => "byte",
+            Self::Short => "short",
+            Self::Int => "int",
+            Self::Long => "long",
+        };
+        write!(f, "{name}")
+    }
+}
+
+/// Returns the Java display names of all primitive types in `types`, skipping Object.
+pub fn primitive_names(types: &[HprofType]) -> Vec<String> {
+    types
+        .iter()
+        .filter(|t| t.fixed_size().is_some())
+        .map(|t| t.to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -116,6 +154,27 @@ mod tests {
         assert_eq!(HprofType::Short.byte_size(), 2);
         assert_eq!(HprofType::Int.byte_size(), 4);
         assert_eq!(HprofType::Long.byte_size(), 8);
+    }
+
+    #[test]
+    fn fixed_size_object_is_none() {
+        assert_eq!(HprofType::Object.fixed_size(), None);
+        assert_eq!(HprofType::Int.fixed_size(), Some(4));
+        assert_eq!(HprofType::Long.fixed_size(), Some(8));
+    }
+
+    #[test]
+    fn display_names() {
+        assert_eq!(HprofType::Int.to_string(), "int");
+        assert_eq!(HprofType::Object.to_string(), "Object");
+        assert_eq!(HprofType::Boolean.to_string(), "boolean");
+    }
+
+    #[test]
+    fn primitive_names_excludes_object() {
+        let types = vec![HprofType::Int, HprofType::Object, HprofType::Boolean];
+        let names = primitive_names(&types);
+        assert_eq!(names, vec!["int", "boolean"]);
     }
 
     #[test]

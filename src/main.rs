@@ -23,6 +23,7 @@ mod diff;
 mod diff_reports;
 mod dominator;
 mod gzindex;
+mod heap_server;
 mod html;
 mod id_map;
 mod mat;
@@ -625,6 +626,14 @@ enum HeapCmd {
             PossibleValue::new("categories").help("JDK/framework/application (or custom) class category rollup"),
             PossibleValue::new("static-collections").help("Collection classes (ArrayList/HashMap/…) with retained/shallow ratio"),
             PossibleValue::new("resources").help("File/stream/JDBC resource handle instance counts"),
+            PossibleValue::new("top-objects").help("Top individual objects by retained size"),
+            PossibleValue::new("top-classes").help("Top classes by retained size"),
+            PossibleValue::new("gc-roots").help("GC root counts and retained by type"),
+            PossibleValue::new("classloaders").help("Classloader count, loader rollup, duplicate classes"),
+            PossibleValue::new("strings").help("String/char[] counts and duplicate waste stats"),
+            PossibleValue::new("packages").help("Biggest packages tree"),
+            PossibleValue::new("culprits").help("Primary culprit objects (top retained holders)"),
+            PossibleValue::new("self-referential").help("Self-referential class leak patterns"),
             PossibleValue::new("all").help("All sections (default)"),
         ])]
         section: Option<String>,
@@ -759,6 +768,105 @@ enum HeapCmd {
         /// 0-based index of the outbound edge within the object's edge list.
         #[arg(long = "edge", value_name = "N")]
         edge: u64,
+    },
+    /// Walk the dominator chain from an object up to the virtual GC root.
+    ///
+    /// Each node in the chain dominates the starting object — every path from
+    /// a GC root to the object passes through every node in the chain.
+    DominatorPath {
+        /// Path to the .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        dump: String,
+        /// Dense object index (0-based).
+        #[arg(long = "index", value_name = "N")]
+        index: u64,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List all objects that the specified object directly references (outbound edges).
+    ///
+    /// Requires a graph-mode cache (built with --with-graph).
+    Outbound {
+        /// Path to the .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        dump: String,
+        /// Dense object index (0-based).
+        #[arg(long = "index", value_name = "N")]
+        index: u64,
+        /// Max references to show (default 50).
+        #[arg(long, value_name = "N", default_value_t = 50)]
+        limit: usize,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List GC root objects (entry points of the retention graph).
+    GcRoots {
+        /// Path to the .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        dump: String,
+        /// Max roots to show (default 500).
+        #[arg(long, value_name = "N", default_value_t = 500)]
+        limit: usize,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the retained set (dominator subtree) of an object — what would be
+    /// freed if the object were garbage collected.
+    RetainedSet {
+        /// Path to the .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        dump: String,
+        /// Dense object index (0-based).
+        #[arg(long = "index", value_name = "N")]
+        index: u64,
+        /// Max objects to show (default 50).
+        #[arg(long, value_name = "N", default_value_t = 50)]
+        limit: usize,
+        /// Optional class name substring to filter results.
+        #[arg(long, value_name = "CLASS")]
+        class_filter: Option<String>,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Aggregate inbound references by source class across all instances of a
+    /// target class. Answers "which classes are holding onto my Strings?"
+    ///
+    /// Requires a graph-mode cache (built with --with-graph).
+    FindIncomingByClass {
+        /// Path to the .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        dump: String,
+        /// Class name substring to match (case-insensitive).
+        #[arg(long = "class", value_name = "CLASS")]
+        class: String,
+        /// Max source classes to show (default 20).
+        #[arg(long, value_name = "N", default_value_t = 20)]
+        limit: usize,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Start a loopback HTTP server exposing all heap subcommands as JSON
+    /// endpoints. Loads the cache once (running the full pipeline if needed),
+    /// then serves fast REST responses without MCP.
+    ///
+    /// EXAMPLES:
+    ///   hprof-analyzer heap server dump.hprof
+    ///   hprof-analyzer heap server dump.hprof --port 30044
+    ///   curl http://127.0.0.1:30044/summary
+    ///   curl http://127.0.0.1:30044/report?section=leaks
+    ///   curl http://127.0.0.1:30044/query -d 'SELECT @displayName FROM java.lang.Thread'
+    Server {
+        /// Path to the .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        dump: String,
+        /// Port to bind (default 30044; loopback only).
+        #[arg(long, value_name = "N")]
+        port: Option<u16>,
     },
 }
 
@@ -1543,10 +1651,23 @@ fn run_heap_cmd(
         HeapCmd::Summary { dump, json } => {
             let sess = load(&dump, CacheMode::Full)?;
             let r = &sess.report;
+            if r.truncated_input {
+                // Loud, unmissable warning on stderr so it survives `| head`, JSON
+                // piping, etc. The summary itself is still emitted (partial-report
+                // contract — see README.md / CHANGELOG.md), but the reader is told
+                // the numbers below reflect only what was read before truncation.
+                eprintln!(
+                    "\x1b[1;33mWARNING: truncated heap dump — the file ended mid-record. \
+                     This summary reflects only the {} objects read before truncation and \
+                     is almost certainly incomplete. Re-copy the dump for a full analysis.\x1b[0m",
+                    r.overview.total_objects
+                );
+            }
             if json {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
+                        "truncated_input": r.truncated_input,
                         "suspects": &r.leaks.suspects.iter().take(5).map(|s| serde_json::json!({
                             "name": s.pretty_class,
                             "retained_bytes": s.retained,
@@ -1594,36 +1715,17 @@ fn run_heap_cmd(
             json,
         } => {
             let sess = load(&dump, CacheMode::Full)?;
-            let r = &sess.report;
             if json {
-                let val = match section.as_deref().unwrap_or("all") {
-                    "leaks" => serde_json::to_value(&r.leaks)?,
-                    "top" => serde_json::to_value(&r.top)?,
-                    "threads" => serde_json::to_value(&r.threads)?,
-                    "overview" => serde_json::to_value(&r.overview)?,
-                    "triage" => serde_json::to_value(&r.triage)?,
-                    "waste" => serde_json::to_value(serde_json::json!({
-                        "waste_summary": r.waste_summary,
-                        "waste_breakdown": r.waste_breakdown,
-                    }))?,
-                    "indicators" => serde_json::to_value(&r.leak_indicators)?,
-                    "retainers" => serde_json::to_value(&r.top_retainers)?,
-                    "arrays" => serde_json::to_value(&r.arrays_by_size)?,
-                    "collections" => serde_json::to_value(&r.collections)?,
-                    "references" => serde_json::to_value(&r.references)?,
-                    "dominators" => serde_json::to_value(&r.dominator_analysis)?,
-                    "components" => serde_json::to_value(&r.top_components)?,
-                    "alloc_sites" => serde_json::to_value(&r.alloc_sites)?,
-                    "thread_locals" => serde_json::to_value(&r.thread_local_analysis)?,
-                    "framework" => serde_json::to_value(&r.framework_analysis)?,
-                    "field_stats" => serde_json::to_value(&r.fields_by_size)?,
-                    "categories" => serde_json::to_value(&r.category_rollup)?,
-                    _ => serde_json::to_value(r)?,
-                };
+                let sec = section.as_deref().unwrap_or("all");
+                let val = hprof_analyzer::heap_ops::report_section(&sess, sec)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
                 println!("{}", serde_json::to_string_pretty(&val)?);
             } else {
                 let sec = section.as_deref().unwrap_or("all");
-                println!("{}", hprof_analyzer::render_report_section(r, sec));
+                println!(
+                    "{}",
+                    hprof_analyzer::render_report_section(&sess.report, sec)
+                );
             }
         }
         HeapCmd::Histogram { dump, limit, json } => {
@@ -2226,6 +2328,225 @@ fn run_heap_cmd(
                 println!("{field_name}");
             }
         }
+        HeapCmd::DominatorPath { dump, index, json } => {
+            let sess = load(&dump, CacheMode::Full)?;
+            let result = hprof_analyzer::heap_ops::dominator_path(&sess, index)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let path = result["path"].as_array().unwrap();
+                println!(
+                    "Dominator path for object #{index} ({} steps):\n",
+                    path.len()
+                );
+                for (i, node) in path.iter().enumerate() {
+                    let prefix = if i == 0 { "→" } else { "  ↑" };
+                    println!(
+                        "{prefix} #{} {}  shallow={}  retained={}",
+                        node["index"],
+                        node["class"].as_str().unwrap_or("?"),
+                        node["shallow_bytes"],
+                        hprof_analyzer::report::format_bytes(
+                            node["retained_bytes"].as_u64().unwrap_or(0)
+                        ),
+                    );
+                }
+            }
+        }
+        HeapCmd::Outbound {
+            dump,
+            index,
+            limit,
+            json,
+        } => {
+            let sess = load(&dump, CacheMode::Graph)?;
+            let result = hprof_analyzer::heap_ops::outbound_references(&sess, index, limit)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let total = result["total_outbound_references"].as_u64().unwrap_or(0);
+                let shown = result["shown"].as_u64().unwrap_or(0);
+                println!(
+                    "Object #{index} references {total} object(s){}:",
+                    if total > shown {
+                        format!(" (showing first {shown})")
+                    } else {
+                        String::new()
+                    },
+                );
+                for r in result["refs"].as_array().unwrap_or(&vec![]) {
+                    println!(
+                        "  → #{} {}  shallow={}  retained={}",
+                        r["target_index"],
+                        r["target_class"].as_str().unwrap_or("?"),
+                        r["target_shallow"],
+                        hprof_analyzer::report::format_bytes(
+                            r["target_retained"].as_u64().unwrap_or(0)
+                        ),
+                    );
+                }
+            }
+        }
+        HeapCmd::GcRoots { dump, limit, json } => {
+            let sess = load(&dump, CacheMode::Full)?;
+            let result = hprof_analyzer::heap_ops::gc_roots(&sess, limit)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let total = result["total_gc_roots"].as_u64().unwrap_or(0);
+                let shown = result["shown"].as_u64().unwrap_or(0);
+                println!(
+                    "GC roots: {total} total{}:\n",
+                    if result["truncated"].as_bool().unwrap_or(false) {
+                        format!(" (showing first {shown})")
+                    } else {
+                        String::new()
+                    },
+                );
+                for r in result["roots"].as_array().unwrap_or(&vec![]) {
+                    let shallow = r["shallow_bytes"].as_u64().unwrap_or(0);
+                    let retained = r["retained_bytes"].as_u64().unwrap_or(0);
+                    println!(
+                        "  #{:<8} {:>10} shallow  {:>12} retained  {}",
+                        r["object_index"],
+                        hprof_analyzer::report::format_bytes(shallow),
+                        hprof_analyzer::report::format_bytes(retained),
+                        r["class"].as_str().unwrap_or("?"),
+                    );
+                }
+            }
+        }
+        HeapCmd::RetainedSet {
+            dump,
+            index,
+            limit,
+            class_filter,
+            json,
+        } => {
+            let sess = load(&dump, CacheMode::Full)?;
+            let result = hprof_analyzer::heap_ops::retained_set(
+                &sess,
+                index,
+                limit,
+                class_filter.as_deref(),
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let root_class = result["root_class"].as_str().unwrap_or("?");
+                let root_ret = result["root_retained_bytes"].as_u64().unwrap_or(0);
+                let total_obj = result["total_objects_in_subtree"].as_u64().unwrap_or(0);
+                println!(
+                    "Retained set of #{index} ({root_class}, {})\n\
+                     Subtree: {total_obj} objects\n",
+                    hprof_analyzer::report::format_bytes(root_ret),
+                );
+                println!(
+                    "{:<60} {:>6} {:>12} {:>16}",
+                    "Class", "Depth", "Shallow", "Retained"
+                );
+                println!("{}", "-".repeat(96));
+                for obj in result["objects"].as_array().unwrap_or(&vec![]) {
+                    println!(
+                        "{:<60} {:>6} {:>12} {:>16}",
+                        obj["class"].as_str().unwrap_or("?"),
+                        obj["depth"],
+                        obj["shallow_bytes"],
+                        hprof_analyzer::report::format_bytes(
+                            obj["retained_bytes"].as_u64().unwrap_or(0)
+                        ),
+                    );
+                }
+                if !result["class_summary"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .is_empty()
+                {
+                    println!("\nClass summary (top 20 by retained):");
+                    println!("{:<60} {:>8} {:>16}", "Class", "Count", "Retained");
+                    println!("{}", "-".repeat(86));
+                    for row in result["class_summary"].as_array().unwrap_or(&vec![]) {
+                        println!(
+                            "{:<60} {:>8} {:>16}",
+                            row["class"].as_str().unwrap_or("?"),
+                            row["count"],
+                            hprof_analyzer::report::format_bytes(
+                                row["total_retained"].as_u64().unwrap_or(0)
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        HeapCmd::FindIncomingByClass {
+            dump,
+            class,
+            limit,
+            json,
+        } => {
+            let sess = load(&dump, CacheMode::Graph)?;
+            let result = hprof_analyzer::heap_ops::find_incoming_by_class(&sess, &class, limit)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let matched = result["matched_instances"].as_u64().unwrap_or(0);
+                let total = result["total_target_nodes"].as_u64().unwrap_or(0);
+                println!(
+                    "Inbound references to {:?} ({matched} instances with edges, {total} total matches):\n",
+                    class,
+                );
+                if matched == 0 {
+                    println!("No instances found matching that class name.");
+                } else {
+                    println!(
+                        "{:<60} {:>10} {:>16} {:>16}",
+                        "Source Class", "Ref Count", "Total Shallow", "Total Retained"
+                    );
+                    println!("{}", "-".repeat(104));
+                    for row in result["rows"].as_array().unwrap_or(&vec![]) {
+                        println!(
+                            "{:<60} {:>10} {:>16} {:>16}",
+                            row["src_class"].as_str().unwrap_or("?"),
+                            row["ref_count"],
+                            row["total_src_shallow"],
+                            hprof_analyzer::report::format_bytes(
+                                row["total_src_retained"].as_u64().unwrap_or(0)
+                            ),
+                        );
+                    }
+                }
+                let hint = result["_hint"].as_str().unwrap_or("");
+                if !hint.is_empty() {
+                    println!("\nNote: {hint}");
+                }
+            }
+        }
+        HeapCmd::Server { dump, port } => {
+            // Try Graph mode first (needed for find-incoming, field-name);
+            // fall back to Full if graph cache isn't available.
+            let graph_cached =
+                hprof_analyzer::cache::CacheDir::for_dump(std::path::Path::new(&dump))
+                    .map(|c| c.is_valid(CacheMode::Graph))
+                    .unwrap_or(false);
+            let mode = if graph_cached {
+                CacheMode::Graph
+            } else {
+                CacheMode::Full
+            };
+            let sess = load(&dump, mode)?;
+            let state = heap_server::HeapServerState {
+                dump_path: dump.clone(),
+                graph_cached,
+                sess,
+                lib_opts: lib_opts.clone(),
+            };
+            heap_server::run_heap_server(state, port.unwrap_or(heap_server::DEFAULT_PORT))?;
+        }
     }
     Ok(())
 }
@@ -2276,19 +2597,7 @@ fn dir_size_recursive(path: &std::path::Path) -> u64 {
 }
 
 fn qval_to_json(v: &hprof_analyzer::query::model::QueryValue) -> serde_json::Value {
-    use hprof_analyzer::query::model::QueryValue;
-    match v {
-        QueryValue::Null => serde_json::Value::Null,
-        QueryValue::Bool(b) => serde_json::Value::Bool(*b),
-        QueryValue::Int(n) => serde_json::json!(n),
-        QueryValue::Float(f) => serde_json::json!(f),
-        QueryValue::Str(s) => serde_json::Value::String(s.clone()),
-        QueryValue::ObjRef { index, class, .. } => {
-            // Emit a structured object so callers can extract class and index
-            // without parsing the opaque "ClassName@N" string.
-            serde_json::json!({"class": class, "index": index})
-        }
-    }
+    hprof_analyzer::heap_ops::query_value_to_json(v)
 }
 
 fn print_dom_tree(node: &serde_json::Value, indent: usize) {

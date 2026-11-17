@@ -11,6 +11,8 @@ pub mod cvec;
 mod dominator;
 #[cfg(feature = "native")]
 pub mod gzindex;
+#[cfg(feature = "native")]
+pub mod heap_ops;
 mod id_map;
 #[cfg(feature = "native")]
 pub mod mcp;
@@ -669,8 +671,14 @@ pub fn run_oql_query(
 
 /// Render one section of a Report to Markdown text.
 ///
-/// `section` is one of `"leaks"`, `"top"`, `"threads"`, `"overview"`, or `"all"`.
-/// Unknown section names fall back to `"all"` (full report).
+/// Render a single section of the report as Markdown.
+///
+/// Supported sections: `leaks`, `top`, `threads`, `overview`, `triage`, `waste`,
+/// `indicators`, `retainers`, `arrays`, `collections`, `references`, `dominators`,
+/// `components`, `alloc_sites`, `thread_locals`, `framework`, `field_stats`,
+/// `categories`, `static-collections`, `resources`, `top-objects`, `top-classes`,
+/// `gc-roots`, `classloaders`, `strings`, `packages`, `culprits`,
+/// `self-referential`, or `all` (default — full report).
 pub fn render_report_section(r: &report::Report, section: &str) -> String {
     use report::render_md;
     let mut out = String::new();
@@ -724,7 +732,168 @@ pub fn render_report_section(r: &report::Report, section: &str) -> String {
         "categories" => render_md::render_category_rollup(&r.category_rollup, "##", &mut out),
         "static-collections" => render_md::render_static_collections(&r.overview, &mut out),
         "resources" => render_md::render_resource_handles(&r.overview, &mut out),
-        _ => return render_md::render_markdown(r),
+        // ── Synthesized sections (Markdown rendering) ────────────────────
+        "top-objects" => {
+            out.push_str("## Top Objects by Retained Size\n\n");
+            out.push_str("| # | Class | Shallow | Retained |\n");
+            out.push_str("|---|-------|---------|----------|\n");
+            for (i, obj) in r.top.biggest_objects.iter().take(20).enumerate() {
+                out.push_str(&format!(
+                    "| {} | {} | {} | {} |\n",
+                    i + 1,
+                    obj.display_class,
+                    report::format_bytes(obj.shallow),
+                    report::format_bytes(obj.retained),
+                ));
+            }
+        }
+        "top-classes" => {
+            out.push_str("## Top Classes by Retained Size\n\n");
+            out.push_str("| # | Class | Instances | Retained |\n");
+            out.push_str("|---|-------|-----------|----------|\n");
+            for (i, c) in r.top.biggest_classes.iter().take(20).enumerate() {
+                out.push_str(&format!(
+                    "| {} | {} | {} | {} |\n",
+                    i + 1,
+                    c.pretty_class,
+                    c.instances,
+                    report::format_bytes(c.retained),
+                ));
+            }
+        }
+        "gc-roots" => {
+            out.push_str("## GC Roots\n\n");
+            out.push_str(&format!("Total GC roots: {}\n\n", r.overview.gc_roots));
+            if !r.overview.gc_roots_by_type.is_empty() {
+                out.push_str("| Root Type | Count |\n");
+                out.push_str("|-----------|-------|\n");
+                for row in &r.overview.gc_roots_by_type {
+                    out.push_str(&format!("| {} | {} |\n", row.root_type, row.count));
+                }
+            }
+        }
+        "classloaders" => {
+            out.push_str("## Class Loaders\n\n");
+            out.push_str(&format!(
+                "Class loaders: {}\n\n",
+                r.overview.classloaders_loaded
+            ));
+            if !r.overview.loader_rollup.is_empty() {
+                out.push_str("| Loader | Loaded Classes | Retained |\n");
+                out.push_str("|--------|----------------|----------|\n");
+                for lr in &r.overview.loader_rollup {
+                    let label = lr.loader_label.as_deref().unwrap_or("<unknown>");
+                    out.push_str(&format!(
+                        "| {} | {} | {} |\n",
+                        label,
+                        lr.class_count,
+                        report::format_bytes(lr.retained),
+                    ));
+                }
+            }
+            if !r.overview.duplicate_classes.is_empty() {
+                out.push_str(&format!(
+                    "\nDuplicate classes: {}\n",
+                    r.overview.duplicate_classes.len()
+                ));
+            }
+        }
+        "strings" => {
+            out.push_str("## String Analysis\n\n");
+            let str_row = r
+                .overview
+                .histogram
+                .iter()
+                .find(|h| h.pretty_class == "java.lang.String");
+            let backing_row = r
+                .overview
+                .histogram
+                .iter()
+                .find(|h| h.pretty_class == "byte[]" || h.pretty_class == "char[]");
+            if let Some(s) = str_row {
+                out.push_str(&format!(
+                    "- **String instances:** {} ({})\n",
+                    s.instances,
+                    report::format_bytes(s.shallow)
+                ));
+            }
+            if let Some(b) = backing_row {
+                out.push_str(&format!(
+                    "- **Backing arrays ({}):** {} ({})\n",
+                    b.pretty_class,
+                    b.instances,
+                    report::format_bytes(b.shallow)
+                ));
+            }
+            if let Some(d) = &r.overview.duplicate_strings {
+                out.push_str(&format!(
+                    "- **Duplicate strings:** {} values wasting ~{}\n",
+                    d.duplicated_values,
+                    report::format_bytes(d.approx_wasted_bytes)
+                ));
+            }
+        }
+        "packages" => {
+            out.push_str("## Biggest Packages\n\n");
+            if r.top.biggest_packages.children.is_empty() {
+                out.push_str("_(No package data available.)_\n");
+            } else {
+                out.push_str("| Package | Retained |\n");
+                out.push_str("|---------|----------|\n");
+                for p in &r.top.biggest_packages.children {
+                    out.push_str(&format!(
+                        "| {} | {} |\n",
+                        if p.name.is_empty() { "<root>" } else { &p.name },
+                        report::format_bytes(p.retained_heap),
+                    ));
+                }
+            }
+        }
+        "culprits" => {
+            out.push_str("## Primary Culprits\n\n");
+            if r.primary_culprits.is_empty() {
+                out.push_str("_(No culprits identified.)_\n");
+            } else {
+                out.push_str("| Class | Retained | % of Heap |\n");
+                out.push_str("|-------|----------|----------|\n");
+                for c in &r.primary_culprits {
+                    out.push_str(&format!(
+                        "| {} | {} | {:.1}% |\n",
+                        c.class_name,
+                        report::format_bytes(c.retained),
+                        c.retained_pct,
+                    ));
+                }
+            }
+        }
+        "self-referential" => {
+            out.push_str("## Self-Referential Classes\n\n");
+            if r.self_referential_classes.is_empty() {
+                out.push_str("_(No self-referential class patterns detected.)_\n");
+            } else {
+                out.push_str("| Class | Instances | Retained |\n");
+                out.push_str("|-------|-----------|----------|\n");
+                for c in &r.self_referential_classes {
+                    out.push_str(&format!(
+                        "| {} | {} | {} |\n",
+                        c.pretty_class,
+                        c.instances,
+                        report::format_bytes(c.retained),
+                    ));
+                }
+            }
+        }
+        "all" => return render_md::render_markdown(r),
+        other => {
+            return format!(
+                "Unknown section {:?}. Valid sections: leaks, top, threads, overview, triage, \
+                 waste, indicators, retainers, arrays, collections, references, dominators, \
+                 components, alloc_sites, thread_locals, framework, field_stats, categories, \
+                 top-objects, top-classes, gc-roots, classloaders, strings, packages, culprits, \
+                 self-referential, static-collections, resources, all",
+                other
+            );
+        }
     }
     out
 }

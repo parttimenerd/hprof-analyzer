@@ -36,13 +36,14 @@ SELECT <columns> FROM <class> [alias] [WHERE <cond>]
 | Pattern | Matches |
 |---------|---------|
 | `java.lang.String` | Exact class name |
-| `java.lang.String*` | Glob (prefix match — does NOT match inner classes like `String$Entry`) |
+| `java.lang.String*` | Glob (prefix match — matches the class itself plus subclasses and inner classes like `String$Entry`) |
 | `INSTANCEOF java.lang.Object` | Class + all subclasses (Java instanceof) |
 | `byte[]`, `int[]`, `char[]` | Primitive arrays |
 | `java.lang.Object[]` | Object arrays |
 
 **⚠️ Inner classes** use `$` separator: `java.util.HashMap$Node`, `java.util.zip.ZipFile$Source`.
-Glob `HashMap*` does NOT match `HashMap$Node` — inner classes must be named exactly or with `INSTANCEOF`.
+The trailing-star glob `HashMap*` DOES match `HashMap$Node` (prefix match includes `$`-joined inner classes).
+For more control, use a quoted regex: `FROM "java\.util\.zip\..*"`.
 
 **⚠️ Reserved alias conflict**: Do not use `retained` or `RETAINED` as a column alias — it conflicts with the `AS RETAINED SET` keyword. Use `retained_bytes`, `ret`, or `ret_b` instead.
 
@@ -915,8 +916,8 @@ Lists **all** objects that directly reference the given object, read from the fu
 No significance floor — every referrer is included regardless of retained size.
 - Requires `load_dump({with_graph: true})` — returns an error otherwise with reload instructions
 - `limit`: max rows to return (default 50, max 200)
-- Each row: `{src_idx, src_class, src_shallow, src_retained}`
-- Use `src_idx` with `browse_dominators` or `inspect_object` to follow the retainer chain upward
+- Each row: `{object_index, class, shallow_bytes, retained_bytes}`
+- Use `object_index` with `browse_dominators` or `inspect_object` to follow the retainer chain upward
 - Compare with `inspect_object` inbound_refs: same CSR source, but no 20-row cap here
 
 ### find_incoming_references_by_class({ class_name, limit? })

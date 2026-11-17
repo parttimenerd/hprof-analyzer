@@ -742,7 +742,8 @@ where
             ident_ci("SET").to(true).or(any().or_not().validate(|_, e, emitter| {
                 emitter.emit(Rich::custom(
                     e.span(),
-                    "expected SET after 'AS RETAINED' (usage: SELECT <expr> AS RETAINED SET FROM ...)",
+                    "expected SET after 'AS RETAINED' (usage: SELECT <expr> AS RETAINED SET FROM ...). \
+                     `RETAINED` is reserved here; use a different column alias (e.g. retained_count)",
                 ));
                 true
             })),
@@ -4304,6 +4305,15 @@ mod tests {
         assert!(
             err.to_string().contains("expected SET after 'AS RETAINED'"),
             "unexpected: {err}"
+        );
+    }
+    #[test]
+    fn parse_as_retained_missing_set_mentions_reserved_alias() {
+        let err = parse("SELECT COUNT(*) AS retained FROM java.lang.String").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("reserved") && msg.contains("retained_count"),
+            "expected reserved alias guidance, got: {msg}"
         );
     }
     #[test]
