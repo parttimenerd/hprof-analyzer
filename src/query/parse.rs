@@ -116,11 +116,6 @@ pub enum Token {
         priority = 4
     )]
     Float(f64),
-    // Char: exactly one char between single quotes, no escapes (MAT CHARACTER_LITERAL).
-    #[regex(r"'[^'\\\n\r]'", |lex| {
-        let s = lex.slice();
-        s[1..s.len() - 1].chars().next().map(|c| c as i64)
-    })]
     // Hex: 0x… with optional L suffix. Separate token from decimal so that
     // `FROM OBJECTS 0x...` (heap address) vs `FROM OBJECTS 123` (dense index)
     // can be distinguished at parse time. Parsed as u64 then reinterpreted as
@@ -130,6 +125,15 @@ pub enum Token {
         u64::from_str_radix(&s[2..], 16).ok().map(|v| v as i64)
     }, priority = 3)]
     HexInt(i64),
+    // Char: exactly one char between single quotes, no escapes (MAT CHARACTER_LITERAL).
+    // Must sit directly above the `Int` variant: logos attaches each regex to
+    // the FOLLOWING variant, and this block accidentally attached to `HexInt`
+    // when that variant was inserted above it (making `'a'` lex as HexInt(97)
+    // and breaking the char-literal contract everywhere).
+    #[regex(r"'[^'\\\n\r]'", |lex| {
+        let s = lex.slice();
+        s[1..s.len() - 1].chars().next().map(|c| c as i64)
+    })]
     // Octal: leading 0 followed by 1+ octal digits, optional L. (Lone `0` and
     // `08`/`09` fall through to the decimal arm — lenient MAT divergence.)
     // leading 0 is a valid octal digit; from_str_radix(_, 8) handles the full slice.
@@ -6242,9 +6246,13 @@ mod tests {
         assert_eq!(toks("100"), vec![Int(100)]);
         assert_eq!(toks("100L"), vec![Int(100)]);
         assert_eq!(toks("100l"), vec![Int(100)]);
-        assert_eq!(toks("0xFF"), vec![Int(255)]);
-        assert_eq!(toks("0Xff"), vec![Int(255)]);
-        assert_eq!(toks("0xFFL"), vec![Int(255)]);
+        // Hex literals lex as `HexInt` since the `FROM OBJECTS <seed>` split:
+        // a hex form (`0x1295e2f8`) is a heap ADDRESS (is_addr=true), a decimal
+        // form is a dense index (is_addr=false) — the token distinction is what
+        // makes the FromSource::Object parse able to tell them apart.
+        assert_eq!(toks("0xFF"), vec![HexInt(255)]);
+        assert_eq!(toks("0Xff"), vec![HexInt(255)]);
+        assert_eq!(toks("0xFFL"), vec![HexInt(255)]);
         assert_eq!(toks("0144"), vec![Int(100)]);
         assert_eq!(toks("0144L"), vec![Int(100)]);
         assert_eq!(toks("0"), vec![Int(0)]);
