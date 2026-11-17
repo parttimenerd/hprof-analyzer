@@ -51,6 +51,10 @@ jobs:
       - name: Build
         run: cargo build --release --features native
 
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
       - name: TypeScript type check (web report viewer)
         working-directory: web
         run: npm run type-check

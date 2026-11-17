@@ -2570,9 +2570,8 @@ fn blank_query_message(src: &str) -> Option<String> {
         && trimmed[4..].starts_with(|c: char| c.is_whitespace() || c == '(')
     {
         return Some(
-            "WITH/CTE syntax is not yet supported — \
-             rewrite as a subquery in the FROM clause: \
-             `SELECT … FROM (SELECT …) t`"
+            "WITH (common table expressions) are not supported; \
+             inline the subquery in FROM: SELECT ... FROM (SELECT ...) t"
                 .to_string(),
         );
     }
@@ -4714,6 +4713,31 @@ mod tests {
             assert!(
                 err.0.contains("empty query") && err.0.contains("SELECT"),
                 "expected an actionable blank-query message, got: {}",
+                err.0
+            );
+        }
+    }
+
+    #[test]
+    fn with_cte_gives_actionable_message() {
+        // B6b regression: `WITH` CTEs are rejected at parse time with a plain,
+        // honest unsupported-feature message that points at the FROM-subquery
+        // form — regardless of case or the following character.
+        for src in [
+            "WITH t AS (SELECT * FROM java.lang.Thread) SELECT * FROM t",
+            "with t AS (SELECT 1) SELECT * FROM t",
+            "WITH  (SELECT 1) SELECT 1",
+        ] {
+            let err = parse(src).expect_err("WITH query should error");
+            assert!(
+                err.0
+                    .contains("WITH (common table expressions) are not supported"),
+                "expected the unsupported-WITH message, got: {}",
+                err.0
+            );
+            assert!(
+                err.0.contains("FROM (SELECT ...) t"),
+                "message must point at the FROM-subquery form, got: {}",
                 err.0
             );
         }

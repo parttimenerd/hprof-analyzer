@@ -3144,11 +3144,16 @@ pub fn run_single_dump(
         // Apply the outer LIMIT now — deferred here because the scan could not
         // early-stop without capping pre-semi-join rows (SW-6). `retain` keeps
         // the outer scan/sort order, so this is the correct first-N / top-N.
+        // Truncation semantics (OQL-4): when rows exceed the LIMIT the result is
+        // marked truncated so callers know rows were dropped; LIMIT 0 is an
+        // explicit "give me nothing" request and never marks truncated.
         if let Some(limit) = flat[*slot].1.limit {
-            if r.rows.len() > limit as usize {
-                r.rows.truncate(limit as usize);
-                // A LIMIT reached only after the semi-join is an explicit cap,
-                // not lost data; leave `truncated` reflecting inner-set loss only.
+            let lim = limit as usize;
+            if r.rows.len() > lim {
+                r.rows.truncate(lim);
+                if lim > 0 {
+                    r.truncated = true;
+                }
             }
         }
         r.row_count = r.rows.len() as u64;
@@ -4443,6 +4448,41 @@ mod tests {
                 assert!(addr != 0, "@objectAddress must not be 0 in carry mode");
             }
         }
+    }
+
+    #[test]
+    fn from_subquery_outer_limit_applied_after_semijoin() {
+        // B9 regression: the outer query's LIMIT must be applied AFTER the
+        // FROM-subquery semi-join (SW-6), with truncation semantics — the result
+        // is marked truncated when rows exceed the LIMIT, and LIMIT 0 is an
+        // explicit empty request that never marks truncated (OQL-4).
+        let path = "tests/fixtures/dump_4_philosophers.hprof";
+
+        let (q, plan) = parse_plan_opt(
+            "SELECT @objectId FROM (SELECT @objectId FROM java.lang.Thread) t LIMIT 3",
+        );
+        let results = run_single_dump(path, &[(q, plan)], true).expect("run LIMIT 3");
+        let r = &results[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(
+            r.row_count, 3,
+            "outer LIMIT 3 must cap the semi-joined rows"
+        );
+        assert_eq!(r.rows.len(), 3);
+        assert!(
+            r.truncated,
+            "LIMIT 3 over a larger match set must mark truncated"
+        );
+
+        // LIMIT 0: explicit empty — 0 rows, NOT truncated (OQL-4).
+        let (q, plan) = parse_plan_opt(
+            "SELECT @objectId FROM (SELECT @objectId FROM java.lang.Thread) t LIMIT 0",
+        );
+        let results = run_single_dump(path, &[(q, plan)], true).expect("run LIMIT 0");
+        let r = &results[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.row_count, 0, "LIMIT 0 is an explicit empty result");
+        assert!(!r.truncated, "LIMIT 0 must not mark truncated (OQL-4)");
     }
 
     /// Minimal `ClassResolver` mapping a couple of class addresses to names;
