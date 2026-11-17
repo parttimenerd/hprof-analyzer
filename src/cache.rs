@@ -107,9 +107,11 @@ pub struct CacheDir {
 }
 
 impl CacheDir {
-    /// Compute (or create) the cache directory for the given dump file.
-    pub fn for_dump(dump: &Path) -> io::Result<Self> {
-        let hash = dump_hash(dump)?;
+    /// Compute (but do NOT create) the per-dump cache root directory:
+    /// `<dump_dir>/<dump_name>.hprof-cache`. Unlike [`Self::for_dump`] this
+    /// has no filesystem side effects, so listing/clearing commands can
+    /// enumerate entries without eagerly materializing an empty dir.
+    pub fn cache_root_for(dump: &Path) -> io::Result<PathBuf> {
         let mut dir = dump.to_path_buf();
         // Append ".hprof-cache/<hash>" alongside the dump.
         let name = dir
@@ -118,7 +120,13 @@ impl CacheDir {
             .unwrap_or_else(|| "dump.hprof-cache".to_string());
         dir.pop();
         dir.push(name);
-        dir.push(&hash);
+        Ok(dir)
+    }
+
+    /// Compute (or create) the cache directory for the given dump file.
+    pub fn for_dump(dump: &Path) -> io::Result<Self> {
+        let dir = Self::cache_root_for(dump)?;
+        let dir = dir.join(dump_hash(dump)?);
         fs::create_dir_all(&dir)?;
         Ok(Self { path: dir })
     }
@@ -133,7 +141,18 @@ impl CacheDir {
         let class_names_ok = check_zstd_magic(&self.path.join("class_names.json.zst"));
         let base_ok = report_ok && pass1_ok && arrays_ok && class_names_ok;
         if mode == CacheMode::Graph {
-            base_ok && check_magic(&self.path.join("graph.bin"))
+            // H2: verify graph.bin actually contains the inbound-CSR sections, not
+            // just valid magic. An older graph.bin (written before inbound CSR was
+            // added) passes the magic check but has no inb_off/inb_tgt entries,
+            // causing a CacheMissing error later. Probing the index here forces a
+            // cache rebuild so the MCP server gets a fully-populated graph.bin.
+            let graph_path = self.path.join("graph.bin");
+            let graph_ok = check_magic(&graph_path)
+                && seek_to_entry(&graph_path, "inb_off")
+                    .ok()
+                    .flatten()
+                    .is_some();
+            base_ok && graph_ok
         } else {
             base_ok
         }

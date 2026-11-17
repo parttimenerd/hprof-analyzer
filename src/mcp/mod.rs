@@ -3,7 +3,10 @@ pub mod oql_docs;
 mod params;
 use params::{EdgeIndex, ObjectIndex, SrcObjectIndex};
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
@@ -429,7 +432,6 @@ pub struct HprofMcpServer {
     /// the gate before reading it, so they observe it consistently with the
     /// session; load_dump bumps it while still holding the gate. Atomic also
     /// lets the two stateless tools (get_oql_docs, list_views) stamp it.
-    #[allow(dead_code)]
     epoch: Arc<std::sync::atomic::AtomicU64>,
     /// FIFO gate serializing stateful tool handlers in request-arrival order.
     ///
@@ -461,7 +463,6 @@ impl HprofMcpServer {
     }
 
     /// Current session epoch (0 = no dump loaded in this session yet).
-    #[allow(dead_code)]
     fn epoch(&self) -> u64 {
         self.epoch.load(std::sync::atomic::Ordering::SeqCst)
     }
@@ -469,7 +470,6 @@ impl HprofMcpServer {
     /// H1: when the caller passed `expected_epoch`, verify the session has not
     /// been switched to a different dump since. Must be called while the FIFO
     /// gate is held (same epoch-visibility contract as the handlers themselves).
-    #[allow(dead_code)]
     fn check_expected_epoch(&self, expected: Option<u64>) -> Result<(), McpError> {
         if let Some(x) = expected {
             let e = self.epoch();
@@ -545,6 +545,21 @@ impl HprofMcpServer {
                 None,
             ));
         }
+        // D2: a relative path resolves against the SERVER's working directory,
+        // which differs from the calling agent's cwd — a bare ENOENT gives no
+        // clue about that. Reject relative paths with the hint up front, and
+        // append the same hint when an absolute path is simply not found.
+        if !Path::new(&p.path).is_absolute() {
+            return Err(McpError::invalid_params(
+                format!(
+                    "path '{}' is relative — the MCP server resolves paths against its own \
+                     working directory, which differs from yours; pass an absolute path \
+                     (e.g. /full/path/to/dump.hprof)",
+                    p.path
+                ),
+                None,
+            ));
+        }
         let mode = if p.with_graph {
             CacheMode::Graph
         } else {
@@ -571,7 +586,26 @@ impl HprofMcpServer {
         })
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        .map_err(|e| {
+            // D2: an absolute path that doesn't exist on the server host gets
+            // the same "whose filesystem?" hint, since agents commonly assume
+            // path parity with their own machine.
+            let msg = e.to_string();
+            let is_not_found = e.kind() == std::io::ErrorKind::NotFound
+                || msg.contains("No such file or directory");
+            if is_not_found {
+                McpError::invalid_params(
+                    format!(
+                        "{msg}\nhint: the MCP server reads paths on ITS host — verify the \
+                         dump exists there (absolute path required, e.g. \
+                         /full/path/to/dump.hprof)"
+                    ),
+                    None,
+                )
+            } else {
+                McpError::internal_error(msg, None)
+            }
+        })?;
 
         let suspects_text: String = if result.report.leaks.suspects.is_empty() {
             "  (none detected)\n".to_string()
@@ -685,6 +719,8 @@ impl HprofMcpServer {
             oql_hints = oql_hints,
         );
         *session_ref.lock().await = Some(result);
+        let new_epoch = self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let summary = format!("{summary}\nsession_epoch: {new_epoch}");
         Ok(CallToolResult::success(vec![ContentBlock::text(summary)]))
     }
 
@@ -882,6 +918,7 @@ impl HprofMcpServer {
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
+        self.check_expected_epoch(p.expected_epoch)?;
         let depth = p.depth.unwrap_or(3).min(8);
         let width = p.width.unwrap_or(10).min(50) as usize;
         let result = crate::heap_ops::browse(sess, p.object_index.map(|v| v.get()), depth, width)
@@ -913,6 +950,7 @@ impl HprofMcpServer {
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
+        self.check_expected_epoch(p.expected_epoch)?;
         let result = crate::heap_ops::inspect(sess, p.object_index.get()).map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -940,6 +978,7 @@ impl HprofMcpServer {
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
+        self.check_expected_epoch(p.expected_epoch)?;
         let limit = p.limit.unwrap_or(50).min(200);
         let result = crate::heap_ops::find_incoming(sess, p.object_index.get(), limit)
             .map_err(ops_to_mcp)?;
@@ -1379,6 +1418,7 @@ impl HprofMcpServer {
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
+        self.check_expected_epoch(p.expected_epoch)?;
 
         let result =
             crate::heap_ops::dominator_path(sess, p.object_index.get()).map_err(ops_to_mcp)?;
@@ -1410,6 +1450,7 @@ impl HprofMcpServer {
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
+        self.check_expected_epoch(p.expected_epoch)?;
 
         let limit = p.limit.unwrap_or(50);
         let result = crate::heap_ops::outbound_references(sess, p.object_index.get(), limit)
@@ -1472,6 +1513,7 @@ impl HprofMcpServer {
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
+        self.check_expected_epoch(p.expected_epoch)?;
 
         let limit = p.limit.unwrap_or(50);
         let result = crate::heap_ops::retained_set(
@@ -1656,6 +1698,18 @@ fn ops_to_mcp(e: crate::heap_ops::HeapOpsError) -> McpError {
     use crate::heap_ops::HeapOpsError;
     match e {
         HeapOpsError::BadParam(s) => McpError::invalid_params(s, None),
+        // H2: graph.bin cache misses mean the dump was not loaded with with_graph=true
+        // (or the graph.bin was written by an older build). Surface an actionable message.
+        HeapOpsError::CacheMissing(s) if s.contains("graph.bin") => McpError::invalid_params(
+            format!(
+                "reference graph not available ({s}) — reload the dump with \
+                     load_dump({{\"path\":\"<path>\", \"with_graph\":true}}) to enable \
+                     find_incoming_references and get_outbound_references; \
+                     if that still fails, clear the cache first: \
+                     `hprof-analyzer heap cache-clear <path>`"
+            ),
+            None,
+        ),
         HeapOpsError::CacheMissing(s) | HeapOpsError::Internal(s) => {
             McpError::internal_error(s, None)
         }
