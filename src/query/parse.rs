@@ -2841,35 +2841,31 @@ fn rewrite_string_dot_method(src: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// Tokenize (logos) → chumsky parse, returning a compact single-line message
-/// `unexpected <found> at <line>:<col>` (or the tokenizer's offset message) on
-/// failure. Backs [`parse`]; [`parse_or_report`] renders errors differently.
 // ── WITH (common table expressions) ─────────────────────────────────────────
 //
 // B6b: `WITH <name> AS (<query>), … <main query>` is implemented as a token-
 // level pre-pass + AST desugaring: every FROM reference to a CTE name becomes
 // `FromSource::Subquery(<cte body>)`, reusing the existing FROM-subquery
-// machinery end-to-end. Later CTEs may reference earlier ones; self-references
-// are rejected (no recursion). Each reference executes its own copy of the body
-// (not materialised once) — correct results, simple execution.
+// machinery end-to-end. CTE bodies must be self-contained (CTE→CTE references
+// and self-references are rejected). Each reference executes its own copy of
+// the body (not materialised once) — correct results, simple execution.
 
 /// True when `toks` starts with the keyword `WITH` (case-insensitive).
 fn starts_with_with(toks: &[(Token, SimpleSpan)]) -> bool {
     matches!(toks.first(), Some((Token::Ident(w), _)) if w.eq_ignore_ascii_case("with"))
 }
 
+/// A split-off leading WITH clause: the `(name, body-tokens)` pairs plus the
+/// remaining main-query tokens. Inner slices borrow from the input tokens.
+type WithClauseSplit<'a> = Option<(
+    Vec<(String, &'a [(Token, SimpleSpan)])>,
+    &'a [(Token, SimpleSpan)],
+)>;
+
 /// Split a leading `WITH name AS (…), name2 AS (…)` clause off `toks`.
 /// Returns `Ok(None)` when the tokens do not start with `WITH`.
 /// Inner slices borrow from `toks` (no copies).
-fn split_with_clause<'a>(
-    toks: &'a [(Token, SimpleSpan)],
-) -> Result<
-    Option<(
-        Vec<(String, &'a [(Token, SimpleSpan)])>,
-        &'a [(Token, SimpleSpan)],
-    )>,
-    String,
-> {
+fn split_with_clause(toks: &[(Token, SimpleSpan)]) -> Result<WithClauseSplit<'_>, String> {
     if !starts_with_with(toks) {
         return Ok(None);
     }
@@ -3041,6 +3037,9 @@ fn parse_tokens(toks: &[(Token, SimpleSpan)], src: &str) -> Result<Query, String
     Ok(main)
 }
 
+/// Tokenize (logos) → chumsky parse, returning a compact single-line message
+/// `unexpected <found> at <line>:<col>` (or the tokenizer's offset message) on
+/// failure. Backs [`parse`]; [`parse_or_report`] renders errors differently.
 fn parse_internal(src: &str) -> Result<Query, String> {
     if let Some(msg) = blank_query_message(src) {
         return Err(msg);
