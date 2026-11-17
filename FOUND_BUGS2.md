@@ -12,19 +12,9 @@ changes, `heap cache-clear <dump>` or delete `<dump>.hprof-cache/`.
 
 ## Still open
 
-### I3. ENHANCEMENT — overview/leaks sections exceed usable MCP size
-- `get_report("overview")` ≈ 764 k chars / 28.8 k lines; `get_report("leaks")`
-  ≈ 60 kB on an 11 MB dump. The 256 kB `serialize_capped` stub (C3) keeps the
-  response bounded but a condensed/paginated mode for these two core sections
-  would serve agents better than a stub. Deferred as an enhancement — the cap
-  is honest and the data is reachable via narrower sections
-  (triage/top-objects/alloc_sites/…).
-
-### B6 (rest). OPEN (small) — `get_oql_docs` example sweep
-- `tests/oql_docs_sweep.rs` exists (sweeps every doc example); confirm it runs
-  green in CI and extend it when doc examples change. The remaining sweep
-  failures (if any) should be fixed as doc-example edits, not engine changes —
-  the engine features the examples showcase were all implemented this campaign.
+Nothing from the campaign's original list. The I3 enhancement and the B6
+sweep upkeep item were closed after the campaign (see below); new bugs go in
+fresh entries.
 
 ---
 
@@ -99,3 +89,13 @@ changes, `heap cache-clear <dump>` or delete `<dump>.hprof-cache/`.
   histogram tops) · **I2/I4** docs: SUM(@retainedHeapSize) double-counting
   caution, DirectByteBuffer off-heap with-graph requirement · **I5** (see
   above) · **I6** redaction pipeline verified on clinic
+- **I3** (closed post-campaign) condensed mode for `overview`/`leaks`:
+  `cap_obj_arrays` truncates every list to `limit` (overview default 12/max
+  200, leaks default 10/max 50), records `<field>_total` per truncated list,
+  `_arrays_capped` + `_note` on the section — verified on leak-clinic:
+  overview 764 k → 189 k chars of REAL content (no stub), leaks 60 k → 30 k,
+  `limit` widens/narrows on demand
+- **B6 (rest)** (closed post-campaign) `get_oql_docs` example sweep runs green
+  (`tests/oql_docs_sweep.rs`, part of `cargo test`): the extractor treats
+  WITH-blocks as single statements, and every documented example now parses
+  and executes, including the WITH CTE example (identity-carrying CTE bodies)

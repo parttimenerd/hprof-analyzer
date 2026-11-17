@@ -126,6 +126,63 @@ pub fn report_section(
     report_section_with_limit(sess, section, None)
 }
 
+/// I3: recursively truncate every array field longer than `cap` inside a JSON
+/// value, recording the original length as a sibling `<key>_total` so agents
+/// know each list is a prefix (section lists are sorted most-significant-first,
+/// so the leading slice is the significant one). Returns `true` when anything
+/// was truncated. Scalars and short arrays pass through untouched; nested
+/// objects and arrays are walked.
+fn cap_obj_arrays(v: &mut serde_json::Value, cap: usize) -> bool {
+    match v {
+        serde_json::Value::Object(m) => {
+            let mut capped = false;
+            let keys: Vec<String> = m.keys().cloned().collect();
+            for k in &keys {
+                let total = match m.get(k) {
+                    Some(serde_json::Value::Array(a)) if a.len() > cap => a.len(),
+                    _ => continue,
+                };
+                if let Some(serde_json::Value::Array(a)) = m.get_mut(k) {
+                    a.truncate(cap);
+                }
+                m.insert(format!("{k}_total"), serde_json::Value::from(total));
+                capped = true;
+            }
+            for k in keys.iter() {
+                if let Some(inner) = m.get_mut(k) {
+                    capped |= cap_obj_arrays(inner, cap);
+                }
+            }
+            capped
+        }
+        serde_json::Value::Array(a) => {
+            let mut capped = false;
+            for e in a.iter_mut() {
+                capped |= cap_obj_arrays(e, cap);
+            }
+            capped
+        }
+        _ => false,
+    }
+}
+
+/// Annotate a section value with the I3 condensed-mode note once arrays were
+/// capped, so agents know how to widen/narrow the view.
+fn note_arrays_capped(v: &mut serde_json::Value, section: &str, cap: usize) {
+    if let serde_json::Value::Object(m) = v {
+        m.insert("_arrays_capped".to_string(), serde_json::Value::Bool(true));
+        m.insert(
+            "_note".to_string(),
+            serde_json::Value::String(format!(
+                "lists are capped to the {cap} most significant entries (all lists are \
+                 sorted most-significant-first); pass a larger `limit` for more rows or use \
+                 narrower sections (top-objects/top-classes/alloc_sites/threads/...) for the \
+                 full data — section: {section}"
+            )),
+        );
+    }
+}
+
 /// Like [`report_section`], but allows the caller to override the default row
 /// limit for sections that support it.
 ///
@@ -147,10 +204,15 @@ pub fn report_section(
 /// | `alloc_sites` | `sites` |
 /// | `thread_locals` | rows |
 ///
-/// `leaks`/`overview`/`dominators`/`references`/`all` and the synthesized
-/// sections other than `top-objects`/`top-classes` ignore `limit` (their shape
-/// is already bounded by build-time caps). `leaks` suspects are bounded at
-/// build time; use a focused section instead of `all` to shrink output.
+/// `overview` caps EVERY list to `limit` (default 12, max 200) and annotates
+/// itself (`_arrays_capped`, `<field>_total` per truncated list) — the
+/// condensed mode that keeps an 11 MB dump's overview under the MCP output cap
+/// with real content instead of a stub. `leaks` caps every list (suspects,
+/// dominator children, root-path rows; default 10, max 50) the same way.
+/// `dominators`/`references`/`all` and the synthesized sections other than
+/// `top-objects`/`top-classes` ignore `limit` (their shape is already bounded
+/// by build-time caps); use a focused section instead of `all` to shrink
+/// output.
 pub fn report_section_with_limit(
     sess: &CachedSession,
     section: &str,
@@ -163,6 +225,13 @@ pub fn report_section_with_limit(
                 .map_err(|e| HeapOpsError::Internal(format!("serialization: {e}")))?;
             crate::mcp::truncate_dom_tree_depth(&mut v, 3);
             crate::mcp::strip_dominated_by_class_noise(&mut v);
+            // I3: condensed mode — cap every list (suspects, dominator children,
+            // root-path rows, …) so the section serves real content under the
+            // MCP output cap instead of a stub. `limit` widens it.
+            let cap = limit.unwrap_or(10).min(50);
+            if cap_obj_arrays(&mut v, cap) {
+                note_arrays_capped(&mut v, "leaks", cap);
+            }
             return Ok(v);
         }
         "top" => serde_json::to_value(&r.top),
@@ -202,7 +271,19 @@ pub fn report_section_with_limit(
                 "threads": rows,
             }));
         }
-        "overview" => serde_json::to_value(&r.overview),
+        "overview" => {
+            let mut v = serde_json::to_value(&r.overview)
+                .map_err(|e| HeapOpsError::Internal(format!("serialization: {e}")))?;
+            // I3: condensed mode — overview embeds several long lists (classes,
+            // biggest objects, package rollups, …) that blew past the MCP output
+            // cap (~764k chars on an 11 MB dump) and got stubbed. Cap every list
+            // to its most-significant prefix; `limit` widens it.
+            let cap = limit.unwrap_or(12).min(200);
+            if cap_obj_arrays(&mut v, cap) {
+                note_arrays_capped(&mut v, "overview", cap);
+            }
+            Ok(v)
+        }
         "triage" => serde_json::to_value(&r.triage),
         "waste" => {
             let cap = limit.unwrap_or(usize::MAX);
@@ -1446,6 +1527,44 @@ pub fn field_name(
 
 #[cfg(test)]
 mod tests {
+    use super::cap_obj_arrays;
+
+    /// I3: long arrays are truncated to the cap with a `<key>_total` sibling;
+    /// short arrays and scalars untouched; nested structures walked.
+    #[test]
+    fn cap_obj_arrays_truncates_and_records_totals() {
+        let mut v = serde_json::json!({
+            "suspects": (0..30).map(|i| i).collect::<Vec<i32>>(),
+            "summary": { "objects": 1, "classes": 2 },
+            "single": [1, 2, 3],
+        });
+        assert!(cap_obj_arrays(&mut v, 10));
+        let m = v.as_object().unwrap();
+        assert_eq!(m["suspects"].as_array().unwrap().len(), 10);
+        assert_eq!(m["suspects_total"], serde_json::json!(30));
+        assert_eq!(m["single"].as_array().unwrap().len(), 3);
+        assert!(m.get("single_total").is_none());
+        assert_eq!(m["summary"]["objects"], serde_json::json!(1));
+    }
+
+    /// Nested arrays (e.g. each leak suspect's dominator children) are capped
+    /// too, and the recursion reaches objects inside arrays.
+    #[test]
+    fn cap_obj_arrays_walks_nested_and_array_elements() {
+        let mut v = serde_json::json!({
+            "suspects": [
+                { "children": (0..25).map(|i| i).collect::<Vec<i32>>() },
+                { "children": (0..5).map(|i| i).collect::<Vec<i32>>() },
+            ]
+        });
+        assert!(cap_obj_arrays(&mut v, 8));
+        let s0 = &v["suspects"][0];
+        assert_eq!(s0["children"].as_array().unwrap().len(), 8);
+        assert_eq!(s0["children_total"], serde_json::json!(25));
+        let s1 = &v["suspects"][1];
+        assert_eq!(s1["children"].as_array().unwrap().len(), 5);
+    }
+
     use super::*;
     use crate::cache::{CacheDir, CacheMode, GraphForCache};
     use crate::report::Report;
