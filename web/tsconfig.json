@@ -9,7 +9,7 @@
     "skipLibCheck": true,
     "noEmit": true,
     "forceConsistentCasingInFileNames": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"]
+    "lib": ["ES2021", "DOM", "DOM.Iterable"]
   },
   "include": ["src"]
 }

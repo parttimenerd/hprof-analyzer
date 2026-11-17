@@ -1,7 +1,7 @@
 import React from "react";
 import DataTable from "react-data-table-component";
 import type { TableColumn } from "react-data-table-component";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, CategoryRollup, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SelfReferentialClassRow, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, CategoryRollup, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, DuplicateClassLoaderRow, DupArrayHolder, DupPrimArrayRow, DupStringSample, FieldsBySize, FillRatioBucket, FrameworkAnalysis, GcRootClassRow, GcRootRetainedRow, HeapComposition, HistRow, ImmDomPair, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjGraphEdge, ObjGraphFlat, ObjGraphFlatNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SelfReferentialClassRow, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, StringHolder, Suspect, SystemOverview, ThreadInfo, ThreadLocalLeakRow, ThreadLocalObj, TopArrays, TopComponents, TypeEdge, TypeEdgeDiff, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatBytesKB, formatEpochMs, formatDateNice, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -23,6 +23,7 @@ import { UnreachableDomTreeSection, DomSubtreeSvg } from "./domTree";
 import { sankey, sankeyLinkHorizontal } from "d3-sankey";
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from "d3-force";
 import cytoscape from "cytoscape";
+import type { StylesheetStyle as CyStylesheet } from "cytoscape";
 import coseBilkent from "cytoscape-cose-bilkent";
 cytoscape.use(coseBilkent as cytoscape.Ext);
 
@@ -228,7 +229,7 @@ function StdTable<T extends object>({
   columns: TableColumn<T>[];
   data: T[];
   searchKeys?: (keyof T & string)[];
-  keyField?: string;
+  keyField?: keyof T & string;
   defaultSortFieldId?: string;
   defaultSortAsc?: boolean;
   fmtBtn?: React.ReactNode;
@@ -2395,7 +2396,7 @@ function ClassLoadersTable({ rows }: { rows: LoaderRollup[] }) {
 
 function DuplicateClassesTable({ rows }: { rows: DuplicateClass[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
-  const loaderDetailCols: TableColumn<typeof rows[0]["per_loader"][0]>[] = [
+  const loaderDetailCols: TableColumn<DuplicateClassLoaderRow>[] = [
     { id: "loader", name: "Loader", grow: 1,
       cell: pl => <code title={pl.loader_label ? fmtLoader(pl.loader_label) : undefined}>{pl.loader_label ? fmtLoader(pl.loader_label) : "—"}</code>,
       selector: pl => pl.loader_label ?? "", sortable: true },
@@ -3559,7 +3560,6 @@ function TopConsumersSection({ report }: { report: Report }) {
           <TipHeader>{c.pretty_class}</TipHeader>
           <TipRow label="Instances" value={fmtCount(c.instances)} />
           <TipRow label="Avg retained" value={c.instances > 0 ? fmtExactBytes(Math.round(c.retained / c.instances)) : "—"} />
-          <TipRow label="Avg shallow" value={c.instances > 0 ? fmtExactBytes(Math.round(c.shallow / c.instances)) : "—"} />
         </>}>
           <span style={{ cursor: "help" }}>{fmtCount(c.instances)}</span>
         </Tooltip>
@@ -4782,7 +4782,6 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         const singleCols: TableColumn<import("./types").FieldAttributionBiggestRow>[] = [
           { id: "field", name: "Class#field", grow: 1, maxWidth: "300px", cell: (r) => <span className="copy-cell"><code title={`${r.holder_class}#${r.field}`}>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
           { id: "container", name: "Container Class", grow: 1, maxWidth: "280px", cell: (r) => <span className="copy-cell"><code title={r.container_class}>{r.container_class}</code><CopyBtn text={r.container_class} /><PivotBtn cls={r.container_class} /><OqlBtn cls={r.container_class} /><ListObjectsBtn cls={r.container_class} /></span>, selector: (r) => r.container_class, sortable: true },
-          { id: "kind", name: "Kind", width: "130px", cell: (r) => <span style={{ textTransform: "capitalize" }}>{r.container_kind}</span>, selector: (r) => r.container_kind, sortable: true },
           { id: "elements", name: "Elements", right: true, width: "96px", format: (r) => fmtCount(r.elements), selector: (r) => r.elements, sortable: true },
           { id: "capacity", name: "Capacity", right: true, width: "96px", format: (r) => fmtCount(r.capacity), selector: (r) => r.capacity, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
@@ -5124,7 +5123,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             {(stats.only_weakly_retained ?? []).length > 0
               ? <>
                   {stats.kind === "Soft" && (() => {
-                    const total = (stats.only_weakly_retained ?? []).reduce((s, r) => s + r.retained, 0);
+                    const total = (stats.only_weakly_retained ?? []).reduce((s, r) => s + (r.retained ?? 0), 0);
                     return <p className="subtitle"><strong>{formatBytes(total)}</strong> only softly retained — would be freed under OOM pressure (GC clears all soft references before throwing OutOfMemoryError).</p>;
                   })()}
                   <RefClassTable rows={stats.only_weakly_retained} />
@@ -5910,7 +5909,7 @@ function DomGraphView({ pairs, idoms }: {
   const totalHeap = React.useMemo(() => pairs.reduce((s, p) => s + p.dominated_retained, 0), [pairs]);
   const [layoutKey, setLayoutKey] = React.useState(0);
   const [selected, setSelected] = React.useState<string | null>(null);
-  const [focusMode, setFocusMode] = React.useState<"all" | "up" | "down">("all");
+  const [focusMode, setFocusMode] = React.useState<"all" | "up" | "down" | "blame">("all");
   const [layoutMode, setLayoutMode] = React.useState<"force" | "tree">("force");
   const [showPct, setShowPct] = React.useState(false);
   const [showEdgeLabels, setShowEdgeLabels] = React.useState(false);
@@ -7438,9 +7437,9 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
       {(() => {
         type RcRow = { scope: string; bp: number; retained: number };
         const rcRows: RcRow[] = [
-          { scope: "Top 1 object", bp: rc.top1_bp, retained: rc.top1_retained ?? 0 },
-          { scope: "Top 10 objects", bp: rc.top10_bp, retained: rc.top10_retained ?? 0 },
-          { scope: "Top 100 objects", bp: rc.top100_bp, retained: rc.top100_retained ?? 0 },
+          { scope: "Top 1 object", bp: rc.top1_bp, retained: 0 },
+          { scope: "Top 10 objects", bp: rc.top10_bp, retained: 0 },
+          { scope: "Top 100 objects", bp: rc.top100_bp, retained: 0 },
         ];
         const rcCols: TableColumn<RcRow>[] = [
           { id: "scope", name: "Scope", grow: 1, selector: (r) => r.scope, sortable: true },
@@ -7715,7 +7714,7 @@ function categoryNodeShape(category: string): string {
   return "ellipse";
 }
 
-function buildDomGraphStyle(): cytoscape.Stylesheet[] {
+function buildDomGraphStyle(): CyStylesheet[] {
   const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#222";
   const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
   return [
@@ -7736,7 +7735,7 @@ function buildDomGraphStyle(): cytoscape.Stylesheet[] {
   ];
 }
 
-function buildCyBaseStyle(): cytoscape.Stylesheet[] {
+function buildCyBaseStyle(): CyStylesheet[] {
   const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#222";
   const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
   return [
@@ -7775,7 +7774,7 @@ function buildCyBaseStyle(): cytoscape.Stylesheet[] {
   ];
 }
 
-function buildCyStyleWithFields(showFields: boolean): cytoscape.Stylesheet[] {
+function buildCyStyleWithFields(showFields: boolean): CyStylesheet[] {
   const base = buildCyBaseStyle();
   if (showFields) {
     const fg = getComputedStyle(document.documentElement).getPropertyValue("--fg").trim() || "#555";
@@ -7798,7 +7797,7 @@ function buildCyStyleWithFields(showFields: boolean): cytoscape.Stylesheet[] {
 function makeCyInstance(
   container: HTMLDivElement,
   elements: cytoscape.ElementDefinition[],
-  style: cytoscape.Stylesheet[],
+  style: CyStylesheet[],
 ): cytoscape.Core {
   const cy = cytoscape({
     container,
@@ -9711,7 +9710,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
     while (cursor != null && !seen.has(cursor)) {
       chain.push(cursor);
       seen.add(cursor);
-      cursor = data.nodes[String(cursor)]?.idom ?? null;
+      cursor = data.nodes[String(cursor)]?.idom ?? undefined;
     }
     return chain; // target → root order; reversed for display
   }, [currentNode, nodeId, data.nodes]);
@@ -10540,7 +10539,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                   {(window as any).__wasmSession?.outbound_refs && "Load the .hprof in the browser for all references."}
                 </p>
               )}
-              {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && !data.capture_params?.ref_paths && (
+              {currentEdges.length > 0 && currentEdges.every(e => !e.field_name) && (
                 <p className="subtitle" style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
                   All fields unnamed — re-run with <code>--ref-paths</code> for field names.
                 </p>
@@ -11518,7 +11517,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                       </button>
                       {idomNode && <PivotBtn cls={idomNode.display_class} />}
                       {idomNode && <OqlBtn cls={idomNode.display_class} />}
-                      <ListObjectsBtn cls={idomNode.display_class} />
+                      {idomNode && <ListObjectsBtn cls={idomNode.display_class} />}
                     </span>
                   ) : (
                     <em>GC root</em>
@@ -13558,7 +13557,7 @@ export default function App({ report: originalReport }: { report: Report }) {
     const oldReachable = originalReport.waste_summary?.reachable_bytes;
     return {
       ...originalReport,
-      triage: originalReport.triage.filter(s =>
+      triage: (originalReport.triage ?? []).filter(s =>
         s.id !== "char-array-slack" && (s.id !== "duplicate-strings" || s.detail.includes("Storage savings"))
       ),
       waste_summary: originalReport.waste_summary && sources ? {

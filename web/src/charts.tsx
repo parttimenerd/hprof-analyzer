@@ -414,7 +414,7 @@ export function ZoomableTreemap<T>({
           {[...otherItems].sort((a, b) => b.value - a.value).map((it, idx) => {
             const pct = fmtPct((it.value / otherTotal) * 100);
             const pctOfTotal = fmtPct((it.value / rootTotal) * 100);
-            const label = it.node ? getLabel(it.node) : (it.extra?.label ?? "?");
+            const label = it.node ? getLabel(it.node) : (it.label ?? "?");
             const hasKids = it.node ? getChildren(it.node).filter((c) => getValue(c) > 0).length > 0 : false;
             const isClickable = it.node !== null && (hasKids || !!renderLeaf);
             return (
@@ -580,7 +580,7 @@ export function ZoomableTreemap<T>({
                 {path.length > 0 && <TipRow label="% of total" value={pctOfTotal} />}
                 {hasKids && <TipRow label="Children" value={kidCount} />}
                 {extraContent && <TipNote>{extraContent}</TipNote>}
-                {isClickable && <TipNote style={{ color: "var(--accent, #4af)" }}>Click to drill in ▶</TipNote>}
+                {isClickable && <TipNote><span style={{ color: "var(--accent, #4af)" }}>Click to drill in ▶</span></TipNote>}
               </>
             );
             return (

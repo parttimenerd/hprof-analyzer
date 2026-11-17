@@ -92,7 +92,7 @@ function layoutTree(root: GenNode): { nodes: LayoutNode[]; edges: LayoutEdge[]; 
   }
 
   try {
-    const builder = graphHierarchy<TaggedNode>().children((d) => d.children);
+    const builder = graphHierarchy().children((d: TaggedNode) => d.children);
     const dag = builder(tagged);
     const layout = sugiyama()
       .layering(layeringLongestPath())
