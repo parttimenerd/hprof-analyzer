@@ -4393,6 +4393,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
                 ),
             ));
         }
+        eprintln!("DBG-FASTPATH entered");
         let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
         let addr_vec = if needs_sv {
             query::run::id_map_to_addrs(&p1.id_map)
@@ -4461,6 +4462,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
             }
         }
         let flat_results = query::run::resume_with_string_values(
+            /*DBG*/
             query_state,
             &flat,
             string_values,
