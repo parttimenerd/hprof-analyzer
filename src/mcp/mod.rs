@@ -81,6 +81,13 @@ pub struct LoadDumpParams {
     /// prefix/first-match-wins semantics.
     #[serde(default)]
     pub categories: Vec<String>,
+    /// D1: accept a truncated plain .hprof file instead of returning an error.
+    /// By default load_dump refuses a plain (non-gzip/zip) dump that ended
+    /// mid-record; set force=true to load and analyze the partial data anyway
+    /// (the ⚠ TRUNCATED warning is still included in the response).
+    /// Gzip/zip/tgz inputs are always lenient and ignore this flag.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Parse `["name=prefix", ...]` entries into `CategoryDef`s, the same
@@ -522,7 +529,10 @@ impl HprofMcpServer {
                        serving the OLD options' data; ask the user to run `hprof-analyzer heap cache-clear <dump>` \
                        if a section you expect to be populated comes back empty. \
                        Set with_graph=true to enable find_incoming_references (full inbound-reference traversal \
-                       covering every object, no significance floor) and the inbound-refs list on inspect_object."
+                       covering every object, no significance floor) and the inbound-refs list on inspect_object. \
+                       D1: a plain .hprof that ended mid-record returns an error by default; set force=true to \
+                       load the partial data anyway (the ⚠ TRUNCATED warning is still included). \
+                       Gzip/zip/tgz inputs are always loaded leniently regardless of force."
     )]
     async fn load_dump(
         &self,
@@ -607,6 +617,35 @@ impl HprofMcpServer {
             }
         })?;
 
+        // D1: refuse a truncated plain .hprof dump unless force=true.
+        // Gzip/zip/tgz stays lenient (archives may hide the true EOF); this
+        // gate mirrors the CLI's --force behaviour so MCP callers are equally
+        // protected against silent partial-analysis results.
+        if result.report.truncated_input && !p.force {
+            let is_plain = {
+                use std::io::Read;
+                std::fs::File::open(&p.path)
+                    .ok()
+                    .and_then(|mut f| {
+                        let mut h = [0u8; 4];
+                        f.read_exact(&mut h).ok().map(|()| h)
+                    })
+                    .map(|h| h[..2] != [0x1f, 0x8b] && h[..2] != [0x50, 0x4b])
+                    .unwrap_or(true)
+            };
+            if is_plain {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "dump is truncated — '{}' ended mid-record after {} bytes; \
+                         the analysis covers only the objects read before truncation and \
+                         is INCOMPLETE. Pass force=true to load the partial data anyway.",
+                        p.path, result.pass1.file_size,
+                    ),
+                    None,
+                ));
+            }
+        }
+
         let suspects_text: String = if result.report.leaks.suspects.is_empty() {
             "  (none detected)\n".to_string()
         } else {
@@ -654,6 +693,17 @@ impl HprofMcpServer {
             ""
         };
 
+        let truncated_note: String = if result.report.truncated_input {
+            format!(
+                "\n⚠ TRUNCATED DUMP — file ended mid-record after {} bytes; \
+                 this analysis covers only {} objects read before truncation and is INCOMPLETE. \
+                 Re-copy the dump for a full analysis.\n",
+                result.pass1.file_size, result.report.overview.total_objects,
+            )
+        } else {
+            String::new()
+        };
+
         // I-02: warn when requested options don't match what the cached report contains.
         let mut cache_mismatch_notes: Vec<&str> = Vec::new();
         if collections
@@ -698,6 +748,7 @@ impl HprofMcpServer {
         let summary = format!(
             "Loaded: {path}\n\
              Total heap: {heap} MB  |  Objects: {objs}\
+             {truncated_note}\
              {redacted_note}\
              {cache_mismatch_note}\n\
              ## Top Leak Suspects ({n_suspects} detected)\n\
@@ -711,6 +762,7 @@ impl HprofMcpServer {
             path = p.path,
             heap = result.report.overview.total_shallow / 1_000_000,
             objs = result.report.overview.total_objects,
+            truncated_note = truncated_note,
             redacted_note = redacted_note,
             cache_mismatch_note = cache_mismatch_note,
             n_suspects = result.report.leaks.suspects.len(),
