@@ -18761,6 +18761,7 @@
   "generated": "__NORMALIZED__",
   "leak_indicators": {
     "anonymous_class_count": 204,
+    "anonymous_class_instances": 263,
     "direct_byte_buffer_cap_buckets": [
       6,
       0,

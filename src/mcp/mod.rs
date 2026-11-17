@@ -149,6 +149,8 @@ pub struct GetReportParams {
     pub section: Option<String>,
     /// Max rows for "top-objects" and "threads" (default 20, max 100).
     /// For "top-classes" default is 10 (holders data makes each row large).
+    /// Also limits rows for "retainers", "waste" (waste_breakdown rows),
+    /// and "alloc_sites" (alloc site rows).
     pub limit: Option<usize>,
 }
 

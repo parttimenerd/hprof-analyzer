@@ -1797,6 +1797,12 @@ pub struct LeakIndicators {
     /// Count of anonymous/generated class definitions (names matching `$\d+`,
     /// `$$Lambda$`, `$$Anon`, or `$Proxy` patterns).
     pub anonymous_class_count: u64,
+    /// Count of live object instances whose class is anonymous/generated
+    /// (i.e. class name matches the same patterns as `anonymous_class_count`).
+    /// Higher than `anonymous_class_count` when many instances share the same
+    /// anonymous class (e.g. thousands of lambda captures from one call site).
+    #[serde(default)]
+    pub anonymous_class_instances: u64,
     /// Count of `ThreadLocal$ThreadLocalMap$Entry` instances whose referent
     /// (the ThreadLocal key) has been cleared — the classic thread-local leak signal.
     pub thread_local_null_key_count: u64,

@@ -2193,6 +2193,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "anonymous_class_instances": {
+          "default": 0,
+          "description": "Count of live object instances whose class is anonymous/generated\n(i.e. class name matches the same patterns as `anonymous_class_count`).\nHigher than `anonymous_class_count` when many instances share the same\nanonymous class (e.g. thousands of lambda captures from one call site).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "direct_byte_buffer_cap_buckets": {
           "default": [
             0,
@@ -5038,6 +5045,7 @@
       "$ref": "#/$defs/LeakIndicators",
       "default": {
         "anonymous_class_count": 0,
+        "anonymous_class_instances": 0,
         "direct_byte_buffer_cap_buckets": [
           0,
           0,

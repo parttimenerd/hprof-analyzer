@@ -1036,6 +1036,20 @@ fn build_leak_indicators(g: &Graph, nio_buffer_owners: Vec<NioBufferOwner>) -> L
         .filter(|n| is_anonymous_class(n))
         .count() as u64;
 
+    // Build a bitset over class indices that are anonymous/generated, then count instances.
+    let n_classes = g.class_names.len();
+    let mut anon_class: Vec<bool> = vec![false; n_classes];
+    for (i, name) in g.class_names.iter().enumerate() {
+        if is_anonymous_class(name) {
+            anon_class[i] = true;
+        }
+    }
+    let anonymous_class_instances = g
+        .class_idx
+        .iter()
+        .filter(|&&ci| anon_class.get(ci as usize).copied().unwrap_or(false))
+        .count() as u64;
+
     // 2. ThreadLocalMap$Entry null-key count — computed during the pass2
     // field-decode scan, where the weak referent's nullness is directly
     // observable. It cannot be reconstructed here from the forward CSR: a null
@@ -1051,6 +1065,7 @@ fn build_leak_indicators(g: &Graph, nio_buffer_owners: Vec<NioBufferOwner>) -> L
 
     LeakIndicators {
         anonymous_class_count,
+        anonymous_class_instances,
         thread_local_null_key_count,
         direct_byte_buffer_capacity_sum,
         direct_byte_buffer_count,

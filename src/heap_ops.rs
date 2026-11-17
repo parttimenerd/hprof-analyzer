@@ -181,12 +181,30 @@ pub fn report_section_with_limit(
         }
         "overview" => serde_json::to_value(&r.overview),
         "triage" => serde_json::to_value(&r.triage),
-        "waste" => serde_json::to_value(serde_json::json!({
-            "waste_summary": r.waste_summary,
-            "waste_breakdown": r.waste_breakdown,
-        })),
+        "waste" => {
+            let cap = limit.unwrap_or(usize::MAX);
+            let breakdown: Vec<_> = r.waste_breakdown.iter().take(cap).collect();
+            if r.waste_breakdown.is_empty() {
+                serde_json::to_value(serde_json::json!({
+                    "waste_summary": r.waste_summary,
+                    "waste_breakdown": breakdown,
+                    "_note": "waste_breakdown is empty: no waste rules fired for this dump \
+                              (duplicate strings, empty collections, oversized primitives \
+                              were not detected above threshold)",
+                }))
+            } else {
+                serde_json::to_value(serde_json::json!({
+                    "waste_summary": r.waste_summary,
+                    "waste_breakdown": breakdown,
+                }))
+            }
+        }
         "indicators" => serde_json::to_value(&r.leak_indicators),
-        "retainers" => serde_json::to_value(&r.top_retainers),
+        "retainers" => {
+            let cap = limit.unwrap_or(usize::MAX);
+            let rows: Vec<_> = r.top_retainers.iter().take(cap).collect();
+            serde_json::to_value(&rows)
+        }
         "arrays" => serde_json::to_value(&r.arrays_by_size),
         "collections" => serde_json::to_value(&r.collections),
         "references" => serde_json::to_value(&r.references),
@@ -211,10 +229,54 @@ pub fn report_section_with_limit(
             serde_json::to_value(&da)
         }
         "components" => serde_json::to_value(&r.top_components),
-        "alloc_sites" => serde_json::to_value(&r.alloc_sites),
-        "thread_locals" => serde_json::to_value(&r.thread_local_analysis),
-        "framework" => serde_json::to_value(&r.framework_analysis),
-        "field_stats" => serde_json::to_value(&r.fields_by_size),
+        "alloc_sites" => {
+            let cap = limit.unwrap_or(usize::MAX);
+            match &r.alloc_sites {
+                None => serde_json::to_value::<Option<()>>(None),
+                Some(a) => {
+                    let sites: Vec<_> = a.sites.iter().take(cap).collect();
+                    serde_json::to_value(serde_json::json!({
+                        "traces_present": a.traces_present,
+                        "sites": sites,
+                        "_note": if !a.traces_present {
+                            "traces_present is false: this dump was captured without allocation \
+                             tracking (-agentlib:hprof=heap=dump,format=b is required to record \
+                             allocation stack traces). All stack_trace_serial values are 0."
+                        } else {
+                            "retained_total per site is the sum of each object's individual \
+                             dominator-tree retained size; it can exceed total heap size because \
+                             dominated sub-trees are counted for each dominator along the chain."
+                        },
+                    }))
+                }
+            }
+        }
+        "thread_locals" => {
+            let rows = &r.thread_local_analysis;
+            if rows.is_empty() {
+                serde_json::to_value(serde_json::json!({
+                    "rows": rows,
+                    "_note": "thread_local_analysis is empty: re-analyze with --find-duplicates \
+                              (or DetailLevel::Full) to populate ThreadLocal entry breakdowns.",
+                }))
+            } else {
+                serde_json::to_value(rows)
+            }
+        }
+        "framework" => {
+            let rows = &r.framework_analysis;
+            if rows.is_empty() {
+                serde_json::to_value(serde_json::json!({
+                    "rows": rows,
+                    "_note": "framework_analysis is empty: none of the sentinel classes \
+                              (Hibernate, Spring, ThreadPoolExecutor, Netty, HikariCP) were \
+                              found in this dump.",
+                }))
+            } else {
+                serde_json::to_value(rows)
+            }
+        }
+        "field_stats" => serde_json::to_value(&r.field_stats),
         "categories" => serde_json::to_value(&r.category_rollup),
         // ── Synthesized sections (matching MCP's get_report) ────────────
         "top-objects" => {
