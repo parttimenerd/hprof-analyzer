@@ -1002,6 +1002,7 @@ fn build_nio_buffer_owners(g: &Graph, root_path_max_depth: usize) -> Vec<NioBuff
             if !step_class.is_empty() || is_root {
                 root_path.push(RootPathStep {
                     obj_index_1based: cur + 1,
+                    object_index: cur,
                     display_class: step_class,
                     retained: g.retained.get(cur).copied().unwrap_or(0),
                     root_type_label,
@@ -1018,6 +1019,7 @@ fn build_nio_buffer_owners(g: &Graph, root_path_max_depth: usize) -> Vec<NioBuff
         owners.push(NioBufferOwner {
             capacity,
             obj_index_1based: idx + 1,
+            object_index: idx,
             display_class,
             retained,
             root_path,
@@ -1280,10 +1282,12 @@ fn build_pool_snapshots(g: &Graph) -> Vec<crate::report::model::PoolSnapshot> {
             .take(20)
             .map(|&(dense_idx, f1, f2)| {
                 let obj_index_1based = dense_idx as usize + 1;
+                let object_index = dense_idx as usize;
                 match slot {
                     0 => PoolInstanceRow {
                         // ThreadPoolExecutor: f1=corePoolSize, f2=maximumPoolSize
                         obj_index_1based,
+                        object_index,
                         pool_size: if f1 == i32::MIN { None } else { Some(f1) },
                         max_pool_size: if f2 == i32::MIN { None } else { Some(f2) },
                         queue_depth: None,
@@ -1292,6 +1296,7 @@ fn build_pool_snapshots(g: &Graph) -> Vec<crate::report::model::PoolSnapshot> {
                     1 => PoolInstanceRow {
                         // HikariPool: f1=maximumPoolSize, f2=minimumIdle
                         obj_index_1based,
+                        object_index,
                         pool_size: if f2 == i32::MIN { None } else { Some(f2) },
                         max_pool_size: if f1 == i32::MIN { None } else { Some(f1) },
                         queue_depth: None,
@@ -1660,6 +1665,7 @@ fn build_biggest_collections(g: &Graph) -> Option<BiggestCollections> {
                 dominant_value_type: Some(dominant_value_type(&counts)),
                 value_type_breakdown: top_value_shares(&counts, TOP_K_TYPES),
                 obj_index_1based: c.container_idx.checked_add(1),
+                object_index: c.container_idx.checked_add(1).map(|_| c.container_idx),
             }
         })
         .collect();
@@ -2118,6 +2124,7 @@ fn build_dominator_analysis(
                 let cat = classifier.classify(&cls).to_string();
                 drops.push(BigDropRow {
                     obj_index_1based: (i as u64) + 1,
+                    object_index: i as u64,
                     display_class: cls,
                     category: cat,
                     retained: ret_i,
@@ -2550,6 +2557,7 @@ pub(crate) fn build_thread_overview(g: &Graph, total_shallow: u64) -> ThreadOver
                                     .unwrap_or_else(|| "<unknown>".to_string());
                                 ThreadLocalObj {
                                     obj_index_1based: li as usize + 1,
+                                    object_index: li as usize,
                                     display_class,
                                     shallow: g.shallow[li as usize] as u64,
                                     retained: g.retained[li as usize],
@@ -3277,6 +3285,7 @@ fn build_system_overview(
 
                 chain.push(RootPathStep {
                     obj_index_1based: cur_usize + 1,
+                    object_index: cur_usize,
                     display_class: display,
                     retained: retained_val,
                     root_type_label: root_label.clone(),
@@ -3805,6 +3814,7 @@ fn build_dom_subtree(
 
     let make_node = |idx: usize| DomTreeNode {
         obj_index_1based: idx + 1,
+        object_index: idx,
         display_class: display_of(idx),
         shallow: g.shallow[idx] as u64,
         retained: g.retained[idx],
@@ -4274,6 +4284,7 @@ pub(crate) fn build_leak_suspects(
                 path.push(PathStep {
                     depth: 0,
                     obj_index_1based: cur + 1,
+                    object_index: cur,
                     display_class: display_of(cur),
                     retained: cur_ret,
                 });
@@ -4306,6 +4317,7 @@ pub(crate) fn build_leak_suspects(
                     path.push(PathStep {
                         depth,
                         obj_index_1based: child + 1,
+                        object_index: child,
                         display_class: display_of(child),
                         retained: child_ret,
                     });
@@ -4331,6 +4343,7 @@ pub(crate) fn build_leak_suspects(
                     let ki = k as usize;
                     dominated.push(DominatedRow {
                         obj_index_1based: ki + 1,
+                        object_index: ki,
                         display_class: display_of(ki),
                         shallow: g.shallow[ki] as u64,
                         retained: g.retained[ki],
@@ -4484,6 +4497,7 @@ pub(crate) fn build_leak_suspects(
                 };
                 chain.push(RootPathStep {
                     obj_index_1based: cur + 1,
+                    object_index: cur,
                     display_class: display_of(cur),
                     retained: g.retained[cur],
                     root_type_label,
@@ -4554,7 +4568,7 @@ pub(crate) fn build_leak_suspects(
 /// they defer entirely to `Report.primary_culprits` (empty means "no suspect
 /// crossed this floor"), so there is exactly one "is this dominant" bar
 /// across the whole report instead of several independently-maintained ones.
-const CULPRIT_DOMINANT_PCT: f64 = 50.0;
+pub(crate) const CULPRIT_DOMINANT_PCT: f64 = 50.0;
 /// Within a dominant suspect's `path`, how much of the suspect's OWN retained
 /// size a deeper step must still account for to be considered "basically the
 /// whole problem" and therefore a candidate refinement of the headline class.
@@ -5837,6 +5851,7 @@ fn build_top_consumers(
             };
             ObjRow {
                 obj_index_1based: idx + 1,
+                object_index: idx,
                 display_class: display_class.clone(),
                 category: classifier.classify(&display_class).to_string(),
                 shallow: g.shallow[idx] as u64,

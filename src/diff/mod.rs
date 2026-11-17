@@ -665,6 +665,7 @@ mod tests {
     fn objrow(display: &str, sh: u64, ret: u64) -> report::ObjRow {
         report::ObjRow {
             obj_index_1based: 1,
+            object_index: 0,
             display_class: display.to_string(),
             category: String::new(),
             shallow: sh,

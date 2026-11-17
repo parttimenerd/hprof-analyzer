@@ -487,6 +487,10 @@ pub struct SystemOverview {
 pub struct PathStep {
     pub depth: usize,
     pub obj_index_1based: usize,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default)]
+    pub object_index: usize,
     pub display_class: String,
     pub retained: u64,
 }
@@ -497,6 +501,10 @@ pub struct PathStep {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct RootPathStep {
     pub obj_index_1based: usize,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default)]
+    pub object_index: usize,
     pub display_class: String,
     pub retained: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -514,6 +522,10 @@ pub struct RootPathStep {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct DominatedRow {
     pub obj_index_1based: usize,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default)]
+    pub object_index: usize,
     pub display_class: String,
     pub shallow: u64,
     pub retained: u64,
@@ -526,6 +538,10 @@ pub struct DominatedRow {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct DomTreeNode {
     pub obj_index_1based: usize,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default)]
+    pub object_index: usize,
     pub display_class: String,
     pub shallow: u64,
     pub retained: u64,
@@ -847,6 +863,10 @@ pub struct SelfReferentialClassRow {
 )]
 pub struct ObjRow {
     pub obj_index_1based: usize,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default)]
+    pub object_index: usize,
     pub display_class: String,
     /// Classification category of `display_class`. See `classify.rs`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1051,6 +1071,10 @@ pub struct SignificantLocal {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ThreadLocalObj {
     pub obj_index_1based: usize,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default)]
+    pub object_index: usize,
     pub display_class: String,
     pub shallow: u64,
     pub retained: u64,
@@ -1100,6 +1124,10 @@ pub struct ArraysBySize {
 pub struct BigDropRow {
     /// 1-based object index of the dominator node.
     pub obj_index_1based: u64,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default)]
+    pub object_index: u64,
     pub display_class: String,
     /// Classification category of `display_class`. See `classify.rs`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1350,6 +1378,10 @@ pub struct TopArrayRow {
     pub length: u64,
     pub shallow: u64,
     pub obj_index_1based: u64,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default)]
+    pub object_index: u64,
     /// Non-null (occupied) slot count for object arrays; `None` for primitive
     /// arrays (every slot is always occupied). Additive.
     #[serde(default)]
@@ -1643,6 +1675,10 @@ pub struct BiggestCollectionRow {
     /// 1-based dense object index for Object Graph Explorer navigation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub obj_index_1based: Option<u32>,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_index: Option<u32>,
 }
 
 /// Biggest collections of one kind (e.g. all Maps), ranked. Additive.
@@ -1740,6 +1776,10 @@ pub struct NioBufferOwner {
     pub capacity: u64,
     /// 1-based object index (for cross-referencing with browse_dominators).
     pub obj_index_1based: usize,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default)]
+    pub object_index: usize,
     /// Display class name of the buffer object.
     pub display_class: String,
     /// Retained heap bytes of this object (on-heap cost of keeping it alive).
@@ -1851,6 +1891,10 @@ pub struct FinalizerClassRow {
 pub struct PoolInstanceRow {
     /// 1-based object index of the pool object.
     pub obj_index_1based: usize,
+    /// 0-based dense object index (twin of `obj_index_1based`, minus one) for
+    /// direct use with `browse_dominators`/`inspect_object` without off-by-one.
+    #[serde(default)]
+    pub object_index: usize,
     /// Core / configured pool size. `None` when the field could not be read.
     pub pool_size: Option<i32>,
     /// Maximum pool size. `None` when the field could not be read.

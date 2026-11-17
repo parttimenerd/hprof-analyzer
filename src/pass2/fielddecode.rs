@@ -457,6 +457,7 @@ impl TopArrayAcc {
                     length: c.length,
                     shallow: c.shallow,
                     obj_index_1based: c.obj_index as u64 + 1,
+                    object_index: c.obj_index as u64,
                     non_null: if c.non_null == u64::MAX {
                         None
                     } else {

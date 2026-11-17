@@ -8,6 +8,7 @@
 //! A rule "declares the data it needs" implicitly by which `Report` fields it
 //! reads in `eval`; each rule's doc-comment states that dependency explicitly.
 
+use crate::report::build::CULPRIT_DOMINANT_PCT;
 use crate::report::format::{fmt_count, format_bytes};
 use crate::report::model::{Report, TriageSeverity, TriageSignal};
 
@@ -659,6 +660,16 @@ fn signal_cls(
 
 // ── Rules (ported from the former render_md.rs hand-written logic) ─────────────
 
+/// The single source of truth for "did any suspect cross the dominance floor?"
+/// Mirrors the contract documented at build.rs's `CULPRIT_DOMINANT_PCT` —
+/// `primary_culprits` non-empty IS the floor. Every rule that headlines a
+/// dominant retainer must gate on this, never on a raw `leaks.suspects` read, so
+/// the whole report tells one consistent story about whether a dominant culprit
+/// exists.
+fn has_dominant_culprit(r: &Report) -> bool {
+    !r.primary_culprits.is_empty()
+}
+
 /// Headline retainer. Reads `primary_culprits` (preferred — the refined,
 /// resolved culprit class, not necessarily the same as the raw top-level
 /// suspect) with `leaks.suspects` / `top.biggest_objects` as fallbacks for
@@ -692,7 +703,17 @@ impl Rule for HeadlineRetainer {
                 &c.class_name,
             ));
         }
+        debug_assert!(
+            has_dominant_culprit(r) == r.primary_culprits.first().is_some(),
+            "has_dominant_culprit must agree with primary_culprits",
+        );
         if let Some(s) = r.leaks.suspects.first() {
+            // No suspect crossed CULPRIT_DOMINANT_PCT (primary_culprits is
+            // empty), so retention is NOT concentrated in one object. Emit a
+            // Warning — never Critical — with wording that does not claim
+            // dominance, consistent with Concentration calling this same state
+            // "diffuse" and with the already-Warning biggest_objects fallback
+            // below.
             let kind = if s.is_single {
                 "a single object"
             } else {
@@ -701,14 +722,17 @@ impl Rule for HeadlineRetainer {
             let value_hint = map_entry_value_suffix(&s.pretty_class, r);
             Some(signal_cls(
                 "headline-retainer",
-                TriageSeverity::Critical,
+                TriageSeverity::Warning,
                 "Headline Retainer",
                 format!(
-                    "`{}` ({}) retains {} ({:.1}% of reachable heap).{}",
+                    "Largest retainer `{}` ({}) holds {} ({:.1}% of reachable heap) — \
+                     below the {:.0}% dominance floor, so retention is not concentrated \
+                     in one object.{}",
                     s.pretty_class,
                     kind,
                     format_bytes(s.retained),
                     pct_of(s.retained, total),
+                    CULPRIT_DOMINANT_PCT,
                     value_hint,
                 ),
                 Some(("leak-suspects", "Leak Suspects")),
@@ -3774,7 +3798,12 @@ impl Rule for ComponentRetentionImbalance {
             return None;
         }
         let top = comps.first()?;
-        if top.pct < COMPONENT_IMBALANCE_TOP_PCT {
+        // Use `pct_of_retained` (bounded to ≤100%), NOT `pct` — the latter sums
+        // per-class histogram retained and double-counts overlapping/shared
+        // retention, so it can exceed 100% (e.g. 439.7%), which is both
+        // impossible to report honestly and not mutually exclusive across
+        // components. `pct_of_retained` is a self-consistent basis.
+        if top.pct_of_retained < COMPONENT_IMBALANCE_TOP_PCT {
             return None;
         }
         // Second component for comparison.
@@ -3791,10 +3820,10 @@ impl Rule for ComponentRetentionImbalance {
                  class-loader-scoped cache, static field, or event-listener \
                  registration in `{}` is accumulating without a release path.",
                 top.loader_label,
-                top.pct,
+                top.pct_of_retained,
                 format_bytes(top.retained),
                 second.loader_label,
-                second.pct,
+                second.pct_of_retained,
                 top.loader_label,
             ),
             Some(("top-components", "Top Components")),
@@ -5034,6 +5063,7 @@ mod tests {
                 dominant_value_type: None,
                 value_type_breakdown: Vec::new(),
                 obj_index_1based: None,
+                object_index: None,
             }],
             by_kind: Vec::new(),
             truncated: false,
@@ -5198,6 +5228,7 @@ mod tests {
             root_path: Some(vec![
                 RootPathStep {
                     obj_index_1based: 1,
+                    object_index: 0,
                     display_class: "java.util.HashMap".into(),
                     retained: 400_000,
                     root_type_label: None,
@@ -5205,6 +5236,7 @@ mod tests {
                 },
                 RootPathStep {
                     obj_index_1based: 2,
+                    object_index: 1,
                     display_class: "com.example.MyService".into(),
                     retained: 400_016,
                     root_type_label: Some("Sticky Class".into()),
@@ -5367,6 +5399,7 @@ mod tests {
         r.overview.total_shallow = 200 * 1024 * 1024;
         r.dominator_analysis.big_drops.rows = vec![crate::report::model::BigDropRow {
             obj_index_1based: 1,
+            object_index: 0,
             display_class: "com.example.Cache".into(),
             category: String::new(),
             retained: 150 * 1024 * 1024,
@@ -5390,6 +5423,7 @@ mod tests {
         // Drop is only 40 MiB (below 64 MiB floor) even though share is 20%.
         r.dominator_analysis.big_drops.rows = vec![crate::report::model::BigDropRow {
             obj_index_1based: 1,
+            object_index: 0,
             display_class: "com.example.Foo".into(),
             category: String::new(),
             retained: 50 * 1024 * 1024,
@@ -5475,6 +5509,7 @@ mod tests {
             length: 100_000_000,
             shallow: 100 * 1024 * 1024, // 50% — fires
             obj_index_1based: 1,
+            object_index: 0,
             owner: None,
             non_null: None,
         }];
@@ -6175,6 +6210,7 @@ mod tests {
             length: 8_000_000,
             shallow: 8 * 1024 * 1024, // 8 MB → fires
             obj_index_1based: 1,
+            object_index: 0,
             owner: Some("com.example.ResponseBuffer#buf".into()),
             non_null: None,
         }];
@@ -6234,8 +6270,10 @@ mod tests {
         assert!(s.detail.contains("app1"));
         assert!(s.detail.contains("app2"));
 
-        // Top at only 50%: silent
+        // Top at only 50%: silent (rule reads the mutually-exclusive
+        // pct_of_retained basis, so both fields must drop below the floor).
         r.top_components.components[0].pct = 50.0;
+        r.top_components.components[0].pct_of_retained = 50.0;
         assert!(ComponentRetentionImbalance.eval(&r).is_none());
     }
 
