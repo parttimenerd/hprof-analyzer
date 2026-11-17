@@ -20,53 +20,11 @@ delete `<dump>.hprof-cache/` — the cached report is NOT re-evaluated otherwise
 
 ## A. Fixed during the campaign
 
-### A1. FIXED — `FROM Xyz*` (bare trailing star) returned 0 rows  [committed]
-- Was: parses as one ident token (`parse.rs:149` includes `*` in ident chars) but
-  `class_name_matches` (`src/query/execute.rs`) only recognized `.*`/`/*` suffixes → fell
-  through to exact match → silent 0 rows. Doc example `FROM com.example.MyCache*`
-  (`src/mcp/oql_docs.rs:409`) taught the broken form.
-- Repro (was): `hprof-analyzer heap query tests/fixtures/dump_4_philosophers.hprof --oql
-  'SELECT COUNT(*) FROM java.util.zip.ZipFile*'` → 0 (regex form: 108; exact `$Source`: 19).
-- Fix: bare-trailing-`*` branch in `class_name_matches` (prefix match incl. `$` inner
-  classes); docs + doc example updated; unit tests `bare_trailing_star_is_prefix_glob`,
-  `pkg_dot_star_still_requires_separator_boundary`. Now → 59.
+
 
 ## B. OQL engine / query tool
 
-### B1. FIXED (critical) — MCP `query` crashes the whole server on subqueries
-- (a) `IN (SELECT ...)`: MCP `query` always runs `run_oql_escalated` which hardcodes empty
-  membership sets → hits `unreachable!` at `src/query/execute.rs:2950` → panic → with
-  `panic=abort` (Cargo.toml:127) the process dies; MCP client must reconnect + reload.
-- (b) Aggregates over FROM-subquery (`COUNT(*) FROM (SELECT …) t`): `.expect()` fails at
-  `src/query/run.rs:3509` (CountFromSubquery slots get no executor in pass2 → results
-  shorter than groups). CLI routes these to the two-phase pipeline (`main.rs:3925-3956`);
-  the MCP path (`mcp/mod.rs:1585-1625`) doesn't.
-- Repro: via MCP `query` tool:
-  `SELECT s.@displayName FROM java.lang.String s WHERE s.@objectId IN (SELECT x.@objectId FROM java.lang.Thread x)`
-  `SELECT COUNT(*) FROM (SELECT @objectId FROM java.lang.Thread) t`
-- Fix: MCP query now routes plans containing
-  `from_subplan`/`in_subplans`/`exists_subplans` to `query::run::run_single_dump`, matching
-  CLI two-phase execution for subqueries.
 
-### B2. FIXED — unknown class in FROM returns 0 rows silently
-- Repro: MCP `query` `{oql: "SELECT * FROM com.does.not.Exist"}` → `{"columns":["*"],"row_count":0}`.
-- Fix: MCP query now returns explicit error text for missing exact FROM classes:
-  `class <name> not present in dump`.
-
-### B3. DOC-GAP — `IN` with a literal list was documented as subquery-only
-- Engine supports literal-list `IN` / `NOT IN`; docs now describe both forms.
-- Repro: `heap query tests/fixtures/dump_4_philosophers.hprof --oql 'SELECT @objectId FROM
-  java.util.zip.ZipFile$Source WHERE @objectId IN (1,2,3)'` → 0 rows, no error.
-
-### B4. FIXED — `AS retained` alias collides with `AS RETAINED SET`
-- Repro: `heap query tests/fixtures/dump_4_philosophers.hprof --oql 'SELECT COUNT(*) AS
-  retained FROM java.util.zip.ZipFile*'` → `error: expected SET after 'AS RETAINED'`.
-- Fix: parser error now explicitly says `RETAINED` is reserved in this position and
-  suggests an alias such as `retained_count`.
-
-### B5. DOC-GAP — `ORDER BY` unselected key note promise was stale
-- Engine sorts by unprojected keys internally; the previous docs promise of a
-  "sort not applied" note was outdated and removed.
 
 ### B6. OPEN (docs) — documented features that don't work (agent E)
 - FIXED (docs): `VALUES` inline tables and `JOIN VALUES` examples now use OQL-valid
@@ -285,14 +243,6 @@ delete `<dump>.hprof-cache/` — the cached report is NOT re-evaluated otherwise
   (matches F1/L).
 - Repro: `heap cache-clear <dump>` then `heap cache-list <dump>` (graph entry survives).
 
-### H7. OPEN — thread views report class name instead of thread name (verified directly)
-- Repro: `heap query tests/fixtures/dump_4_philosophers.hprof --oql 'SELECT @objectId AS idx,
-  @name AS name FROM java.lang.Thread LIMIT 5'` → `name` = `java.lang.Thread` for every row;
-  the threads REPORT section has the real names (main, Reference Handler, …), so the OQL
-  `@name` attribute doesn't resolve `Thread.name`.
-- Also: LIMIT 5 footer prints `(truncated — 5 rows total)` — ambiguous/wrong wording for a
-  user-requested LIMIT.
-
 ---
 
 ## Handoff notes (code-localized root causes)
@@ -327,13 +277,6 @@ delete `<dump>.hprof-cache/` — the cached report is NOT re-evaluated otherwise
 (*Q and S died on the LLM-proxy daily limit before completing — re-run them; their
 prompts are in the campaign notes. R completed.)
 
-### I1. OPEN — load_dump quick summary misleads on suspect classes (agent T, F1)
-- The load banner's "Top Leak Suspects" are drawn from the histogram's top classes by
-  retained, not from the leak-suspect detector: on dump_1_mnemonics the banner names
-  Thread/HashMap classes while the actual suspects are `HashMap$Node[]` / `Object[]`
-  single objects. Users/agents reading only the load summary investigate the wrong classes.
-- Repro: `heap load tests/fixtures/dump_1_mnemonics.hprof` banner vs
-  `heap report <dump> --section leaks` suspects.
 
 ### I2. DOC-GAP — `SUM(@retainedHeapSize)` double-counts shared dominatees (agent T, F3)
 - OQL SUM over retained sizes counts shared children once per holder; histogram retained

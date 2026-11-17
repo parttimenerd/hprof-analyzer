@@ -438,6 +438,15 @@ claude mcp add hprof -- hprof-analyzer mcp
 
 Alternatively, add it directly to `.vscode/mcp.json` (workspace-scoped) or Cline's global MCP settings file at `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (Linux/macOS) / `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` (Windows).
 
+**Fresh checkouts:** the repo's `.mcp.json` does not point at
+`target/release/hprof-analyzer` (which does not exist until you build).
+It launches `scripts/mcp-launcher.sh`, which resolves the binary in this
+order: (1) `hprof-analyzer` on `PATH`, (2) the repo-local release build,
+(3) a one-time `cargo build --release`. If your MCP client cannot execute
+repo-relative scripts, either install the binary (`cargo install --path .`)
+so it is on `PATH`, or replace the `command` with the absolute path to the
+built binary.
+
 **Claude Desktop**: add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 ```json
 {

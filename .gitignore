@@ -1,5 +1,6 @@
 /target
 /web/node_modules
+/tests/playwright/node_modules
 # Scratch executables and input files from local test runs.
 /rust_out
 /stdin
