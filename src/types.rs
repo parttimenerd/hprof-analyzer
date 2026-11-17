@@ -103,6 +103,7 @@ impl HprofType {
 
     /// Returns None for Object (size depends on id_size, caller must handle it),
     /// or Some(n) for all fixed-size primitive types.
+    #[allow(dead_code)]
     pub fn fixed_size(self) -> Option<usize> {
         match self {
             Self::Object => None,
@@ -132,6 +133,7 @@ impl std::fmt::Display for HprofType {
 }
 
 /// Returns the Java display names of all primitive types in `types`, skipping Object.
+#[allow(dead_code)]
 pub fn primitive_names(types: &[HprofType]) -> Vec<String> {
     types
         .iter()

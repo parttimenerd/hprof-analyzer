@@ -5908,6 +5908,87 @@ fn not_in_value_list_excludes_correctly() {
     );
 }
 
+/// B3 (FOUND_BUGS2.md): numeric literal-list `IN` / `NOT IN` on `@objectId` must
+/// behave like the string form — the ledger's original repro (`IN (1,2,3)` →
+/// 0 rows) is *correct* behaviour, since ids 1–3 are not `ZipFile$Source`
+/// instances. This test locks the semantics with actually-existing ids.
+#[test]
+fn in_numeric_literal_list_filters_by_object_id() {
+    let Some(hprof) = philosophers() else { return };
+    // Discover two ids that really are ZipFile$Source instances.
+    let ids = {
+        let t = query_table(
+            &hprof,
+            "SELECT @objectId FROM java.util.zip.ZipFile$Source LIMIT 2",
+        );
+        assert!(t.error.is_none(), "discovery query failed: {:?}", t.error);
+        let col = t.column("@objectId");
+        assert!(col.len() >= 2, "expected ≥2 rows, got {col:?}");
+        (col[0].to_string(), col[1].to_string())
+    };
+    let (a, b) = (&ids.0, &ids.1);
+    let oql =
+        format!("SELECT @objectId FROM java.util.zip.ZipFile$Source WHERE @objectId IN ({a}, {b})");
+    let t = query_table(&hprof, &oql);
+    assert!(
+        t.error.is_none(),
+        "numeric literal IN failed: {:?}",
+        t.error
+    );
+    assert_eq!(t.len(), 2, "expected exactly the 2 listed ids");
+    let got = {
+        let mut v = t
+            .column("@objectId")
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        v.sort();
+        v
+    };
+    let mut want = vec![a.clone(), b.clone()];
+    want.sort();
+    assert_eq!(got, want, "IN returned the wrong ids");
+}
+
+/// NOT IN with a numeric literal list = total − listed ids (both syntax forms).
+#[test]
+fn not_in_numeric_literal_list_excludes_by_object_id() {
+    let Some(hprof) = philosophers() else { return };
+    let ids = {
+        let t = query_table(
+            &hprof,
+            "SELECT @objectId FROM java.util.zip.ZipFile$Source LIMIT 1",
+        );
+        assert!(t.error.is_none(), "discovery query failed: {:?}", t.error);
+        let col = t.column("@objectId");
+        assert!(!col.is_empty(), "expected ≥1 row, got {col:?}");
+        col[0].to_string()
+    };
+    let total = {
+        let t = query_table(&hprof, "SELECT COUNT(*) FROM java.util.zip.ZipFile$Source");
+        t.rows[0][0].parse::<u64>().expect("COUNT parse")
+    };
+    for (label, oql) in [
+        (
+            "prefix NOT",
+            format!(
+                "SELECT COUNT(*) FROM java.util.zip.ZipFile$Source WHERE NOT @objectId IN ({ids})"
+            ),
+        ),
+        (
+            "postfix NOT IN",
+            format!(
+                "SELECT COUNT(*) FROM java.util.zip.ZipFile$Source WHERE @objectId NOT IN ({ids})"
+            ),
+        ),
+    ] {
+        let t = query_table(&hprof, &oql);
+        assert!(t.error.is_none(), "{label} failed: {:?}", t.error);
+        let n: u64 = t.rows[0][0].parse().expect("COUNT parse");
+        assert_eq!(n, total - 1, "{label}: expected {total}−1, got {n}");
+    }
+}
+
 #[test]
 fn is_null_and_is_not_null_filter() {
     let Some(hprof) = mnemonics() else { return };

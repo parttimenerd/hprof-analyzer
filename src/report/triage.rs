@@ -704,7 +704,7 @@ impl Rule for HeadlineRetainer {
             ));
         }
         debug_assert!(
-            has_dominant_culprit(r) == r.primary_culprits.first().is_some(),
+            has_dominant_culprit(r) == !r.primary_culprits.is_empty(),
             "has_dominant_culprit must agree with primary_culprits",
         );
         if let Some(s) = r.leaks.suspects.first() {

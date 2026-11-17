@@ -2198,7 +2198,6 @@ fn run_heap_cmd(
             let resolve_ref = |addr: u64| -> String {
                 match sess.pass1.addr_to_index(addr) {
                     Some(t) => {
-                        let t = t as usize;
                         let tcls = sess
                             .class_names
                             .get(class_idx[t] as usize)
@@ -2309,7 +2308,6 @@ fn run_heap_cmd(
                             // index + class when the target is in the id_map.
                             if let hprof_analyzer::objread::FieldValue::Ref(addr) = &f.value {
                                 if let Some(t) = sess.pass1.addr_to_index(*addr) {
-                                    let t = t as usize;
                                     v["resolved"] = serde_json::json!({
                                         "object_index": t,
                                         "class": sess
@@ -2555,7 +2553,7 @@ fn run_heap_cmd(
                 .read_shallow()?
                 .map(|s| s.len())
                 .unwrap_or(sess.report.overview.total_objects as usize);
-            let ordinary = sess.report.overview.total_objects as u64;
+            let ordinary = sess.report.overview.total_objects;
             println!(
                 "Index space: {n} entries (0..{}) — {ordinary} ordinary objects + {} classes/other entries",
                 n.saturating_sub(1),
@@ -6089,6 +6087,7 @@ fn inspect_field_value_to_json(fv: &hprof_analyzer::objread::FieldValue) -> serd
     }
 }
 
+#[allow(dead_code)]
 fn inspect_field_display(fv: &hprof_analyzer::objread::FieldValue) -> String {
     match fv {
         hprof_analyzer::objread::FieldValue::Prim(v) => v.to_string(),

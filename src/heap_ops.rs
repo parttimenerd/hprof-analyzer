@@ -147,7 +147,7 @@ pub fn report_section_with_limit(
             let limit = limit.unwrap_or(100).min(500);
             let max_frames: usize = 20;
             let mut sorted: Vec<_> = r.threads.threads.iter().collect();
-            sorted.sort_by(|a, b| b.retained.cmp(&a.retained));
+            sorted.sort_by_key(|b| std::cmp::Reverse(b.retained));
             let rows: Vec<serde_json::Value> = sorted
                 .into_iter()
                 .take(limit)

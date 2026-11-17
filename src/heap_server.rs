@@ -220,7 +220,7 @@ impl HeapServerState {
             ("GET", "/retained-set") => match qs_u64(query, "index") {
                 Some(index) => {
                     let limit = qs_usize(query, "limit", 50).min(500);
-                    let class_filter = qs_param(query, "class_filter").map(|s| urlish_decode(s));
+                    let class_filter = qs_param(query, "class_filter").map(urlish_decode);
                     ops(|| {
                         heap_ops::retained_set(&self.sess, index, limit, class_filter.as_deref())
                     })

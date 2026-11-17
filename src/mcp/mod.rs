@@ -429,6 +429,7 @@ pub struct HprofMcpServer {
     /// the gate before reading it, so they observe it consistently with the
     /// session; load_dump bumps it while still holding the gate. Atomic also
     /// lets the two stateless tools (get_oql_docs, list_views) stamp it.
+    #[allow(dead_code)]
     epoch: Arc<std::sync::atomic::AtomicU64>,
     /// FIFO gate serializing stateful tool handlers in request-arrival order.
     ///
@@ -460,6 +461,7 @@ impl HprofMcpServer {
     }
 
     /// Current session epoch (0 = no dump loaded in this session yet).
+    #[allow(dead_code)]
     fn epoch(&self) -> u64 {
         self.epoch.load(std::sync::atomic::Ordering::SeqCst)
     }
@@ -467,6 +469,7 @@ impl HprofMcpServer {
     /// H1: when the caller passed `expected_epoch`, verify the session has not
     /// been switched to a different dump since. Must be called while the FIFO
     /// gate is held (same epoch-visibility contract as the handlers themselves).
+    #[allow(dead_code)]
     fn check_expected_epoch(&self, expected: Option<u64>) -> Result<(), McpError> {
         if let Some(x) = expected {
             let e = self.epoch();

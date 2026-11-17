@@ -2067,15 +2067,14 @@ fn normalize_predicate(pred: &mut Predicate, alias: Option<&str>) {
             // A bare Field on an Object-typed (String-ref) field returns Null at
             // scan time; promoting it to a RefPath routes through the RefWalk late
             // phase where the String can be decoded. LIKE/NOT LIKE also get this.
-            let rhs_is_str = matches!(rhs, Expr::Lit(crate::query::ast::Value::Str(_)));
-            let lhs_is_str = matches!(lhs, Expr::Lit(crate::query::ast::Value::Str(_)));
             let is_str_op = matches!(
                 op,
                 CompareOp::Eq | CompareOp::Ne | CompareOp::Like | CompareOp::NotLike
             );
             if is_str_op {
-                if let Expr::Attr(Attr::Field(name)) = lhs {
-                    if rhs_is_str {
+                let rhs_is_str = matches!(rhs, Expr::Lit(crate::query::ast::Value::Str(_)));
+                if rhs_is_str {
+                    if let Expr::Attr(Attr::Field(name)) = lhs {
                         let n = name.clone();
                         *lhs = Expr::Attr(Attr::RefPath {
                             hops: vec![n.clone()],
@@ -2084,8 +2083,9 @@ fn normalize_predicate(pred: &mut Predicate, alias: Option<&str>) {
                         });
                     }
                 }
-                if let Expr::Attr(Attr::Field(name)) = rhs {
-                    if lhs_is_str {
+                let lhs_is_str = matches!(lhs, Expr::Lit(crate::query::ast::Value::Str(_)));
+                if lhs_is_str {
+                    if let Expr::Attr(Attr::Field(name)) = rhs {
                         let n = name.clone();
                         *rhs = Expr::Attr(Attr::RefPath {
                             hops: vec![n.clone()],

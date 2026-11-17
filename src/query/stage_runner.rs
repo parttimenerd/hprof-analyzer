@@ -487,6 +487,23 @@ pub(crate) fn run_entry_pub(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -
     run_entry(entry, q, ctx)
 }
 
+/// B7: window-function columns (`ROW_NUMBER()`/`RANK()`/`DENSE_RANK() OVER …`)
+/// are materialized as Null placeholders during the scan; the executors in
+/// `execute.rs` fill them via `apply_window_functions`, but the stage-runner
+/// paths never did — so window columns stayed Null for every row on the
+/// scan pipeline. Call this once the rows are in final ORDER BY order:
+/// `apply_window_functions` sorts partition-index copies internally and never
+/// reorders `rows`, so the outer sort is preserved.
+#[allow(dead_code)]
+fn apply_windows_after_sort(q: &Query, columns: &[QueryColumn], rows: &mut [Vec<QueryValue>]) {
+    if q.select
+        .iter()
+        .any(|it| matches!(it, crate::query::ast::SelectItem::Window { .. }))
+    {
+        crate::query::execute::apply_window_functions(rows, columns, q, 0, &[]);
+    }
+}
+
 fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
     // Dominator/retained-set ops each produce a one-column ObjRef result and
     // fully own row building; they never fall through to join_retained.
@@ -922,6 +939,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
             crate::query::execute::sort_rows_by_columns(&mut rows, &resolved);
         }
     }
+    apply_windows_after_sort(q, &columns, &mut rows);
     if let Some(limit) = stage_limit(q) {
         if rows.len() as u64 > limit {
             rows.truncate(limit as usize);
@@ -1059,6 +1077,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
                     crate::query::execute::sort_rows_by_columns(&mut out_rows, &resolved);
                 }
             }
+            apply_windows_after_sort(q, &columns, &mut out_rows);
             let mut truncated = truncated;
             if let Some(limit) = stage_limit(q) {
                 if out_rows.len() as u64 > limit {
@@ -1135,6 +1154,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             crate::query::execute::sort_rows_by_columns(&mut out_rows, &resolved);
         }
     }
+    apply_windows_after_sort(q, &columns, &mut out_rows);
 
     if let Some(limit) = stage_limit(q) {
         if out_rows.len() as u64 > limit {
@@ -1631,6 +1651,27 @@ fn eval_late_string_method(
             }
             QueryValue::Str(result)
         }
+        // B7: `replace()` was implemented in the HAVING/array evaluators
+        // (execute.rs) but missing here, so `SELECT replace(toString(s), ...)`
+        // returned Null for every row on the scan path.
+        "replace" => {
+            if let QueryValue::Str(s) = recv {
+                let from_val = args
+                    .first()
+                    .map(|a| eval_late_expr_multi(a, idx, ret, ctx, like_regexes));
+                let to_val = args
+                    .get(1)
+                    .map(|a| eval_late_expr_multi(a, idx, ret, ctx, like_regexes));
+                match (from_val, to_val) {
+                    (Some(QueryValue::Str(from)), Some(QueryValue::Str(to))) => {
+                        QueryValue::Str(s.replace(from.as_str(), &to))
+                    }
+                    _ => QueryValue::Null,
+                }
+            } else {
+                QueryValue::Null
+            }
+        }
         _ => QueryValue::Null,
     }
 }
@@ -2094,6 +2135,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
             crate::query::execute::sort_rows_by_columns(&mut rows, &resolved);
         }
     }
+    apply_windows_after_sort(q, &columns, &mut rows);
     let mut truncated = entry.carry.truncated();
     if let Some(limit) = stage_limit(q) {
         if rows.len() as u64 > limit {
@@ -2664,9 +2706,9 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
     let mut rows: Vec<Vec<QueryValue>> = keyed_rows.into_iter().map(|(_, row)| row).collect();
 
     // ORDER BY: use the standard resolver (handles alias-stripped names).
+    let cols = query_columns(q);
     let mut order_by_note: Option<String> = None;
     if let Some(ob) = &q.order_by {
-        let cols = query_columns(q);
         let resolved = crate::query::execute::resolve_order_by_keys(q, &cols, ob);
         if !resolved.is_empty() {
             crate::query::execute::sort_rows_by_columns(&mut rows, &resolved);
@@ -2678,6 +2720,7 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
             );
         }
     }
+    apply_windows_after_sort(q, &cols, &mut rows);
 
     let mut truncated = entry.carry.truncated();
     if let Some(limit) = stage_limit(q) {
