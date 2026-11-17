@@ -712,33 +712,53 @@ pub fn find_incoming(
 
     let start = inb_off[idx] as usize;
     let end = inb_off[idx + 1] as usize;
-    let total = end - start;
+    let raw_edge_count = end - start;
     let limit = limit.min(200);
-    let shown: Vec<serde_json::Value> = inb_tgt[start..end]
-        .iter()
-        .take(limit)
-        .map(|&src| {
-            let src = src as usize;
-            let src_cidx = class_idx[src] as usize;
-            let src_class = sess
-                .class_names
-                .get(src_cidx)
-                .cloned()
-                .unwrap_or_else(|| "<unknown>".to_string());
-            serde_json::json!({
-                "object_index": src,
-                "class": src_class,
-                "shallow_bytes": shallow[src],
-                "retained_bytes": retained[src],
-            })
-        })
-        .collect();
+
+    // The raw inbound CSR lists one entry per EDGE, so a referrer holding
+    // several outgoing edges to this object (e.g. two fields pointing at it)
+    // appears once per edge. Count per-source multiplicity, then emit ONE row
+    // per unique source in first-occurrence (CSR) order, carrying the raw
+    // multiplicity on the row as `edge_count`.
+    let mut mult: HashMap<u32, u32> = HashMap::new();
+    for &src in &inb_tgt[start..end] {
+        *mult.entry(src).or_insert(0) += 1;
+    }
+    let unique_total = mult.len();
+    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut shown: Vec<serde_json::Value> = Vec::new();
+    for &src in &inb_tgt[start..end] {
+        if !seen.insert(src) {
+            continue;
+        }
+        if shown.len() >= limit {
+            break;
+        }
+        let s = src as usize;
+        let src_cidx = class_idx[s] as usize;
+        let src_class = sess
+            .class_names
+            .get(src_cidx)
+            .cloned()
+            .unwrap_or_else(|| "<unknown>".to_string());
+        shown.push(serde_json::json!({
+            "object_index": s,
+            "class": src_class,
+            "shallow_bytes": shallow[s],
+            "retained_bytes": retained[s],
+            "edge_count": mult[&src],
+        }));
+    }
 
     Ok(serde_json::json!({
         "object_index": idx,
-        "total_incoming_references": total,
+        // Unique referring objects (matches the deduplicated refs list).
+        "total_incoming_references": unique_total,
+        // Un-deduplicated CSR edge count (same object referenced via several
+        // edges is counted once per edge here).
+        "raw_edge_count": raw_edge_count,
         "shown": shown.len(),
-        "truncated": total > limit,
+        "truncated": unique_total > shown.len(),
         "refs": shown,
     }))
 }
@@ -803,12 +823,20 @@ pub fn dominator_path(sess: &CachedSession, index: u64) -> Result<serde_json::Va
         } else {
             ("<GC Root>".to_string(), 0u32, 0u64)
         };
-        path.push(serde_json::json!({
+        let mut node = serde_json::json!({
             "index": i,
             "class": class,
             "shallow_bytes": sh,
             "retained_bytes": ret,
-        }));
+        });
+        // The terminal virtual-root entry carries a synthetic index: it equals
+        // the total entry count (one past the last valid dense index), from
+        // the idom CSR's vroot/sentinel encoding. Flag it so callers never
+        // feed it back into index-taking tools (inspect_object etc.).
+        if i >= n {
+            node["synthetic"] = serde_json::json!(true);
+        }
+        path.push(node);
         if cur == vroot {
             break;
         }
@@ -821,7 +849,11 @@ pub fn dominator_path(sess: &CachedSession, index: u64) -> Result<serde_json::Va
         "path": path,
         "_hint": "Path goes from the queried object (index 0) up to the GC root (last entry). \
                   Each node dominates the starting object — every path from a GC root to the \
-                  starting object passes through every node in this chain.",
+                  starting object passes through every node in this chain. \
+                  The terminal node (class <GC Root>) is the synthetic virtual root: its index \
+                  equals the total entry count (one past the last valid dense index) and it is \
+                  flagged synthetic:true — do NOT pass it to inspect_object or other \
+                  index-taking tools.",
     }))
 }
 
@@ -943,6 +975,11 @@ pub fn gc_roots(sess: &CachedSession, limit: usize) -> Result<serde_json::Value,
         // count reports exist (covers both "hit the limit" and "enumerated none").
         "truncated": (total_gc_roots as usize) > roots.len(),
         "roots": roots,
+        "_hint": "object_index values are dense indices covering ordinary objects AND \
+                  classes/other entries. Dominator paths terminate at a synthetic virtual-root \
+                  node whose index equals the total entry count (flagged synthetic:true in \
+                  get_dominator_path/browse_dominators) — do not pass that index to \
+                  inspect_object or other index-taking tools.",
     }))
 }
 
@@ -995,6 +1032,35 @@ pub fn retained_set(
     let mut class_summary: HashMap<String, (u64, u64, u64)> = HashMap::new();
     let max_visit = 100_000usize;
 
+    // Root class, needed both for the response header and for the root's own
+    // class_summary row (the root participates in the same class_filter).
+    let root_class = {
+        let cidx = class_idx[idx] as usize;
+        sess.class_names
+            .get(cidx)
+            .map(|s| s.as_str())
+            .unwrap_or("<unknown>")
+            .to_string()
+    };
+
+    // Include the root object in the subtree accounting so
+    // total_shallow_in_subtree is consistent with root_retained_bytes (which
+    // covers the whole subtree INCLUDING the root). The root's class_summary
+    // row is subject to the same class_filter as every other row.
+    let root_shallow = shallow[idx];
+    total_shallow += root_shallow as u64;
+    total_objects_visited += 1;
+    let root_passes_filter = match &class_filter_lc {
+        Some(f) => root_class.to_lowercase().contains(f.as_str()),
+        None => true,
+    };
+    if root_passes_filter {
+        let entry = class_summary.entry(root_class.clone()).or_default();
+        entry.0 += 1;
+        entry.1 += retained[idx];
+        entry.2 += root_shallow as u64;
+    }
+
     while let Some((ret, Reverse(depth), obj)) = heap.pop() {
         let i = obj as usize;
         if i >= n {
@@ -1010,16 +1076,21 @@ pub fn retained_set(
             .unwrap_or("<unknown>");
         let sh = shallow[i];
 
-        let entry = class_summary.entry(cname.to_string()).or_default();
-        entry.0 += 1;
-        entry.1 += ret;
-        entry.2 += sh as u64;
-        total_shallow += sh as u64;
-
         let passes_filter = match &class_filter_lc {
             Some(f) => cname.to_lowercase().contains(f.as_str()),
             None => true,
         };
+        // class_summary is filtered together with the objects list when
+        // class_filter is set (flagged in the response as
+        // class_summary_filtered); the subtree totals below stay unfiltered.
+        if passes_filter {
+            let entry = class_summary.entry(cname.to_string()).or_default();
+            entry.0 += 1;
+            entry.1 += ret;
+            entry.2 += sh as u64;
+        }
+        total_shallow += sh as u64;
+
         if passes_filter && results.len() < limit {
             results.push(serde_json::json!({
                 "index": i,
@@ -1062,28 +1133,36 @@ pub fn retained_set(
     });
     class_rows.truncate(20);
 
-    let root_class = {
-        let cidx = class_idx[idx] as usize;
-        sess.class_names
-            .get(cidx)
-            .map(|s| s.as_str())
-            .unwrap_or("<unknown>")
+    let filter_note = if class_filter_lc.is_some() {
+        " When class_filter is set, the objects list AND class_summary cover only matching \
+         classes (class_summary_filtered:true); the subtree totals remain unfiltered."
+    } else {
+        ""
     };
 
     Ok(serde_json::json!({
         "object_index": index,
         "root_class": root_class,
         "root_retained_bytes": retained[idx],
+        // The root's own shallow bytes (also included in
+        // total_shallow_in_subtree below).
+        "root_shallow_bytes": root_shallow,
         "total_objects_in_subtree": total_objects_visited,
+        // Includes the root object's shallow bytes — consistent with
+        // root_retained_bytes, which covers the whole subtree including root.
         "total_shallow_in_subtree": total_shallow,
+        "class_summary_filtered": class_filter_lc.is_some(),
         "shown": results.len(),
         "objects": results,
         "class_summary": class_rows,
         "_hint": format!(
             "The retained set is the dominator subtree: all objects that would be freed if {} \
              (object {}) were garbage collected. class_summary shows where the retained memory \
-             goes.",
-            root_class, idx
+             goes. total_objects_in_subtree and total_shallow_in_subtree include the root object \
+             itself (see root_shallow_bytes), matching root_retained_bytes; class_summary rows \
+             sum each object's own retained size (dominator sizes overlap across \
+             ancestor/descendant rows).{}",
+            root_class, idx, filter_note
         ),
     }))
 }
@@ -1267,5 +1346,269 @@ pub fn field_name(
         )
     } else {
         Ok(serde_json::json!({"field_name": name}))
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+//
+// These build a real disk cache (arrays.bin + graph.bin) in a tempdir and a
+// hand-constructed CachedSession, so the pure operations above run against the
+// exact same read paths the MCP/HTTP transports use.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::{CacheDir, CacheMode, GraphForCache};
+    use crate::report::Report;
+
+    /// Build a graph-mode CachedSession backed by a tempdir cache.
+    ///
+    /// `idom` must have length n+1 (vroot = n). The dominator-children CSR and
+    /// the simple inbound CSR are derived exactly the way the analyze pipeline
+    /// does (retained::build_dom_children_csr + lib::build_simple_inbound_csr).
+    fn graph_session(
+        shallow: &[u32],
+        class_idx: &[u32],
+        idom: &[u32],
+        retained: &[u64],
+        fwd_off: &[u32],
+        fwd_tgt: &[u32],
+        class_names: Vec<String>,
+        total_objects: u64,
+    ) -> (tempfile::TempDir, CachedSession) {
+        let n = shallow.len();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = CacheDir {
+            path: dir.path().to_path_buf(),
+        };
+        let (dc_off, dc_tgt) = crate::retained::build_dom_children_csr(n, idom);
+        cache
+            .write_arrays(&crate::cache::ArraysForCache {
+                shallow,
+                class_idx,
+                idom,
+                retained,
+                dc_off: &dc_off,
+                dc_tgt: &dc_tgt,
+                n_objects: n,
+            })
+            .expect("write arrays");
+        let (inb_off, inb_tgt) = crate::build_simple_inbound_csr(fwd_off, fwd_tgt, n);
+        cache
+            .write_graph(&GraphForCache {
+                fwd_off,
+                fwd_tgt,
+                inb_off: &inb_off,
+                inb_tgt: &inb_tgt,
+                fwd_field_idx: None,
+            })
+            .expect("write graph");
+
+        let mut report = Report::default();
+        report.overview.total_objects = total_objects;
+        let sess = CachedSession {
+            dump_path: dir.path().join("dump.hprof"),
+            report,
+            pass1: crate::pass1::Pass1Snapshot {
+                class_map: Default::default(),
+                strings: Default::default(),
+                id_map_pages: crate::id_map::IdMapPages {
+                    block_base: vec![],
+                    block_start: vec![],
+                    offsets: vec![],
+                },
+                gc_root_addrs: vec![],
+                stack_frames: Default::default(),
+                stack_traces: Default::default(),
+                stack_trace_thread: Default::default(),
+                class_serial_to_addr: Default::default(),
+                class_addr_table: vec![],
+                id_size: 8,
+                header_timestamp_ms: 0,
+                file_size: 0,
+            },
+            cache,
+            mode: CacheMode::Graph,
+            class_names,
+            field_name_pool: None,
+        };
+        (dir, sess)
+    }
+
+    /// vroot(4) → 0 → {1, 2, 3}; classes A/B/C/B; obj 3 referenced twice by 0
+    /// is NOT used here — the fwd graph is only for find_incoming tests.
+    fn base_fixture() -> (tempfile::TempDir, CachedSession) {
+        let n = 4usize;
+        let shallow = vec![10u32, 20, 30, 40];
+        let class_idx = vec![0u32, 1, 2, 1];
+        let idom = vec![4u32, 0, 0, 0, 4]; // len n+1, vroot=4
+        let retained = vec![100u64, 20, 30, 40];
+        // Forward edges: 0 → 1 twice and 3 → 1 once, so object 1's inbound
+        // CSR is [0, 0, 3] (duplicate source for the dedupe test).
+        let fwd_off = vec![0u32, 2, 2, 2, 3];
+        let fwd_tgt = vec![1u32, 1, 1];
+        graph_session(
+            &shallow,
+            &class_idx,
+            &idom,
+            &retained,
+            &fwd_off,
+            &fwd_tgt,
+            vec!["A".into(), "B".into(), "C".into()],
+            n as u64,
+        )
+    }
+
+    // ── Item 1: find_incoming_references dedupe ─────────────────────────────
+
+    #[test]
+    fn find_incoming_dedupes_duplicate_edge_sources() {
+        let (_dir, sess) = base_fixture();
+        let r = find_incoming(&sess, 1, 50).expect("find_incoming");
+
+        let refs = r["refs"].as_array().expect("refs array");
+        assert_eq!(refs.len(), 2, "one row per UNIQUE source, got {r}");
+        assert_eq!(refs[0]["object_index"], serde_json::json!(0));
+        assert_eq!(
+            refs[0]["edge_count"],
+            serde_json::json!(2),
+            "source 0 holds two edges"
+        );
+        assert_eq!(refs[1]["object_index"], serde_json::json!(3));
+        assert_eq!(refs[1]["edge_count"], serde_json::json!(1));
+
+        assert_eq!(
+            r["total_incoming_references"],
+            serde_json::json!(2),
+            "total counts unique referrers"
+        );
+        assert_eq!(
+            r["raw_edge_count"],
+            serde_json::json!(3),
+            "raw CSR edge count preserved"
+        );
+        assert_eq!(r["truncated"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn find_incoming_limit_still_reports_unique_total() {
+        let (_dir, sess) = base_fixture();
+        let r = find_incoming(&sess, 1, 1).expect("find_incoming");
+        assert_eq!(r["shown"], serde_json::json!(1));
+        assert_eq!(r["total_incoming_references"], serde_json::json!(2));
+        assert_eq!(r["raw_edge_count"], serde_json::json!(3));
+        assert_eq!(r["truncated"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn find_incoming_no_duplicates_when_single_edge_per_source() {
+        let (_dir, sess) = base_fixture();
+        // Object 2 has no inbound edges in the fixture → 0 rows, no dupes.
+        let r = find_incoming(&sess, 2, 50).expect("find_incoming");
+        assert_eq!(r["total_incoming_references"], serde_json::json!(0));
+        assert_eq!(r["raw_edge_count"], serde_json::json!(0));
+        assert_eq!(r["refs"].as_array().unwrap().len(), 0);
+        assert_eq!(r["truncated"], serde_json::json!(false));
+    }
+
+    // ── Item 2: class_filter applies to class_summary ───────────────────────
+
+    #[test]
+    fn retained_set_class_filter_applies_to_class_summary() {
+        let (_dir, sess) = base_fixture();
+        let r = retained_set(&sess, 0, 50, Some("b")).expect("retained_set");
+
+        // Objects list: only class-B instances (1 and 3).
+        let objs = r["objects"].as_array().expect("objects");
+        assert!(
+            objs.iter().all(|o| o["class"] == serde_json::json!("B")),
+            "objects list must be filtered, got {objs:?}"
+        );
+        assert_eq!(objs.len(), 2);
+
+        // class_summary must NOT contain class A (the root) or C.
+        let cs = r["class_summary"].as_array().expect("class_summary");
+        assert_eq!(
+            cs.len(),
+            1,
+            "class_summary must be filtered like the objects list, got {cs:?}"
+        );
+        assert_eq!(cs[0]["class"], serde_json::json!("B"));
+        assert_eq!(cs[0]["count"], serde_json::json!(2));
+        assert_eq!(
+            cs[0]["total_shallow"],
+            serde_json::json!(60),
+            "20 + 40 shallow of the B children"
+        );
+        assert_eq!(r["class_summary_filtered"], serde_json::json!(true));
+
+        // Subtree totals stay unfiltered (whole subtree incl. root).
+        assert_eq!(r["total_objects_in_subtree"], serde_json::json!(4));
+        assert_eq!(r["total_shallow_in_subtree"], serde_json::json!(100));
+    }
+
+    // ── Item 3: subtree totals include the root ─────────────────────────────
+
+    #[test]
+    fn retained_set_totals_include_root_shallow() {
+        let (_dir, sess) = base_fixture();
+        let r = retained_set(&sess, 0, 50, None).expect("retained_set");
+
+        assert_eq!(
+            r["root_shallow_bytes"],
+            serde_json::json!(10),
+            "root's own shallow size exposed"
+        );
+        assert_eq!(
+            r["total_shallow_in_subtree"],
+            serde_json::json!(100),
+            "10 (root) + 20 + 30 + 40 — consistent with root_retained_bytes scope"
+        );
+        assert_eq!(
+            r["total_objects_in_subtree"],
+            serde_json::json!(4),
+            "root + 3 children"
+        );
+        assert_eq!(r["root_retained_bytes"], serde_json::json!(100));
+        assert_eq!(r["class_summary_filtered"], serde_json::json!(false));
+
+        // Unfiltered class_summary covers every counted object, including the
+        // root's class row (root: count 1, shallow 10, retained 100).
+        let cs = r["class_summary"].as_array().expect("class_summary");
+        let a = cs
+            .iter()
+            .find(|row| row["class"] == serde_json::json!("A"))
+            .expect("root class A must have a class_summary row");
+        assert_eq!(a["count"], serde_json::json!(1));
+        assert_eq!(a["total_shallow"], serde_json::json!(10));
+        assert_eq!(a["total_retained"], serde_json::json!(100));
+        assert_eq!(cs.len(), 3, "A, B and C rows present, got {cs:?}");
+    }
+
+    // ── Item 4: synthetic terminal index is flagged ─────────────────────────
+
+    #[test]
+    fn dominator_path_flags_synthetic_virtual_root_terminal() {
+        let (_dir, sess) = base_fixture();
+        let r = dominator_path(&sess, 1).expect("dominator_path");
+
+        let path = r["path"].as_array().expect("path array");
+        assert_eq!(path.len(), 3, "1 → 0 → vroot, got {r}");
+
+        // Real nodes carry no synthetic flag.
+        assert_eq!(path[0]["index"], serde_json::json!(1));
+        assert!(path[0].get("synthetic").is_none());
+        assert_eq!(path[1]["index"], serde_json::json!(0));
+        assert!(path[1].get("synthetic").is_none());
+
+        // Terminal = virtual root: index == entry count (n = 4 here), class
+        // <GC Root>, flagged synthetic.
+        assert_eq!(path[2]["index"], serde_json::json!(4));
+        assert_eq!(path[2]["class"], serde_json::json!("<GC Root>"));
+        assert_eq!(
+            path[2]["synthetic"],
+            serde_json::json!(true),
+            "terminal vroot node must be flagged synthetic, got {r}"
+        );
     }
 }

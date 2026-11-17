@@ -1718,6 +1718,19 @@ fn main() {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
+            if complete {
+                // Complete mode zeros primitive scalars (int/long/float/byte/boolean/
+                // short/char) but preserves all object reference fields (type 2).
+                // The dominator tree and retained sizes are built from reference edges
+                // only, so they are identical between original and complete-redacted
+                // dumps. Duplicate-string and collection fill-ratio analyses are
+                // unavailable because array data is zeroed.
+                eprintln!(
+                    "\x1b[1;36mℹ complete-mode: primitive scalars zeroed; \
+                     reference graph and dominator/retained structure preserved. \
+                     Duplicate-string / fill-ratio analyses unavailable.\x1b[0m"
+                );
+            }
         }
         Some(Cmd::CheckRedacted { input }) => {
             run_check_redacted(&input);

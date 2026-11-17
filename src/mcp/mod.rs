@@ -419,6 +419,12 @@ struct DomNode {
     /// True when `children` was truncated to `width` siblings.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     children_truncated: bool,
+    /// True for the synthetic virtual-root node (index == the total entry
+    /// count, one past the last valid dense index — the idom CSR's vroot/sentinel
+    /// encoding). Not a real heap object: do not pass this index to
+    /// inspect_object or other index-taking tools.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    synthetic: bool,
     children: Vec<DomNode>,
 }
 
@@ -514,6 +520,19 @@ impl HprofMcpServer {
         &self,
         Parameters(p): Parameters<GetOqlDocsParams>,
     ) -> Result<CallToolResult, McpError> {
+        // H5: an unknown topic used to silently return the full "all" docs —
+        // validate instead, listing the valid choices.
+        if let Some(t) = p.topic.as_deref() {
+            if !matches!(t, "syntax" | "attributes" | "examples" | "workflow" | "all") {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "unknown topic '{t}' — valid topics: syntax, attributes, examples, \
+                         workflow, all (omit for all)"
+                    ),
+                    None,
+                ));
+            }
+        }
         let text = oql_docs::get_oql_docs(p.topic.as_deref());
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -747,9 +766,23 @@ impl HprofMcpServer {
             s
         };
 
+        // D4: spell out the index space the same way the range errors do —
+        // the entry count covers ordinary objects AND classes/other entries,
+        // so agents never equate "Objects: N" with the valid index range.
+        let index_entries = result
+            .cache
+            .read_shallow()
+            .ok()
+            .flatten()
+            .map(|s| s.len() as u64)
+            .unwrap_or(result.report.overview.total_objects);
+        let ordinary_objects = result.report.overview.total_objects;
+        let other_entries = index_entries.saturating_sub(ordinary_objects);
+
         let summary = format!(
             "Loaded: {path}\n\
-             Total heap: {heap} MB  |  Objects: {objs}\
+             Total heap: {heap} MB  |  Objects: {objs} (+{others} classes/other entries; \
+             index range 0..{n_minus_1})\
              {truncated_note}\
              {redacted_note}\
              {cache_mismatch_note}\n\
@@ -763,7 +796,9 @@ impl HprofMcpServer {
              For leak/OOM investigation: get_report({{\"section\":\"triage\"}}) → then follow each critical/warning signal.",
             path = p.path,
             heap = result.report.overview.total_shallow / 1_000_000,
-            objs = result.report.overview.total_objects,
+            objs = ordinary_objects,
+            others = other_entries,
+            n_minus_1 = index_entries.saturating_sub(1),
             truncated_note = truncated_note,
             redacted_note = redacted_note,
             cache_mismatch_note = cache_mismatch_note,
@@ -894,6 +929,16 @@ impl HprofMcpServer {
         let vname = view_name.map(|s| s.to_string());
         let include_all = p.all.unwrap_or(false);
 
+        // H5: an empty oql used to round-trip as {"error": …} inside a SUCCESS
+        // body; reject it up front with an actionable message.
+        if oql.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "oql is empty — supply OQL, e.g. `SELECT * FROM java.lang.String` \
+                 (or a built-in view name like `top-retained-by-class`)",
+                None,
+            ));
+        }
+
         let result = tokio::task::spawn_blocking(move || {
             // Defense in depth: even with subquery routing fixed, a latent panic
             // in parse/plan/run must not unwind through the stdio dispatch loop
@@ -924,6 +969,22 @@ impl HprofMcpServer {
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        // H5: engine-level errors (unknown FROM class, parse failures, recovered
+        // panics) used to be delivered as {"error": …} inside a SUCCESS body, so
+        // agents read them as empty results. Mark the tool result as an error
+        // while keeping the full JSON payload visible.
+        if result
+            .get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|s| !s.is_empty())
+        {
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            let mut err = CallToolResult::success(vec![ContentBlock::text(json)]);
+            err.is_error = Some(true);
+            return Ok(err);
+        }
 
         // Inject view_name into result so LLM knows which view ran.
         let result = if let (Some(name), Some(obj)) = (&vname, result.as_object()) {
@@ -961,7 +1022,11 @@ impl HprofMcpServer {
                         retained_bytes = everything kept alive exclusively by this object/subtree. \
                         NOTE: width is clamped to 50 (depth to 8); when siblings were dropped, the node \
                         reports children_truncated:true and total_children (count before truncation). \
-                        To see more of a wide node, re-call browse_dominators on that node's index."
+                        To see more of a wide node, re-call browse_dominators on that node's index. \
+                        GC-root terminal nodes may carry synthetic indices beyond the object count \
+                        (root/vroot encodings): the '<GC Root>' node is flagged synthetic:true and \
+                        its index equals the total entry count — do NOT pass it to inspect_object \
+                        or other index-taking tools."
     )]
     async fn browse_dominators(
         &self,
@@ -991,8 +1056,9 @@ impl HprofMcpServer {
                        When the dump was loaded with load_dump (which builds the offset index automatically), \
                        also returns 'fields': [{class, name, value}] for instance objects. \
                        When the dump was loaded with load_dump({with_graph: true}), also returns \
-                       'inbound_refs': {total, shown, truncated, refs:[{object_index, class, shallow_bytes, retained_bytes}]} \
-                       — up to 20 objects that directly reference this one. \
+       'inbound_refs': {total, shown, truncated, refs:[{object_index, class, shallow_bytes, retained_bytes}]} \
+       — up to 20 objects that directly reference this one (raw per-edge list, may repeat a \
+       referrer that holds several edges; find_incoming_references deduplicates). \
                        For the full inbound list (all referrers, no cap), call find_incoming_references. \
                        After inspect, call browse_dominators({object_index: <same>}) to see what it retains.")]
     async fn inspect_object(
@@ -1018,7 +1084,12 @@ impl HprofMcpServer {
                           Requires that the dump was loaded with load_dump({with_graph: true}); \
                           returns an error with instructions otherwise. \
                           Each result row has: object_index (dense index of the referrer), \
-                          class, shallow_bytes, retained_bytes. \
+                          class, shallow_bytes, retained_bytes, edge_count (how many edges that \
+                          referrer holds to this object). \
+                          Refs are DEDUPLICATED by source object: the raw CSR lists one entry per \
+                          edge, so a referrer with several edges used to appear multiple times. \
+                          total_incoming_references counts UNIQUE referrers; raw_edge_count \
+                          reports the un-deduplicated edge total. \
                           Use object_index with browse_dominators to follow the retainer chain upward. \
                           Typical workflow: find a suspicious object with query/browse_dominators, \
                           then call find_incoming_references to see which field of which class holds it alive."
@@ -1149,13 +1220,15 @@ impl HprofMcpServer {
                        - lean (default, complete=false): single pass, zeros all primitive array elements \
                          (byte[], char[], int[], long[], float[], double[], boolean[], short[]). \
                          Fast and memory-efficient. Object instance scalar fields (int, long, etc.) are left intact.\n\
-                       - complete (complete=true): two-pass, zeros everything lean does PLUS all primitive \
-                         scalar fields on every object instance and static/constant-pool fields on classes. \
-                         Strongest guarantee; roughly 2× slower.\n\
-                       Both modes preserve the complete object graph: class names, field names, object IDs, \
-                       reference links, and thread stacks are unchanged. \
-                       The redacted file is fully readable by hprof-analyzer, Eclipse MAT, and jhat — \
-                       structural analyses (histogram, dominator tree, leak suspects, GC roots) remain accurate. \
+                        - complete (complete=true): two-pass, zeros everything lean does PLUS all primitive \
+                          scalar fields on every object instance and static/constant-pool fields on classes. \
+                          Strongest guarantee; roughly 2× slower. \
+                          Object reference fields are preserved in both modes, so the reference graph, \
+                          dominator tree, and retained-size analysis are identical to the original dump.\n\
+                        Both modes preserve the complete object graph: class names, field names, object IDs, \
+                        reference links, and thread stacks are unchanged, so structural analyses \
+                        (histogram, dominator tree, leak suspects, GC roots) remain accurate. \
+                        The redacted file is fully readable by hprof-analyzer, Eclipse MAT, and jhat. \
                        Duplicate-string and collection fill-ratio analyses are skipped on redacted dumps (data is zeroed). \
                        Output extension controls compression: .hprof (raw), .hprof.gz (gzip), .hprof.zip (zip). \
                        Recommended output name: add '-redacted' before the extension, e.g. '/tmp/dump-redacted.hprof'."
@@ -1242,6 +1315,15 @@ impl HprofMcpServer {
              Use complete=true to also zero instance scalar fields."
         };
 
+        let structure_note = if p.complete {
+            "\nℹ complete-mode redaction zeros primitive scalars but preserves all object \
+             reference fields, so the reference graph and dominator/retained structure are \
+             identical to the original. Duplicate-string and collection fill-ratio analyses \
+             are skipped because array data is zeroed.\n"
+        } else {
+            ""
+        };
+
         let msg = format!(
             "Redacted dump written to: {output}\n\n\
              {mode_note}\n\n\
@@ -1250,11 +1332,13 @@ impl HprofMcpServer {
              - Object graph structure (all reference links)\n\
              - Object IDs, class hierarchy, dominator tree\n\
              - Thread stacks and GC roots\n\n\
+             {structure_note}\
              The redacted file is safe to share. Load it with load_dump to verify the object graph \
              or run hprof-analyzer heap summary on it directly.\n\
              Note: duplicate-string and collection fill-ratio analyses will be skipped (data is zeroed).",
             output = p.output,
             mode_note = mode_note,
+            structure_note = structure_note,
         );
         Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
     }
@@ -1460,8 +1544,12 @@ impl HprofMcpServer {
                        starting object pass through every node in this chain. \
                        Use this to answer 'why is this object retained?' — the chain shows each \
                        object that must be collected before this one can be freed. \
-                       Typical workflow: find a suspect with query/browse_dominators, then call \
-                       get_dominator_path to see the full chain to the GC root."
+                        Typical workflow: find a suspect with query/browse_dominators, then call \
+                        get_dominator_path to see the full chain to the GC root. \
+                        GC-root terminal nodes may carry synthetic indices beyond the object count \
+                        (root/vroot encodings): the terminal '<GC Root>' entry is flagged \
+                        synthetic:true and its index equals the total entry count — do NOT pass \
+                        it to inspect_object or other index-taking tools."
     )]
     async fn get_dominator_path(
         &self,
@@ -1551,8 +1639,13 @@ impl HprofMcpServer {
                        Returns objects sorted by retained size descending, with optional class \
                        name filtering. Each entry has: index, class, shallow_bytes, retained_bytes, \
                        depth (distance from the root object in the dominator tree). \
-                       Also returns a class_summary: top classes by total retained bytes in the subtree. \
-                       Use this to answer 'what exactly is this object keeping alive?' — for example, \
+                        Also returns a class_summary: top classes by total retained bytes in the subtree. \
+                        When class_filter is set it applies to BOTH the objects list and class_summary \
+                        (the response flags class_summary_filtered:true); total_objects_in_subtree and \
+                        total_shallow_in_subtree always cover the whole subtree INCLUDING the root \
+                        object (root_shallow_bytes reports the root's own shallow size), consistent \
+                        with root_retained_bytes. \
+                        Use this to answer 'what exactly is this object keeping alive?' — for example, \
                        after finding a leak suspect, call get_retained_set to see the composition of \
                        its retained memory. \
                        Combine with class_filter to focus: get_retained_set({object_index: 42, class_filter: 'String'}) \
@@ -1589,8 +1682,14 @@ impl HprofMcpServer {
                        loaded heap dump, up to `limit` (default 500). GC roots are the entry \
                        points of the object retention graph — everything not reachable from a \
                        root is eligible for GC. Use the returned object_index values with \
-                       browse_dominators or inspect_object to explore what each root retains. \
-                       Does not require with_graph=true."
+                        browse_dominators or inspect_object to explore what each root retains. \
+                        object_index values cover ordinary objects AND classes/other entries. \
+                        GC-root terminal nodes may carry synthetic indices beyond the object count \
+                        (root/vroot encodings): the synthetic virtual-root node that terminates \
+                        dominator paths (index == total entry count, flagged synthetic:true in \
+                        get_dominator_path/browse_dominators) is not listed here — do not pass \
+                        that index to inspect_object. \
+                        Does not require with_graph=true."
     )]
     async fn get_gc_roots(
         &self,
@@ -1813,7 +1912,11 @@ fn build_node(
     class_by_idx: &std::collections::HashMap<u32, String>,
 ) -> DomNode {
     let vroot = n as u64;
-    let (class, ret, sh) = if idx == vroot {
+    // Defensive: any index at or past the virtual-root slot is synthetic (the
+    // vroot encoding itself, or a stray sentinel); report it as the synthetic
+    // GC root rather than an out-of-range "unknown" node.
+    let synthetic = idx >= vroot;
+    let (class, ret, sh) = if synthetic {
         // The virtual GC root's retained is the total reachable heap — the sum of
         // every object's shallow size. Summing per-object retained sizes would
         // double-count dominated objects (each object's retained overlaps its
@@ -1876,6 +1979,7 @@ fn build_node(
         shallow_bytes: sh,
         total_children,
         children_truncated,
+        synthetic,
         children,
     }
 }
@@ -2778,6 +2882,56 @@ mod tests {
             serde_json::json!(30),
             "should report 30 omitted children"
         );
+    }
+
+    /// C6: the virtual-root node (start index == entry count) is the synthetic
+    /// GC-root sentinel — it must be flagged `synthetic:true` while real child
+    /// nodes carry no flag (and no index past the entry count is ever emitted).
+    #[test]
+    fn browse_tree_flags_synthetic_virtual_root() {
+        // 4 objects, virtual root = index 4; vroot -> [0,1,2,3].
+        let n = 4usize;
+        let dc_off = vec![0u32, 0, 0, 0, 0, 4];
+        let dc_tgt = vec![0u32, 1, 2, 3];
+        let shallow = vec![10u32; n];
+        let retained = vec![10u64; n];
+        let class_idx = vec![0u32; n];
+        let class_by_idx: std::collections::HashMap<u32, String> = [(0u32, "A")]
+            .into_iter()
+            .map(|(k, v)| (k, v.to_string()))
+            .collect();
+
+        let tree = browse_tree(
+            4,
+            1,
+            10,
+            n,
+            &dc_off,
+            &dc_tgt,
+            &retained,
+            &shallow,
+            &class_idx,
+            &class_by_idx,
+        );
+
+        assert_eq!(tree["class"], "<GC Root>");
+        assert_eq!(
+            tree["synthetic"],
+            serde_json::json!(true),
+            "virtual-root node must be flagged synthetic, got {tree}"
+        );
+        let children = tree["children"].as_array().unwrap();
+        assert_eq!(children.len(), 4);
+        for child in children {
+            assert!(
+                child.get("synthetic").is_none(),
+                "real child node must NOT carry a synthetic flag: {child}"
+            );
+            assert!(
+                (child["index"].as_u64().unwrap() as usize) < n,
+                "child index must stay within the entry space"
+            );
+        }
     }
 
     #[test]
