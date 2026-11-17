@@ -280,11 +280,39 @@
 <script type="text/plain" id="wasm-glue-src">%%WASM_JS%%</script>
 <script type="text/plain" id="wasm-b64-src">%%WASM_B64%%</script>
 
-<!-- React bundle: exposes window.hprofRenderViz / hprofRenderQueryViz / hprofUnmountViz -->
-<script>%%REACT_BUNDLE%%</script>
+<!-- React bundle: stored as inert text so unsubstituted %% placeholders never cause parse errors -->
+<script type="text/plain" id="react-bundle-src">%%REACT_BUNDLE%%</script>
+
+<!-- Detect unsubstituted build placeholders and show a clear error instead of cryptic JS parse failures -->
+<script>
+(function() {
+  var markers = ['wasm-glue-src', 'wasm-b64-src', 'react-bundle-src', 'shell-js-src'];
+  for (var i = 0; i < markers.length; i++) {
+    var el = document.getElementById(markers[i]);
+    if (el && el.textContent.trim().startsWith('%%')) {
+      document.body.innerHTML = '<div style="font-family:monospace;padding:2em;color:#c00">'
+        + '<h2>Build placeholders not substituted</h2>'
+        + '<p>This file is a template. Run <code>assemble.py</code> to produce the runnable bundle:</p>'
+        + '<pre>python3 web-browser/assemble.py</pre>'
+        + '<p>Then open <code>dist/hprof-analyzer-browser.html</code> instead.</p>'
+        + '</div>';
+      throw new Error('Unsubstituted build placeholder: ' + markers[i]);
+    }
+  }
+  // Execute the React bundle now that we know it's real content
+  var reactSrc = document.getElementById('react-bundle-src').textContent;
+  // eslint-disable-next-line no-eval
+  (0, eval)(reactSrc);
+})();
+</script>
 
 <script type="module">
 // ── Load WASM glue from inert <script type="text/plain"> tags ─────────────────
+// Abort if placeholders were not substituted (detection script already showed the error UI).
+if (!document.getElementById('wasm-glue-src') ||
+    document.getElementById('wasm-glue-src').textContent.trim().startsWith('%%')) {
+  throw new Error('Aborting: unsubstituted build placeholders detected.');
+}
 const _wasmGlue = document.getElementById('wasm-glue-src').textContent;
 const _wasmB64  = document.getElementById('wasm-b64-src').textContent.trim();
 
@@ -365,7 +393,9 @@ async function _switchToWasm64() {
 window._switchToWasm64 = _switchToWasm64;
 
 // ── Shell logic (inlined from shell.js) ──────────────────────────────────────
-%%SHELL_JS%%
+// eslint-disable-next-line no-eval
+(0, eval)(document.getElementById('shell-js-src').textContent);
 </script>
+<script type="text/plain" id="shell-js-src">%%SHELL_JS%%</script>
 </body>
 </html>
