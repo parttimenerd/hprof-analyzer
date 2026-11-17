@@ -2535,6 +2535,7 @@ fn run_heap_cmd(
                             "display": nq.display,
                             "group": nq.group,
                             "needs_retained": nq.needs_retained,
+                            "needs_collections": nq.needs_collections,
                             "oql": nq.oql,
                         })
                     })
@@ -2550,11 +2551,16 @@ fn run_heap_cmd(
                         println!("── {} ────────────────────────", nq.group);
                         current_group = nq.group;
                     }
-                    let marker = if nq.needs_retained {
-                        " [needs retained]"
-                    } else {
-                        ""
-                    };
+                    let mut marker = String::new();
+                    if nq.needs_retained {
+                        marker.push_str(" [needs retained]");
+                    }
+                    if nq.needs_collections {
+                        marker.push_str(
+                            " [needs collections:true at load — analyze --collections / \
+                             load_dump({collections:true}); empty rows otherwise]",
+                        );
+                    }
                     println!("  {}{}", nq.display, marker);
                     println!("    hprof-analyzer heap query <dump> --oql \"{}\"", nq.oql);
                 }

@@ -278,6 +278,11 @@ const ATTRIBUTES: &str = r#"# OQL Attributes and Functions
 `@retainedHeapSize` is always available when running via `heap query` (it uses
 the cached pipeline). In the REPL without full analysis it may require `--full`.
 
+⚠️ `SUM(@retainedHeapSize)` double-counts objects retained by MULTIPLE holders
+(shared children counted once per holder). It is NOT comparable to the
+histogram/report retained totals, which use single-ownership dominator
+accounting. Use it only for relative per-class comparisons.
+
 ## Functions
 
 | Function | Description |
@@ -762,7 +767,9 @@ Loads a heap dump. **Blocks until complete** — wait for the response.
 - `path`: absolute path (accepts `.hprof`, `.hprof.gz`, `.hprof.zip`, `.tgz`)
 - `with_graph`: set `true` to enable `find_incoming_references` (full inbound-reference list with no \
   significance floor) and the inbound-refs list on `inspect_object`. OQL `@inbounds`/`@outbounds` \
-  traversal works in queries without it (edges are built on demand during the query scan).
+  traversal works in queries without it (edges are built on demand during the query scan). It is \
+  also required to cross-check the triage's Off-Heap (DirectByteBuffer) total via OQL — that signal \
+  sums `capacity` fields and is only queryable when the reference graph is loaded.
 
 ### get_summary({})
 Markdown summary: top 5 suspects + top 5 classes by retained size + suggested OQL queries.

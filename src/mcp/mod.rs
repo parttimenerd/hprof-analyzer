@@ -1725,9 +1725,12 @@ impl HprofMcpServer {
     /// List the 28 built-in named query views, grouped by category.
     #[tool(
         description = "List all 28 built-in named OQL queries grouped by category (Overview, Strings, Collections, Threads, Retained, Exploration). \
-                       Each entry has: name, display (human label), group, needs_retained (bool), oql (full SQL for reference). \
+                       Each entry has: name, display (human label), group, needs_retained (bool), needs_collections (bool), oql (full SQL for reference). \
                        SHORTCUT: pass the 'name' directly to query() — query({\"oql\":\"leak-suspects\"}) runs the view by name. \
-                       No need to copy the SQL. 'needs_retained' views always work after load_dump."
+                       No need to copy the SQL. 'needs_retained' views always work after load_dump. \
+                       'needs_collections' views (static-collections, unclosed-resources) additionally require the dump to have been \
+                       loaded with collections analysis enabled — load_dump({collections:true}) or load_dump({full_analysis:true}) — \
+                       and silently return zero rows otherwise."
     )]
     async fn list_views(&self) -> Result<CallToolResult, McpError> {
         // Group by category.
@@ -1739,6 +1742,7 @@ impl HprofMcpServer {
                 "display": nq.display,
                 "group": nq.group,
                 "needs_retained": nq.needs_retained,
+                "needs_collections": nq.needs_collections,
                 "oql": nq.oql,
             }));
         }
@@ -1752,17 +1756,19 @@ impl HprofMcpServer {
             "# Built-in Named Query Views\n\nUse view names directly in query() — e.g. query({\"oql\":\"leak-suspects\"}).\n\n",
         );
         for nq in NAMED_QUERIES {
+            let mut flags = String::new();
+            if nq.needs_retained {
+                flags.push_str(", needs_retained=true");
+            }
+            if nq.needs_collections {
+                flags.push_str(
+                    ", needs_collections=true (requires load_dump({collections:true}) \
+                     or full_analysis:true at load; silently empty rows otherwise)",
+                );
+            }
             out.push_str(&format!(
                 "## {} — {} (group: {}{})\n```sql\n{}\n```\n\n",
-                nq.name,
-                nq.display,
-                nq.group,
-                if nq.needs_retained {
-                    ", needs_retained=true"
-                } else {
-                    ""
-                },
-                nq.oql
+                nq.name, nq.display, nq.group, flags, nq.oql
             ));
         }
         out.push_str(&format!(

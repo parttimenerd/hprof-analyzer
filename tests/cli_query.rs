@@ -2142,6 +2142,52 @@ fn from_subquery_limit_above_set_returns_whole_set() {
     );
 }
 
+/// B9 regression: the outer LIMIT of a FROM-subquery is applied AFTER the
+/// semi-join — `SELECT … FROM (SELECT @objectId FROM java.lang.Thread) t
+/// LIMIT 3` must return exactly 3 rows (the pre-B9 engine dropped the LIMIT and
+/// returned the full 27-row semi-joined set). LIMIT 0 is an explicit empty
+/// (OQL-4: 0 rows, never truncated), and without a LIMIT the whole
+/// semi-joined set is returned.
+#[test]
+fn from_subquery_limit_3_caps_semijoin_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let t = query_table(
+        &hprof,
+        "SELECT @objectId FROM (SELECT @objectId FROM java.lang.Thread) t LIMIT 3",
+    );
+    assert_eq!(t.error, None, "unexpected error: {:?}", t.error);
+    assert_eq!(
+        t.row_count, 3,
+        "outer LIMIT 3 must cap the semi-joined rows"
+    );
+    assert_eq!(t.len(), 3);
+    assert!(
+        t.truncated,
+        "LIMIT 3 over a larger match set must mark truncated"
+    );
+
+    // LIMIT 0: explicit empty — 0 rows, NOT truncated (OQL-4).
+    let t0 = query_table(
+        &hprof,
+        "SELECT @objectId FROM (SELECT @objectId FROM java.lang.Thread) t LIMIT 0",
+    );
+    assert_eq!(t0.row_count, 0, "LIMIT 0 is an explicit empty result");
+    assert!(t0.is_empty());
+    assert!(!t0.truncated, "LIMIT 0 must not mark truncated (OQL-4)");
+
+    // Without a LIMIT the full semi-joined set is returned (27 threads).
+    let full = query_table(
+        &hprof,
+        "SELECT @objectId FROM (SELECT @objectId FROM java.lang.Thread) t",
+    );
+    assert_eq!(full.error, None, "unexpected error: {:?}", full.error);
+    assert!(
+        full.row_count > 3,
+        "no-LIMIT run must exceed the LIMIT 3 run"
+    );
+    assert!(!full.truncated, "unbounded run must not be truncated");
+}
+
 /// SW-6 + ORDER BY: `FROM (<inner>) ORDER BY <k> DESC LIMIT N` must return the
 /// top N by the sort key (not the first N in scan order), and exactly N rows when
 /// the set is large enough. The sort happens before the semi-join preserves order,

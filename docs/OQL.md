@@ -365,6 +365,15 @@ marked ¹ require the full analysis pipeline.
 | `@dominatorClass`¹ | Str | Class name of the immediate dominator object |
 | `@dominatorDepth`¹ | Int | Distance (in dominator hops) from GC roots |
 
+> **Caution — `SUM(@retainedHeapSize)`:** it double-counts objects retained by
+> MULTIPLE holders (shared children are counted once per holder). It is NOT
+> comparable to the histogram/report retained totals, which use single-ownership
+> dominator accounting. Use it only for relative per-class comparisons.
+
+> The triage's **Off-Heap (DirectByteBuffer)** total sums `capacity` fields and
+> is only verifiable via OQL when the dump is loaded with the reference graph
+> (`--with-graph` / `load_dump({with_graph: true})`).
+
 ### `pathToRoot(alias)`¹
 
 Walks `idom[]` upward from each matched object to the GC root, emitting one row
