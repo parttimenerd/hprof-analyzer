@@ -203,6 +203,12 @@ impl Pass1 {
         let mut heap_dump_segments = 0u64;
         let mut gc_root_tag_counts: std::collections::HashMap<u8, u64> =
             std::collections::HashMap::new();
+        // D1: a well-formed HPROF always ends with a HEAP_DUMP_END (0x2C) record.
+        // `next_record()` treats a mid-header EOF as a CLEAN end of stream (it
+        // must, for truncated gzip), so a file cut exactly at a record boundary
+        // would otherwise look complete. Track whether the terminator was seen;
+        // a clean-EOF exit without it means the dump was truncated.
+        let mut saw_heap_dump_end = false;
 
         loop {
             let (tag, length) = match r.next_record()? {
@@ -311,7 +317,10 @@ impl Pass1 {
                         &mut gc_root_tag_counts,
                     )
                 }
-                tags::HEAP_DUMP_END => Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end")),
+                tags::HEAP_DUMP_END => {
+                    saw_heap_dump_end = true;
+                    Err(io::Error::new(HEAP_DUMP_END_KIND, "heap_dump_end"))
+                }
                 tags::UNLOAD_CLASS => {
                     unload_class_records += 1;
                     r.skip(length)
@@ -338,7 +347,13 @@ impl Pass1 {
 
         crate::trace::probe("pass1: after scan loop (all tmp_* grown)");
         // Capture truncation flag before dropping the reader.
-        let truncated_input = r.is_truncated() || plain_truncated;
+        // D1: the record loop has three exits — HEAP_DUMP_END (clean), a clean
+        // `next_record() == None` EOF (lenient, also used by truncated gzip), or
+        // a swallowed mid-record UnexpectedEof/InvalidData. Only the first is a
+        // complete plain dump, so flag everything else that lacks the 0x2C
+        // terminator as truncated. (Gzip corruption additionally sets
+        // `r.is_truncated()` via LenientGzDecoder.)
+        let truncated_input = r.is_truncated() || plain_truncated || !saw_heap_dump_end;
         let redacted = plain_redacted;
         // Free the reader buffer and no-longer-needed intern map before the
         // sort to trim the working set as much as possible before allocating order.
@@ -1261,5 +1276,40 @@ impl Pass1Snapshot {
             header_timestamp_ms: p.header_timestamp_ms,
             file_size: p.file_size,
         }
+    }
+
+    /// Resolve an object address to its dense index using the serialized IdMap
+    /// pages — the same two-level lookup as `IdMap::index_of`, without
+    /// rebuilding the map. Used by `heap inspect` to turn a raw reference
+    /// address into a resolved `class@index` display (H6c).
+    ///
+    /// Offsets inside one block are strictly ascending (block addresses are
+    /// ascending and span < BLOCK_SPAN), so a plain binary search per block is
+    /// correct; a gap between blocks simply fails the search.
+    pub fn addr_to_index(&self, addr: u64) -> Option<usize> {
+        let pages = &self.id_map_pages;
+        if pages.block_base.is_empty() || addr == 0 || addr < pages.block_base[0] {
+            return None;
+        }
+        let b = pages.block_base.partition_point(|&base| base <= addr) - 1;
+        let delta = addr - pages.block_base[b];
+        let d = u32::try_from(delta).ok()?;
+        let lo = pages.block_start[b] as usize;
+        let hi = pages.block_start.get(b + 1).copied().unwrap_or(0) as usize;
+        pages.offsets[lo..hi].binary_search(&d).ok().map(|p| lo + p)
+    }
+
+    /// Inverse of [`addr_to_index`](Self::addr_to_index): the object address
+    /// stored at dense index `i` (same computation as `IdMap::addr_at`, without
+    /// rebuilding the map).
+    pub fn index_to_addr(&self, i: usize) -> Option<u64> {
+        let pages = &self.id_map_pages;
+        if pages.offsets.is_empty() {
+            return None;
+        }
+        let b = pages.block_start.partition_point(|&s| (s as usize) <= i) - 1;
+        let base = *pages.block_base.get(b)?;
+        let off = *pages.offsets.get(i)?;
+        Some(base + off as u64)
     }
 }

@@ -2591,6 +2591,18 @@ fn run_heap_cmd(
             }
         }
         HeapCmd::CacheList { path } => {
+            // H6(e): --category/--category-config are analysis options (they
+            // participate in the analysis cache key when passed to load/summary/
+            // report). On cache-list/cache-clear they do nothing — warn instead
+            // of silently ignoring them, so agents don't assume the listing is
+            // category-scoped.
+            if !category.is_empty() || category_config.is_some() {
+                eprintln!(
+                    "warning: --category/--category-config are analysis options and are \
+                     ignored by cache-list; cache entries are keyed per option set — \
+                     use cache-clear to drop all of them"
+                );
+            }
             let search_path = path.as_deref().unwrap_or(".");
             let p = std::path::Path::new(search_path);
             if p.is_file() {
@@ -2605,6 +2617,13 @@ fn run_heap_cmd(
             }
         }
         HeapCmd::CacheClear { dump } => {
+            // H6(e): same ignored-flag warning as cache-list.
+            if !category.is_empty() || category_config.is_some() {
+                eprintln!(
+                    "warning: --category/--category-config are analysis options and are \
+                     ignored by cache-clear (it removes ALL entries for this dump)"
+                );
+            }
             // H6(f)/F1: clear ALL cache entries for this dump — every hash
             // subdir (plain, with-graph, stale-mtime siblings) plus any stray
             // files under <dump>.hprof-cache — not just the entry matching the
@@ -4393,7 +4412,6 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
                 ),
             ));
         }
-        eprintln!("DBG-FASTPATH entered");
         let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
         let addr_vec = if needs_sv {
             query::run::id_map_to_addrs(&p1.id_map)
