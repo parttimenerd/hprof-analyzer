@@ -10,6 +10,14 @@
 //! such as annotation values (`@Value("secret")`). The string IDs are preserved
 //! so LOAD_CLASS and CLASS_DUMP name references remain structurally intact.
 //!
+//! For INSTANCE_DUMP records: object-reference fields (type code 2) are always
+//! copied verbatim so that the heap reference graph is never corrupted. If a
+//! class has no CLASS_DUMP in the file (should not occur in valid HROFs), or if
+//! the known field layout is shorter than the declared instance size (subclass
+//! fields from an unknown super), the unaccounted bytes are also copied verbatim
+//! rather than zeroed — zeroing would null any object-reference fields in the
+//! unknown region, severing edges in the heap graph.
+//!
 //! External tools (MAT, jhat) skip the marker via the standard length-prefixed
 //! skip path and open the file normally.
 
@@ -551,7 +559,10 @@ fn write_redacted_heap_segment<W: Write>(
 }
 
 /// INSTANCE_DUMP: copy header (id + u4 stack + class_id + u4 data_len),
-/// then for each field in flattened type list: copy IDs, write 0x00 for primitives.
+/// then for each field in flattened type list: copy IDs, zero primitives.
+/// If the class layout is unknown or shorter than data_len, the unaccounted
+/// tail bytes are copied verbatim (not zeroed) to avoid severing object-reference
+/// fields and corrupting the heap graph.
 fn redact_instance_dump<W: Write>(
     r: &mut HprofReader,
     w: &mut W,
@@ -593,16 +604,18 @@ fn redact_instance_dump<W: Write>(
                 }
             }
         }
-        // If fewer bytes consumed than declared (unknown subclass fields, truncated layout),
-        // zero the remainder — never leak the tail bytes.
+        // If fewer bytes consumed than declared (unknown subclass fields,
+        // truncated layout), copy the remainder verbatim — zeroing would sever
+        // any object-reference fields the layout doesn't account for, which
+        // corrupts the heap graph and shifts the dominator tree.
         if written < data_len {
-            r.skip(data_len - written)?;
-            write_zeroes(w, data_len - written)?;
+            copy_exact(r, w, data_len - written)?;
         }
     } else {
-        // Unknown class — zero all bytes conservatively so no primitive values leak.
-        r.skip(data_len)?;
-        write_zeroes(w, data_len)?;
+        // Unknown class — copy verbatim to preserve any object-reference
+        // fields inside (zeroing them would null the edges and corrupt the
+        // heap graph). Primitive values in these instances are not redacted.
+        copy_exact(r, w, data_len)?;
     }
 
     Ok(header_size + data_len)
@@ -2092,8 +2105,9 @@ mod tests {
     }
 
     #[test]
-    fn unknown_class_instance_body_zeroed() {
-        // Instance whose class_id has no CLASS_DUMP in the file — body must be zeroed.
+    fn unknown_class_instance_body_preserved() {
+        // Instance whose class_id has no CLASS_DUMP — body must be copied verbatim
+        // (zeroing would null any object-reference fields and corrupt the heap graph).
         let missing_class_id = 9999u32;
         let obj_id = 1u32;
         let field_data = [0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44];
@@ -2113,15 +2127,16 @@ mod tests {
         let field_start = 17;
         let got: &[u8] = &heap_body[field_start..field_start + field_data.len()];
         assert_eq!(
-            got, &[0u8; 8],
-            "unknown-class instance body must be fully zeroed"
+            got, &field_data,
+            "unknown-class instance body must be copied verbatim to preserve object refs"
         );
     }
 
     #[test]
-    fn instance_with_truncated_layout_zeroes_remainder() {
+    fn instance_with_truncated_layout_preserves_tail() {
         // Class declares 1 int field (4 bytes), but instance data_len = 8 bytes.
-        // The extra 4 bytes must be zeroed (not leaked verbatim).
+        // The extra 4 bytes (unknown subclass fields, possibly object refs) must be
+        // copied verbatim — zeroing could null reference fields and corrupt the graph.
         let class_id = 200u32;
         let obj_id = 201u32;
         let field_data = [0xFF, 0xFF, 0xFF, 0xFF, 0xAB, 0xCD, 0xEF, 0x01];
@@ -2144,9 +2159,12 @@ mod tests {
         let inst_start = 48;
         let field_start = inst_start + 17;
         let got: &[u8] = &heap_body[field_start..field_start + 8];
+        // Known int field (4 bytes) is zeroed; unknown tail (4 bytes) is preserved.
+        assert_eq!(&got[..4], &[0u8; 4], "known int field must be zeroed");
         assert_eq!(
-            got, &[0u8; 8],
-            "all 8 bytes (4 known + 4 tail) must be zeroed"
+            &got[4..],
+            &field_data[4..],
+            "unknown tail bytes must be preserved verbatim"
         );
     }
 
