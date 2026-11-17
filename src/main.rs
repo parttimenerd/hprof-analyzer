@@ -437,6 +437,13 @@ enum Cmd {
         /// rules as the top-level --category-config flag).
         #[arg(long, value_name = "PATH", global = true)]
         category_config: Option<std::path::PathBuf>,
+        /// Proceed despite a truncated dump (D1): `heap summary`/`heap load`/
+        /// `heap report` refuse a plain .hprof file that ended mid-record;
+        /// pass --force to accept the partial analysis (the ⚠ warning is
+        /// still printed). The gzip/zip/tar paths stay lenient and ignore
+        /// this flag.
+        #[arg(long, global = true)]
+        force: bool,
     },
     /// Start an MCP server that exposes heap-analysis tools via stdin/stdout.
     ///
@@ -649,6 +656,10 @@ enum HeapCmd {
         /// Number of classes to print (default 50).
         #[arg(long, value_name = "N", default_value_t = 50)]
         limit: usize,
+        /// Only show classes whose (pretty) name contains this substring
+        /// (case-insensitive). Applied before --limit.
+        #[arg(long = "class-filter", value_name = "SUBSTR")]
+        class_filter: Option<String>,
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -1273,6 +1284,127 @@ fn mask_secret(value: &str) -> String {
     format!("{head}****{tail}")
 }
 
+// ── D1/D2/H6 CLI helpers ─────────────────────────────────────────────────────
+
+/// True when the file at `path` is a PLAIN (uncompressed, unarchived) stream:
+/// no gzip magic (1f 8b), no zip magic (PK\x03\x04). Used by the D1
+/// truncation gate — plain `.hprof` reads are strict, container formats stay
+/// lenient (their truncation is handled by the existing gzip/zip warnings).
+fn is_plain_stream(path: &str) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 4];
+    let n = f.read(&mut head).unwrap_or(0);
+    if n >= 2 && head[..2] == [0x1f, 0x8b] {
+        return false; // gzip
+    }
+    if n >= 4 && head[..2] == [0x50, 0x4b] {
+        return false; // zip
+    }
+    true
+}
+
+/// Escape raw bytes for display in an error message: printable ASCII shows as
+/// itself, everything else as `\xHH`. Quotes/backslashes escaped too.
+fn escape_bytes_for_msg(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 4);
+    for &b in bytes {
+        match b {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            b' '..=b'~' => out.push(b as char),
+            _ => out.push_str(&format!("\\x{b:02x}")),
+        }
+    }
+    out
+}
+
+/// D2: turn a dump-loading error into a message that says what the file
+/// actually is instead of leaking internal parser details:
+///  - empty file → "file is empty or not a valid HPROF dump"
+///  - gzip/zip/HPROF magic → genuine parse error, passed through
+///  - anything else (e.g. a `.lz4` file, a text file named `.hprof`) →
+///    "unsupported compression or invalid HPROF header …" with the actual
+///    first bytes shown escaped.
+fn friendly_dump_error(path: &str, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        return format!("dump file not found: {path}");
+    }
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return format!("failed to analyze {path}: {e}");
+    };
+    let mut head = [0u8; 16];
+    let n = std::io::Read::read(&mut f, &mut head).unwrap_or(0);
+    let head = &head[..n];
+    if n == 0 {
+        return format!("file is empty or not a valid HPROF dump: {path}");
+    }
+    let looks_hprof = head.starts_with(b"JAVA PROFILE")
+        || (n >= 2 && head[..2] == [0x1f, 0x8b]) // gzip
+        || (n >= 4 && head[..2] == [0x50, 0x4b]); // zip
+    if looks_hprof {
+        // The container/HPROF magic is right — this is a real parse failure.
+        return format!("failed to analyze {path}: {e}");
+    }
+    format!(
+        "unsupported compression or invalid HPROF header — '{path}' does not look like a \
+         .hprof file (starts with: \"{}\")",
+        escape_bytes_for_msg(head)
+    )
+}
+
+/// H6(d): size formatter for standalone CLI tables — MiB math with MiB labels
+/// (`B`/`KiB`/`MiB`/`GiB`/`TiB`), 2 decimals above KiB so close sizes stay
+/// distinguishable. The report's `format_bytes` keeps its MB-as-MiB labels
+/// (with the SIZE_BASIS_CAPTION); these standalone tables carry no caption, so
+/// the label says exactly what the number is.
+fn fmt_size_mib(n: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    const GIB: u64 = 1024 * MIB;
+    const TIB: u64 = 1024 * GIB;
+    if n < KIB {
+        return format!("{n} B");
+    }
+    let k = n as f64 / KIB as f64;
+    if n < MIB {
+        return format!("{k:.1} KiB");
+    }
+    let m = n as f64 / MIB as f64;
+    if n < GIB {
+        return format!("{m:.2} MiB");
+    }
+    let g = n as f64 / GIB as f64;
+    if n < TIB {
+        return format!("{g:.2} GiB");
+    }
+    format!("{:.2} TiB", n as f64 / TIB as f64)
+}
+
+/// H6(b): recursively add an `object_index` key mirroring each node's legacy
+/// `index` key (browse JSON), so browse/inspect JSON key names agree. `index`
+/// is kept as a deprecated alias for one release.
+fn add_object_index_aliases(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(map) => {
+            if let Some(i) = map.get("index").cloned() {
+                map.entry("object_index").or_insert(i);
+            }
+            for (_k, child) in map.iter_mut() {
+                add_object_index_aliases(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                add_object_index_aliases(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Parse args and dispatch to the selected subcommand.
 fn main() {
     // Restore default SIGPIPE handling so `… | head` (or any reader that closes
@@ -1565,8 +1697,9 @@ fn main() {
             cmd,
             category,
             category_config,
+            force,
         }) => {
-            if let Err(e) = run_heap_cmd(cmd, category, category_config.as_deref()) {
+            if let Err(e) = run_heap_cmd(cmd, category, category_config.as_deref(), force) {
                 fail(e);
             }
         }
@@ -1606,6 +1739,7 @@ fn run_heap_cmd(
     cmd: HeapCmd,
     category: Vec<String>,
     category_config: Option<&std::path::Path>,
+    force: bool,
 ) -> anyhow::Result<()> {
     use hprof_analyzer::{analyze_with_cache, cache::CacheMode, mcp::oql_docs};
     // Validate category specs before passing them to the lib.
@@ -1635,21 +1769,58 @@ fn run_heap_cmd(
             if !path.exists() {
                 anyhow::bail!("dump file not found: {dump}");
             }
+            // H6(e): when a cached report already exists, --category specs
+            // cannot change what it contains (the cache key does not include
+            // them). Warn loudly instead of silently ignoring the flag.
+            if !category.is_empty()
+                && hprof_analyzer::cache::CacheDir::for_dump(path)
+                    .map(|c| c.is_valid(mode))
+                    .unwrap_or(false)
+            {
+                eprintln!(
+                    "warning: --category is ignored for {dump}: a cached report already exists \
+                     and the cache key does not include category options. Run \
+                     `hprof-analyzer heap cache-clear {dump}` and reload to re-analyze \
+                     with categories."
+                );
+            }
             let show_progress = std::io::stderr().is_terminal();
             let result = analyze_with_cache(path, &lib_opts, mode, |stage| {
                 if show_progress {
                     eprint!("\r\x1b[K[hprof] {stage}...");
                 }
-            })?;
+            })
+            .map_err(|e| anyhow::anyhow!("{}", friendly_dump_error(dump, &e)))?;
             if show_progress {
                 eprint!("\r\x1b[K");
             }
             Ok(result)
         };
 
+    // D1: refuse a truncated PLAIN .hprof dump unless --force. Gzip/zip/tar
+    // inputs stay lenient (a truncated archive still yields a partial report
+    // with the existing warning) because the container may hide the real
+    // end-of-dump; redaction also relies on lenient parsing of partial input.
+    // Called AFTER `load` so the gate applies both to freshly-parsed and
+    // cached sessions (truncated_input is persisted in the cached report).
+    let truncation_gate =
+        |sess: &hprof_analyzer::cache::CachedSession, dump: &str| -> anyhow::Result<()> {
+            if !sess.report.truncated_input || !is_plain_stream(dump) || force {
+                return Ok(());
+            }
+            let file_size = sess.pass1.file_size;
+            eprintln!(
+                "\x1b[1;31m⚠ DUMP IS TRUNCATED\x1b[0m — '{dump}' ended mid-record after \
+             {file_size} bytes; the analysis below covers only the records read before \
+             truncation and is INCOMPLETE."
+            );
+            anyhow::bail!("dump is truncated — pass --force to analyze the partial data anyway")
+        };
+
     match cmd {
         HeapCmd::Summary { dump, json } => {
             let sess = load(&dump, CacheMode::Full)?;
+            truncation_gate(&sess, &dump)?;
             let r = &sess.report;
             if r.truncated_input {
                 // Loud, unmissable warning on stderr so it survives `| head`, JSON
@@ -1715,6 +1886,7 @@ fn run_heap_cmd(
             json,
         } => {
             let sess = load(&dump, CacheMode::Full)?;
+            truncation_gate(&sess, &dump)?;
             if json {
                 let sec = section.as_deref().unwrap_or("all");
                 let val = hprof_analyzer::heap_ops::report_section(&sess, sec)
@@ -1728,16 +1900,23 @@ fn run_heap_cmd(
                 );
             }
         }
-        HeapCmd::Histogram { dump, limit, json } => {
+        HeapCmd::Histogram {
+            dump,
+            limit,
+            class_filter,
+            json,
+        } => {
             let sess = load(&dump, CacheMode::Full)?;
             // Use the full class histogram (untruncated), not `top.biggest_classes`
             // which is capped at the `top_consumers` limit (default 20).
-            let rows: Vec<_> = sess
-                .report
-                .overview
-                .histogram
+            let mut rows: Vec<_> = sess.report.overview.histogram.iter().collect();
+            if let Some(f) = &class_filter {
+                let f = f.to_ascii_lowercase();
+                rows.retain(|c| c.pretty_class.to_ascii_lowercase().contains(&f));
+            }
+            rows.truncate(limit);
+            let json_rows: Vec<_> = rows
                 .iter()
-                .take(limit)
                 .map(|c| {
                     serde_json::json!({
                         "class": c.pretty_class,
@@ -1747,16 +1926,23 @@ fn run_heap_cmd(
                 })
                 .collect();
             if json {
-                println!("{}", serde_json::to_string_pretty(&rows)?);
+                println!("{}", serde_json::to_string_pretty(&json_rows)?);
             } else {
-                println!("{:<60} {:>12} {:>16}", "Class", "Instances", "Retained");
-                println!("{}", "-".repeat(90));
-                for c in sess.report.overview.histogram.iter().take(limit) {
+                println!(
+                    "{:<60} {:>12} {:>14} {:>16}",
+                    "Class", "Instances", "Retained", "Bytes"
+                );
+                println!("{}", "-".repeat(106));
+                for c in rows {
                     println!(
-                        "{:<60} {:>12} {:>16}",
+                        "{:<60} {:>12} {:>14} {:>16}",
                         c.pretty_class,
                         c.instances,
-                        hprof_analyzer::report::format_bytes(c.retained),
+                        // H6(d): MiB math with MiB labels at 2-decimal precision
+                        // (raw bytes column disambiguates close sizes), sorted by
+                        // raw retained so equal labels can never hide ordering.
+                        fmt_size_mib(c.retained),
+                        c.retained,
                     );
                 }
             }
@@ -1856,7 +2042,10 @@ fn run_heap_cmd(
                         println!("{}", cells.join("  "));
                     }
                     if r.truncated {
-                        println!("(truncated — {} rows total)", r.row_count);
+                        println!(
+                            "({} rows shown — LIMIT applied; more results may exist)",
+                            r.row_count
+                        );
                     }
                     if let Some(n) = &r.note {
                         println!("note: {n}");
@@ -1890,6 +2079,20 @@ fn run_heap_cmd(
                 .ok_or_else(|| anyhow::anyhow!("class_idx missing from cache"))?;
             let n = shallow.len();
             let start = index.unwrap_or(n as u64);
+            // H6(a): an out-of-range --index used to render a silent
+            // `<unknown>` node with 0 retained; error with the valid range
+            // instead (D4 phrasing: the index space covers objects AND
+            // classes/other entries).
+            if let Some(ix) = index {
+                if ix >= n as u64 {
+                    anyhow::bail!(
+                        "object_index {ix} out of range — index range covers objects AND \
+                         classes/other entries: 0..{} ({} ordinary objects)",
+                        n - 1,
+                        sess.report.overview.total_objects,
+                    );
+                }
+            }
             let class_by_idx: std::collections::HashMap<u32, String> = sess
                 .class_names
                 .iter()
@@ -1909,6 +2112,12 @@ fn run_heap_cmd(
                 &class_by_idx,
             );
             if json {
+                // H6(b): `browse` JSON keyed nodes as `index` while `inspect`
+                // (and every other heap subcommand) uses `object_index`. Emit
+                // `object_index` on every node and keep `index` as a deprecated
+                // alias for one release.
+                let mut tree = tree;
+                add_object_index_aliases(&mut tree);
                 println!("{}", serde_json::to_string_pretty(&tree)?);
             } else {
                 print_dom_tree(&tree, 0);
@@ -1940,7 +2149,12 @@ fn run_heap_cmd(
                 .ok_or_else(|| anyhow::anyhow!("class_idx missing"))?;
             let idx = index as usize;
             if idx >= shallow.len() {
-                anyhow::bail!("object_index {idx} out of range (0..{})", shallow.len());
+                anyhow::bail!(
+                    "object_index {idx} out of range — index range covers objects AND \
+                     classes/other entries: 0..{} ({} ordinary objects)",
+                    shallow.len() - 1,
+                    sess.report.overview.total_objects,
+                );
             }
             let cidx = class_idx[idx] as usize;
             let class_name = sess
@@ -1948,6 +2162,60 @@ fn run_heap_cmd(
                 .get(cidx)
                 .map(|s| s.as_str())
                 .unwrap_or("<unknown>");
+            // H6(c): java.lang.Class objects are CLASS_DUMP records — objread
+            // cannot decode them (no INSTANCE_DUMP body, hprof offset is the
+            // 0 sentinel), so `fields_result` is always None for them. Report
+            // the class-object metadata we DO have from pass1 instead of
+            // bare silence.
+            let is_class_object = class_name == "java.lang.Class";
+            let class_object_note: Option<String> = if is_class_object {
+                match sess
+                    .pass1
+                    .index_to_addr(idx)
+                    .and_then(|addr| sess.pass1.class_map.get(&addr))
+                {
+                    Some(ci) => {
+                        let statics = ci.static_obj_count;
+                        let prim_bytes = ci.static_prim_bytes;
+                        Some(format!(
+                            "class object (CLASS_DUMP) — no instance fields to decode. \
+                             Static fields: {statics} object ref(s), {prim_bytes} primitive byte(s) \
+                             (values not decoded; use `heap report --section static-collections` \
+                             or OQL for class-level data)"
+                        ))
+                    }
+                    None => Some(
+                        "class object (CLASS_DUMP) — no instance fields to decode; \
+                         static-field metadata unavailable for this index"
+                            .to_string(),
+                    ),
+                }
+            } else {
+                None
+            };
+            // H6(c): resolve raw reference addresses to `class@index` when the
+            // target is in the id_map (Pass1Snapshot::addr_to_index, O(log n)).
+            let resolve_ref = |addr: u64| -> String {
+                match sess.pass1.addr_to_index(addr) {
+                    Some(t) => {
+                        let t = t as usize;
+                        let tcls = sess
+                            .class_names
+                            .get(class_idx[t] as usize)
+                            .map(|s| s.as_str())
+                            .unwrap_or("<unknown>");
+                        format!("{tcls}@{t} (0x{addr:x})")
+                    }
+                    None => format!("0x{addr:x}"),
+                }
+            };
+            let field_ref_display = |fv: &hprof_analyzer::objread::FieldValue| -> String {
+                match fv {
+                    hprof_analyzer::objread::FieldValue::Prim(v) => v.to_string(),
+                    hprof_analyzer::objread::FieldValue::Ref(addr) => resolve_ref(*addr),
+                    hprof_analyzer::objread::FieldValue::Null => "null".to_string(),
+                }
+            };
 
             // Attempt to read field values from the dump (requires offsets.bin).
             let fields_result: Option<Vec<hprof_analyzer::objread::InstanceField>> = sess
@@ -2032,14 +2300,33 @@ fn run_heap_cmd(
                     let fj: Vec<serde_json::Value> = fields
                         .iter()
                         .map(|f| {
-                            serde_json::json!({
+                            let mut v = serde_json::json!({
                                 "class": f.owner,
                                 "name": f.name,
                                 "value": inspect_field_value_to_json(&f.value),
-                            })
+                            });
+                            // H6(c): resolve reference fields to their dense
+                            // index + class when the target is in the id_map.
+                            if let hprof_analyzer::objread::FieldValue::Ref(addr) = &f.value {
+                                if let Some(t) = sess.pass1.addr_to_index(*addr) {
+                                    let t = t as usize;
+                                    v["resolved"] = serde_json::json!({
+                                        "object_index": t,
+                                        "class": sess
+                                            .class_names
+                                            .get(class_idx[t] as usize)
+                                            .cloned()
+                                            .unwrap_or_else(|| "<unknown>".to_string()),
+                                    });
+                                }
+                            }
+                            v
                         })
                         .collect();
                     obj["fields"] = serde_json::json!(fj);
+                }
+                if let Some(note) = &class_object_note {
+                    obj["class_object_note"] = serde_json::json!(note);
                 }
                 if let Some(ib) = &inbound {
                     let refs_json: Vec<serde_json::Value> = ib
@@ -2075,14 +2362,18 @@ fn run_heap_cmd(
                     if !fields.is_empty() {
                         println!("  Fields:");
                         for f in fields {
+                            // H6(c): object refs render as `class@index (0x…)`
+                            // instead of a bare hex address.
                             println!(
                                 "    {}.{} = {}",
                                 f.owner,
                                 f.name,
-                                inspect_field_display(&f.value)
+                                field_ref_display(&f.value)
                             );
                         }
                     }
+                } else if let Some(note) = &class_object_note {
+                    println!("  Fields: ({note})");
                 }
                 if let Some(ib) = &inbound {
                     println!(
@@ -2251,34 +2542,115 @@ fn run_heap_cmd(
             } else {
                 CacheMode::Full
             };
-            load(&dump, mode)?;
+            let sess = load(&dump, mode)?;
+            truncation_gate(&sess, &dump)?;
             println!("Cache populated for: {dump}");
+            // I1/D4: an honest load banner. Suspects come from the leak-suspect
+            // detector (report.leaks.suspects), NOT from the histogram's
+            // top-by-retained; histogram tops are labeled as such separately.
+            // Both index-space numbers are spelled out so a range error later
+            // never contradicts the banner.
+            let n = sess
+                .cache
+                .read_shallow()?
+                .map(|s| s.len())
+                .unwrap_or(sess.report.overview.total_objects as usize);
+            let ordinary = sess.report.overview.total_objects as u64;
+            println!(
+                "Index space: {n} entries (0..{}) — {ordinary} ordinary objects + {} classes/other entries",
+                n.saturating_sub(1),
+                (n as u64).saturating_sub(ordinary),
+            );
+            println!(
+                "## Leak Suspects ({} detected)",
+                sess.report.leaks.suspects.len()
+            );
+            if sess.report.leaks.suspects.is_empty() {
+                println!("no leak suspects detected");
+            } else {
+                for (i, s) in sess.report.leaks.suspects.iter().take(5).enumerate() {
+                    println!(
+                        "  {}. {} — {} retained",
+                        i + 1,
+                        s.pretty_class,
+                        hprof_analyzer::report::format_bytes(s.retained),
+                    );
+                }
+            }
+            println!("## Top classes by retained size");
+            if sess.report.top.biggest_classes.is_empty() {
+                println!("  (no class data)");
+            } else {
+                for (i, c) in sess.report.top.biggest_classes.iter().take(5).enumerate() {
+                    println!(
+                        "  {}. {} — {} instances, {} retained",
+                        i + 1,
+                        c.pretty_class,
+                        c.instances,
+                        hprof_analyzer::report::format_bytes(c.retained),
+                    );
+                }
+            }
         }
         HeapCmd::CacheList { path } => {
             let search_path = path.as_deref().unwrap_or(".");
             let p = std::path::Path::new(search_path);
             if p.is_file() {
-                // Specific dump file — show its cache
-                let cache = hprof_analyzer::cache::CacheDir::for_dump(p)?;
-                let cache_path = &cache.path;
-                if cache_path.exists() {
-                    let size = dir_size_recursive(cache_path);
-                    println!(
-                        "{}: {:.1} MB",
-                        cache_path.display(),
-                        size as f64 / 1_000_000.0
-                    );
-                } else {
-                    println!("No cache for: {search_path}");
-                }
+                // Specific dump file — show EVERY cache entry for it (all hash
+                // subdirs under <dump>.hprof-cache), not just the one matching
+                // the current mtime-derived hash (F1: sibling entries from a
+                // previous dump mtime / other cache modes were invisible).
+                let root = hprof_analyzer::cache::CacheDir::cache_root_for(p)?;
+                print_cache_entries(&root);
             } else {
                 list_caches(search_path);
             }
         }
         HeapCmd::CacheClear { dump } => {
-            let cache = hprof_analyzer::cache::CacheDir::for_dump(std::path::Path::new(&dump))?;
-            cache.clear()?;
-            println!("Cache cleared for: {dump}");
+            // H6(f)/F1: clear ALL cache entries for this dump — every hash
+            // subdir (plain, with-graph, stale-mtime siblings) plus any stray
+            // files under <dump>.hprof-cache — not just the entry matching the
+            // current options hash.
+            let root =
+                hprof_analyzer::cache::CacheDir::cache_root_for(std::path::Path::new(&dump))?;
+            if !root.exists() {
+                println!("No cache for: {dump}");
+                return Ok(());
+            }
+            let mut removed = 0usize;
+            let mut total_bytes = 0u64;
+            let rd = match std::fs::read_dir(&root) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(anyhow::Error::new(e)
+                        .context(format!("cannot read cache directory {}", root.display())));
+                }
+            };
+            for entry in rd.flatten() {
+                let sz = dir_size_recursive(&entry.path());
+                let name = entry.file_name();
+                if let Err(e) = if entry.path().is_dir() {
+                    std::fs::remove_dir_all(entry.path())
+                } else {
+                    std::fs::remove_file(entry.path())
+                } {
+                    eprintln!("warning: could not remove {}: {e}", name.to_string_lossy());
+                    continue;
+                }
+                removed += 1;
+                total_bytes += sz;
+                println!(
+                    "  removed {} ({})",
+                    name.to_string_lossy(),
+                    fmt_size_mib(sz)
+                );
+            }
+            let _ = std::fs::remove_dir(&root);
+            println!(
+                "Cache cleared for: {dump} — {removed} entr{} removed, {} total",
+                if removed == 1 { "y" } else { "ies" },
+                fmt_size_mib(total_bytes)
+            );
         }
         HeapCmd::FieldName { dump, src, edge } => {
             let sess = load(&dump, CacheMode::Graph)?;
@@ -2566,17 +2938,43 @@ fn list_caches(path: &str) {
         let name = name.to_string_lossy();
         if name.ends_with(".hprof-cache") {
             found = true;
-            let cache_path = entry.path();
-            let size = dir_size_recursive(&cache_path);
-            println!(
-                "{}: {:.1} MB",
-                cache_path.display(),
-                size as f64 / 1_000_000.0
-            );
+            print_cache_entries(&entry.path());
         }
     }
     if !found {
         println!("No cache directories found in {path}");
+    }
+}
+
+/// Print one line per cache entry (hash subdir) under `root`, with an honest
+/// size in MiB — empty dirs print "(empty)" instead of a misleading "0.0 MB".
+fn print_cache_entries(root: &std::path::Path) {
+    if !root.exists() {
+        println!("No cache for: {}", root.display());
+        return;
+    }
+    let rd = match std::fs::read_dir(root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Cannot read cache directory {}: {e}", root.display());
+            return;
+        }
+    };
+    let mut entries: Vec<_> = rd.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    if entries.is_empty() {
+        println!("{}: (empty)", root.display());
+        return;
+    }
+    for entry in entries {
+        let path = entry.path();
+        let size = dir_size_recursive(&path);
+        let label = if size == 0 {
+            "(empty)".to_string()
+        } else {
+            fmt_size_mib(size)
+        };
+        println!("{}: {}", path.display(), label);
     }
 }
 

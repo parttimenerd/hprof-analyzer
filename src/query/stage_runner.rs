@@ -2285,6 +2285,11 @@ fn project_tail(
                 None
             }
         },
+        // `@name` tail: the walked-to object is a String — look up its decoded text
+        // in the string-values table (populated when needs.string_values is true).
+        Attr::ToString(_) => ctx
+            .string_value(dense)
+            .map(|s| QueryValue::Str(s.to_string())),
         // Nested RefPath tails are folded into `hops` by the parser; any other
         // tail attr is not projectable on a walked-to object here.
         _ => None,

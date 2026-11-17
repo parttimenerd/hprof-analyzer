@@ -2696,6 +2696,13 @@ fn note_attr_need_attr(a: &Attr, needs: &mut QueryNeeds) {
         }
         // toString(s) arms the string-values side table, built post-scan.
         Attr::ToString(_) => needs.string_values = true,
+        // A RefPath whose tail is ToString (e.g. `@name` → hops:["name"], tail:ToString)
+        // needs the string-values table so that the walked-to String can be decoded.
+        Attr::RefPath { tail, .. } => {
+            if matches!(tail.as_ref(), Attr::ToString(_)) {
+                needs.string_values = true;
+            }
+        }
         // G1: GC-root attrs require the full analyze pipeline.
         Attr::GcRoots | Attr::GcRootInfo => needs.gc_roots = true,
         // Array index/slice: resolved in P2 late window via ResolveArrayIndex op.
@@ -3851,7 +3858,9 @@ mod tests {
 
     #[test]
     fn mixed_where_full_cheapest_first_order() {
-        // Written worst-first on purpose: Str, Scalar, Type. Expect Type, Scalar, Str after optimize.
+        // Written worst-first on purpose: Ref (field-string), Scalar, Type.
+        // `name = "x"` is promoted to RefPath+ToString, so its cost is Ref (rank 3).
+        // Expect Type, Scalar, Ref after optimize.
         let q = parse(
             "SELECT * FROM C WHERE name = \"x\" AND count > 1 \
              AND s INSTANCEOF java.lang.String",
@@ -3866,11 +3875,12 @@ mod tests {
         let costs: Vec<PredCost> = plan.where_terms.iter().map(|c| c.cost).collect();
         assert_eq!(
             costs,
-            vec![PredCost::Type, PredCost::Scalar, PredCost::Str],
+            vec![PredCost::Type, PredCost::Scalar, PredCost::Ref],
             "got: {costs:?}"
         );
         assert!(plan.needs.instance_scalar);
-        assert!(plan.needs.instance_string);
+        // `name = "x"` is promoted to RefPath+ToString; needs.string_values is armed, not instance_string.
+        assert!(plan.needs.string_values);
         assert!(plan.needs.runtime_type);
     }
 

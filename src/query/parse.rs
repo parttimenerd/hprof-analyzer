@@ -332,7 +332,14 @@ where
                 "usedHeapSize" | "shallowHeapSize" | "shallowSize" => Attr::UsedHeapSize,
                 "retainedHeapSize" | "retainedHeap" => Attr::RetainedHeapSize,
                 "displayName" | "class" => Attr::DisplayName,
-                "name" => Attr::DisplayName,
+                // `@name` walks the `name` instance field and decodes it as a String.
+                // For Thread objects this returns the thread name; for objects with no
+                // `name` field (or a non-String `name`) it returns Null.
+                "name" => Attr::RefPath {
+                    hops: vec!["name".to_string()],
+                    tail: Box::new(Attr::ToString("name".to_string())),
+                    role: crate::query::ast::RefRole::ProjectionOnly,
+                },
                 "length" => Attr::Length,
                 "inbounds" => Attr::Inbounds,
                 "outbounds" => Attr::Outbounds,
@@ -2053,9 +2060,41 @@ fn normalize_predicate(pred: &mut Predicate, alias: Option<&str>) {
             normalize_predicate(b, alias);
         }
         Predicate::Not(a) => normalize_predicate(a, alias),
-        Predicate::Compare { lhs, rhs, .. } => {
+        Predicate::Compare { lhs, rhs, op } => {
             normalize_expr(lhs, alias);
             normalize_expr(rhs, alias);
+            // Promote `Field("f") op "string"` to `RefPath{hops:["f"], tail:ToString}`.
+            // A bare Field on an Object-typed (String-ref) field returns Null at
+            // scan time; promoting it to a RefPath routes through the RefWalk late
+            // phase where the String can be decoded. LIKE/NOT LIKE also get this.
+            let rhs_is_str = matches!(rhs, Expr::Lit(crate::query::ast::Value::Str(_)));
+            let lhs_is_str = matches!(lhs, Expr::Lit(crate::query::ast::Value::Str(_)));
+            let is_str_op = matches!(
+                op,
+                CompareOp::Eq | CompareOp::Ne | CompareOp::Like | CompareOp::NotLike
+            );
+            if is_str_op {
+                if let Expr::Attr(Attr::Field(name)) = lhs {
+                    if rhs_is_str {
+                        let n = name.clone();
+                        *lhs = Expr::Attr(Attr::RefPath {
+                            hops: vec![n.clone()],
+                            tail: Box::new(Attr::ToString(n)),
+                            role: crate::query::ast::RefRole::ProjectionOnly,
+                        });
+                    }
+                }
+                if let Expr::Attr(Attr::Field(name)) = rhs {
+                    if lhs_is_str {
+                        let n = name.clone();
+                        *rhs = Expr::Attr(Attr::RefPath {
+                            hops: vec![n.clone()],
+                            tail: Box::new(Attr::ToString(n)),
+                            role: crate::query::ast::RefRole::ProjectionOnly,
+                        });
+                    }
+                }
+            }
         }
         // The inner query of an IN-subquery is normalized against its own alias
         // when it is parsed; the outer LHS attr is normalized here.
@@ -2951,6 +2990,16 @@ mod tests {
     fn field(s: &str) -> Attr {
         Attr::Field(s.into())
     }
+    // A field compared to a string literal is promoted by normalize_predicate
+    // to RefPath{hops:[name], tail:ToString}. Use this helper in tests that
+    // check the post-normalization AST of `field = "str"` / `field LIKE "str"`.
+    fn field_str(s: &str) -> Attr {
+        Attr::RefPath {
+            hops: vec![s.to_string()],
+            tail: Box::new(Attr::ToString(s.to_string())),
+            role: crate::query::ast::RefRole::ProjectionOnly,
+        }
+    }
     fn cmp(lhs: Attr, op: CompareOp, rhs: Value) -> Predicate {
         Predicate::Compare {
             lhs: Expr::Attr(lhs),
@@ -3343,7 +3392,11 @@ mod tests {
                     false,
                     "C",
                     None,
-                    Some(cmp(field("name"), CompareOp::Eq, Value::Str("main".into()))),
+                    Some(cmp(
+                        field_str("name"),
+                        CompareOp::Eq,
+                        Value::Str("main".into()),
+                    )),
                     None,
                 ),
             ),
@@ -3465,7 +3518,7 @@ mod tests {
                     Some("t"),
                     Some(and(
                         cmp(Attr::UsedHeapSize, CompareOp::Ge, Value::Int(100)),
-                        cmp(field("name"), CompareOp::Ne, Value::Str("main".into())),
+                        cmp(field_str("name"), CompareOp::Ne, Value::Str("main".into())),
                     )),
                     Some(5),
                 ),
@@ -4809,7 +4862,7 @@ mod tests {
         let q = parse(r#"SELECT * FROM C WHERE name LIKE "m.*""#).unwrap();
         assert_eq!(
             q.where_.as_ref().unwrap(),
-            &cmp(field("name"), CompareOp::Like, Value::Str("m.*".into()))
+            &cmp(field_str("name"), CompareOp::Like, Value::Str("m.*".into()))
         );
     }
 
@@ -4818,7 +4871,7 @@ mod tests {
         let q = parse(r#"SELECT * FROM C WHERE name like "m.*""#).unwrap();
         assert_eq!(
             q.where_.as_ref().unwrap(),
-            &cmp(field("name"), CompareOp::Like, Value::Str("m.*".into()))
+            &cmp(field_str("name"), CompareOp::Like, Value::Str("m.*".into()))
         );
     }
 
@@ -4827,7 +4880,11 @@ mod tests {
         let q = parse(r#"SELECT * FROM C WHERE name NOT LIKE "m.*""#).unwrap();
         assert_eq!(
             q.where_.as_ref().unwrap(),
-            &cmp(field("name"), CompareOp::NotLike, Value::Str("m.*".into()))
+            &cmp(
+                field_str("name"),
+                CompareOp::NotLike,
+                Value::Str("m.*".into())
+            )
         );
     }
 
@@ -4836,7 +4893,11 @@ mod tests {
         let q = parse(r#"SELECT * FROM C WHERE name not like "m.*""#).unwrap();
         assert_eq!(
             q.where_.as_ref().unwrap(),
-            &cmp(field("name"), CompareOp::NotLike, Value::Str("m.*".into()))
+            &cmp(
+                field_str("name"),
+                CompareOp::NotLike,
+                Value::Str("m.*".into())
+            )
         );
     }
 
@@ -4848,7 +4909,11 @@ mod tests {
         let q = parse(r#"SELECT * FROM C WHERE NOT name = "x""#).unwrap();
         assert_eq!(
             q.where_.as_ref().unwrap(),
-            &not(cmp(field("name"), CompareOp::Eq, Value::Str("x".into())))
+            &not(cmp(
+                field_str("name"),
+                CompareOp::Eq,
+                Value::Str("x".into())
+            ))
         );
     }
 
@@ -4860,7 +4925,7 @@ mod tests {
         assert_eq!(
             q.where_.as_ref().unwrap(),
             &not(cmp(
-                field("name"),
+                field_str("name"),
                 CompareOp::Like,
                 Value::Str("m.*".into())
             ))
@@ -4873,7 +4938,7 @@ mod tests {
         assert_eq!(
             q.where_.as_ref().unwrap(),
             &and(
-                cmp(field("name"), CompareOp::Like, Value::Str("m.*".into())),
+                cmp(field_str("name"), CompareOp::Like, Value::Str("m.*".into())),
                 cmp(field("id"), CompareOp::Eq, Value::Int(1))
             )
         );
@@ -5921,18 +5986,27 @@ mod tests {
     #[test]
     fn parse_at_name_attribute() {
         assert!(super::parse("SELECT @name FROM java.lang.Thread").is_ok());
-        assert!(
-            super::parse(r#"SELECT * FROM java.lang.Thread WHERE @name = "java.lang.Thread""#)
-                .is_ok()
-        );
+        assert!(super::parse("SELECT @name FROM java.lang.Thread WHERE @name = \"main\"").is_ok());
     }
 
     #[test]
-    fn parse_at_name_aliases_displayname() {
-        // `@name` must produce the SAME query AST as `@displayName`.
-        let by_name = super::parse("SELECT @name FROM java.lang.Thread").unwrap();
-        let by_display = super::parse("SELECT @displayName FROM java.lang.Thread").unwrap();
-        assert_eq!(by_name, by_display);
+    fn parse_at_name_is_refpath_with_tostring_tail() {
+        // `@name` expands to RefPath{hops:["name"], tail:ToString} — not DisplayName.
+        let q = super::parse("SELECT @name FROM java.lang.Thread").unwrap();
+        let items = &q.select;
+        assert_eq!(items.len(), 1);
+        assert!(
+            matches!(
+                &items[0],
+                crate::query::ast::SelectItem::Attr(crate::query::ast::Attr::RefPath {
+                    hops,
+                    tail,
+                    ..
+                }) if hops == &["name"] && matches!(tail.as_ref(), crate::query::ast::Attr::ToString(_))
+            ),
+            "expected RefPath{{hops:[\"name\"], tail:ToString}}, got {:?}",
+            items[0]
+        );
     }
 
     #[test]
@@ -6613,6 +6687,57 @@ mod tests {
             ),
             "expected FromSource::Entries, got: {:?}",
             q.from
+        );
+    }
+
+    // Field-string comparison (`t.name = "main"`) must be promoted to a
+    // RefPath+ToString so the String reference can be decoded in the late phase.
+    #[test]
+    fn field_string_compare_promotes_to_refpath() {
+        use crate::query::ast::{Attr, CompareOp, Expr, Predicate, Value};
+        let q = parse("SELECT * FROM java.lang.Thread t WHERE t.name = \"main\"").unwrap();
+        let pred = q.where_.clone().expect("WHERE expected");
+        let Predicate::Compare { lhs, op, rhs } = pred else {
+            panic!("expected Compare predicate, got {:?}", q.where_);
+        };
+        assert_eq!(op, CompareOp::Eq);
+        // lhs should be RefPath{hops:["name"], tail:ToString}, not Field("name")
+        assert!(
+            matches!(
+                &lhs,
+                Expr::Attr(Attr::RefPath { hops, tail, .. })
+                    if hops == &["name"]
+                    && matches!(tail.as_ref(), Attr::ToString(_))
+            ),
+            "expected RefPath{{hops:[\"name\"],tail:ToString}} on lhs, got {:?}",
+            lhs
+        );
+        assert!(
+            matches!(&rhs, Expr::Lit(Value::Str(s)) if s == "main"),
+            "expected Str(\"main\") on rhs, got {:?}",
+            rhs
+        );
+    }
+
+    // LIKE on a field should also be promoted.
+    #[test]
+    fn field_string_like_promotes_to_refpath() {
+        use crate::query::ast::{Attr, CompareOp, Expr, Predicate};
+        let q = parse("SELECT * FROM java.lang.Thread t WHERE t.name LIKE \"pool.*\"").unwrap();
+        let pred = q.where_.clone().expect("WHERE expected");
+        let Predicate::Compare { lhs, op, .. } = pred else {
+            panic!("expected Compare predicate");
+        };
+        assert_eq!(op, CompareOp::Like);
+        assert!(
+            matches!(
+                &lhs,
+                Expr::Attr(Attr::RefPath { hops, tail, .. })
+                    if hops == &["name"]
+                    && matches!(tail.as_ref(), Attr::ToString(_))
+            ),
+            "expected RefPath on lhs for LIKE, got {:?}",
+            lhs
         );
     }
 }

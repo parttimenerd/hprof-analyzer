@@ -502,7 +502,7 @@ fn hint_for(cand: &str) -> Option<String> {
         "@usedHeapSize" => "shallow size (bytes)",
         "@retainedHeapSize" => "retained size (bytes; needs full pipeline)",
         "@displayName" => "class@id label",
-        "@name" => "class name",
+        "@name" => "instance field `name` (e.g. Thread name)",
         "@length" => "array length",
         "@inbounds" => "incoming references",
         "@outbounds" => "outgoing references",

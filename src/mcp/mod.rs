@@ -1,5 +1,8 @@
 pub mod oql_docs;
 
+mod params;
+use params::{EdgeIndex, ObjectIndex, SrcObjectIndex};
+
 use std::{path::PathBuf, sync::Arc};
 
 use rmcp::{
@@ -141,7 +144,8 @@ pub struct GetReportParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetHistogramParams {
-    /// Number of top classes to return sorted by retained size (default 50, max 500).
+    /// Number of top classes to return sorted by retained size (default 50,
+    /// server-capped at 500; the effective limit is echoed in the response).
     /// Start with 20–50 to orient, then query specific classes with OQL.
     pub limit: Option<u32>,
 }
@@ -253,28 +257,41 @@ pub struct QueryParams {
 pub struct BrowseDominatorsParams {
     /// Dense object index to start from. Use @objectId values from query results.
     /// Omit (or pass null) to start at the GC root — the recommended entry point.
-    pub object_index: Option<u64>,
+    pub object_index: Option<ObjectIndex>,
     /// How many levels deep to expand (default 3, max 8).
     /// Use depth=1 to expand only immediate children of a node.
     pub depth: Option<u8>,
     /// Max children per node, sorted by retained size descending (default 10, max 50).
     pub width: Option<u8>,
+    /// Optional session-epoch guard (H1). Every load_dump bumps a monotonically
+    /// increasing `session_epoch` that is stamped into every tool response. Pass
+    /// the epoch you saw when you collected `object_index`; if the dump has been
+    /// reloaded since, the call fails with a `stale session` error instead of
+    /// silently resolving the index against a different dump.
+    #[serde(default)]
+    pub expected_epoch: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct InspectObjectParams {
     /// Dense object index. Obtain from: (a) @objectId column in a query result,
     /// (b) the "index" field in browse_dominators output.
-    pub object_index: u64,
+    pub object_index: ObjectIndex,
+    /// Optional session-epoch guard (see browse_dominators for details).
+    #[serde(default)]
+    pub expected_epoch: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FindIncomingReferencesParams {
     /// Dense object index to look up incoming references for. Obtain from:
     /// (a) @objectId column in a query result, (b) 'index' in browse_dominators.
-    pub object_index: u64,
+    pub object_index: ObjectIndex,
     /// Max references to return (default 50, max 200).
     pub limit: Option<usize>,
+    /// Optional session-epoch guard (see browse_dominators for details).
+    #[serde(default)]
+    pub expected_epoch: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -292,33 +309,42 @@ pub struct FindIncomingRefsByClassParams {
 pub struct GetDominatorPathParams {
     /// Dense object index to start from. Obtain from: (a) @objectId column in a
     /// query result, (b) 'index' field in browse_dominators output.
-    pub object_index: u64,
+    pub object_index: ObjectIndex,
+    /// Optional session-epoch guard (see browse_dominators for details).
+    #[serde(default)]
+    pub expected_epoch: Option<u64>,
 }
 
 /// Parameters for `get_outbound_references` — forward CSR edges for one object.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetOutboundReferencesParams {
     /// Dense object index to look up outbound references for.
-    pub object_index: u64,
+    pub object_index: ObjectIndex,
     /// Max references to return (default 50, max 200).
     pub limit: Option<usize>,
+    /// Optional session-epoch guard (see browse_dominators for details).
+    #[serde(default)]
+    pub expected_epoch: Option<u64>,
 }
 
 /// Parameters for `get_field_name` — resolve a reference edge to its Java field name.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetFieldNameParams {
     /// Dense object index of the source object.
-    pub src_object_index: u64,
+    pub src_object_index: SrcObjectIndex,
     /// 0-based index of the outbound edge within this object's edge list
     /// (i.e. position within `fwd_off[src]..fwd_off[src+1]`).
-    pub edge_index: u64,
+    pub edge_index: EdgeIndex,
+    /// Optional session-epoch guard (see browse_dominators for details).
+    #[serde(default)]
+    pub expected_epoch: Option<u64>,
 }
 
 /// Parameters for `get_retained_set` — DFS dominator subtree enumeration.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetRetainedSetParams {
     /// Dense object index whose retained set to enumerate.
-    pub object_index: u64,
+    pub object_index: ObjectIndex,
     /// Optional class name filter (substring match). Only objects whose class
     /// name contains this string are included in the results.
     pub class_filter: Option<String>,
@@ -326,6 +352,9 @@ pub struct GetRetainedSetParams {
     /// children sorted by retained size descending, so the most significant
     /// objects are returned first.
     pub limit: Option<usize>,
+    /// Optional session-epoch guard (see browse_dominators for details).
+    #[serde(default)]
+    pub expected_epoch: Option<u64>,
 }
 
 /// Parameters for `compare_dumps` — cross-dump regression detection.
@@ -390,6 +419,17 @@ fn is_zero_usize(n: &usize) -> bool {
 #[derive(Clone)]
 pub struct HprofMcpServer {
     session: Arc<Mutex<Option<CachedSession>>>,
+    /// Session epoch (H1): bumped on every SUCCESSFUL load_dump (including a
+    /// same-path reload). Stamped into every tool response as `session_epoch`
+    /// so an agent can detect that indices it collected earlier now refer to a
+    /// different dump; index-taking tools accept an optional `expected_epoch`
+    /// and fail with a `stale session` error on mismatch.
+    ///
+    /// Plain atomic (not behind the FIFO gate): all stateful handlers acquire
+    /// the gate before reading it, so they observe it consistently with the
+    /// session; load_dump bumps it while still holding the gate. Atomic also
+    /// lets the two stateless tools (get_oql_docs, list_views) stamp it.
+    epoch: Arc<std::sync::atomic::AtomicU64>,
     /// FIFO gate serializing stateful tool handlers in request-arrival order.
     ///
     /// rmcp spawns one tokio task per incoming request, so handlers run
@@ -413,9 +453,34 @@ impl HprofMcpServer {
     pub fn new() -> Self {
         Self {
             session: Arc::new(Mutex::new(None)),
+            epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             gate: Arc::new(Mutex::new(())),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Current session epoch (0 = no dump loaded in this session yet).
+    fn epoch(&self) -> u64 {
+        self.epoch.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// H1: when the caller passed `expected_epoch`, verify the session has not
+    /// been switched to a different dump since. Must be called while the FIFO
+    /// gate is held (same epoch-visibility contract as the handlers themselves).
+    fn check_expected_epoch(&self, expected: Option<u64>) -> Result<(), McpError> {
+        if let Some(x) = expected {
+            let e = self.epoch();
+            if e != x {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "stale session: dump changed (epoch {e} ≠ expected {x}); \
+                         re-query indices from the current dump"
+                    ),
+                    None,
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -600,7 +665,8 @@ impl HprofMcpServer {
              {cache_mismatch_note}\n\
              ## Top Leak Suspects ({n_suspects} detected)\n\
              {suspects}\n\
-             ## Top Classes by Retained Size\n\
+             ## Top Classes by Retained Size (histogram — not suspects)\n\
+             These are the largest classes by retained heap; they may or may not be the leak root.\n\
              {classes}\
              {oql_hints}\n\
              If the above answers the question, stop here.\n\
@@ -815,8 +881,8 @@ impl HprofMcpServer {
         })?;
         let depth = p.depth.unwrap_or(3).min(8);
         let width = p.width.unwrap_or(10).min(50) as usize;
-        let result =
-            crate::heap_ops::browse(sess, p.object_index, depth, width).map_err(ops_to_mcp)?;
+        let result = crate::heap_ops::browse(sess, p.object_index.map(|v| v.get()), depth, width)
+            .map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -844,7 +910,7 @@ impl HprofMcpServer {
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
-        let result = crate::heap_ops::inspect(sess, p.object_index).map_err(ops_to_mcp)?;
+        let result = crate::heap_ops::inspect(sess, p.object_index.get()).map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -872,8 +938,8 @@ impl HprofMcpServer {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
         let limit = p.limit.unwrap_or(50).min(200);
-        let result =
-            crate::heap_ops::find_incoming(sess, p.object_index, limit).map_err(ops_to_mcp)?;
+        let result = crate::heap_ops::find_incoming(sess, p.object_index.get(), limit)
+            .map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -1311,7 +1377,8 @@ impl HprofMcpServer {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
 
-        let result = crate::heap_ops::dominator_path(sess, p.object_index).map_err(ops_to_mcp)?;
+        let result =
+            crate::heap_ops::dominator_path(sess, p.object_index.get()).map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1342,7 +1409,7 @@ impl HprofMcpServer {
         })?;
 
         let limit = p.limit.unwrap_or(50);
-        let result = crate::heap_ops::outbound_references(sess, p.object_index, limit)
+        let result = crate::heap_ops::outbound_references(sess, p.object_index.get(), limit)
             .map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
@@ -1371,8 +1438,9 @@ impl HprofMcpServer {
         let sess = guard.as_ref().ok_or_else(|| {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
-        let result = crate::heap_ops::field_name(sess, p.src_object_index, p.edge_index)
-            .map_err(ops_to_mcp)?;
+        let result =
+            crate::heap_ops::field_name(sess, p.src_object_index.get(), p.edge_index.get())
+                .map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -1403,9 +1471,13 @@ impl HprofMcpServer {
         })?;
 
         let limit = p.limit.unwrap_or(50);
-        let result =
-            crate::heap_ops::retained_set(sess, p.object_index, limit, p.class_filter.as_deref())
-                .map_err(ops_to_mcp)?;
+        let result = crate::heap_ops::retained_set(
+            sess,
+            p.object_index.get(),
+            limit,
+            p.class_filter.as_deref(),
+        )
+        .map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;

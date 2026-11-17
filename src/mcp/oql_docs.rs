@@ -247,6 +247,7 @@ const ATTRIBUTES: &str = r#"# OQL Attributes and Functions
 | `@usedHeapSize` | integer | Shallow size in bytes |
 | `@retainedHeapSize` | integer | Retained size in bytes (requires full pipeline) |
 | `@displayName` | string | `ClassName@hexAddr` label |
+| `@name` | string | Decoded `name` instance field — e.g. `Thread.name` returns the thread name string; Null if no `name` field or not a String |
 | `@length` | integer | Array element count (arrays only; null for non-arrays) |
 | `@inbounds` | objects | Incoming references (OQL queries build edges on demand; `with_graph=true` on load_dump enables them in inspect_object) |
 | `@outbounds` | objects | Outgoing references (same as @inbounds) |
