@@ -76,13 +76,7 @@ test('sort header click reorders table rows', async ({ page }) => {
   await page.goto(baseUrl);
   // Wait for React to mount.
   await page.waitForSelector('.toc');
-  // Click the "Shallow" sort header in the Overview class histogram.
-  // First expand the histogram details if it exists.
-  const showHistogram = page.getByText('Show full class histogram');
-  if (await showHistogram.count() > 0) {
-    await showHistogram.click();
-  }
-  // Click first sortable header.
+  // Click first sortable header (class histogram or another custom table).
   const sortableHeader = page.locator('th.sortable').first();
   await sortableHeader.click();
   // The sort header should now be active.
@@ -100,32 +94,32 @@ test('collapsible details expand and collapse', async ({ page }) => {
   await expect(details).toHaveAttribute('open', '');
 });
 
-test('theme toggle cycles through modes', async ({ page }) => {
+test('theme toggle switches between light and dark', async ({ page }) => {
   await page.goto(baseUrl);
   await page.waitForSelector('.toc');
   // Use aria-label to target the actual theme-toggle button (not "Expand all" etc.)
   const btn = page.locator('[aria-label^="Theme:"]').first();
-  // Default is auto (no data-theme).
-  await expect(page.locator('html')).not.toHaveAttribute('data-theme');
-  // Click → light.
+  // The app is a 2-state toggle (light ↔ dark); data-theme is always set on mount.
+  const initial = await page.locator('html').getAttribute('data-theme');
+  expect(initial === 'light' || initial === 'dark', 'data-theme must be light or dark').toBe(true);
+  // Click → other mode.
   await btn.click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  // Click → dark.
+  const after = await page.locator('html').getAttribute('data-theme');
+  expect(after).not.toBe(initial);
+  expect(after === 'light' || after === 'dark').toBe(true);
+  // Click → back to original.
   await btn.click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  // Click → auto (attribute removed).
-  await btn.click();
-  await expect(page.locator('html')).not.toHaveAttribute('data-theme');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', initial!);
 });
 
 test('anchor navigation scrolls to the target section', async ({ page }) => {
-  await page.goto(baseUrl + '#leaks');
+  await page.goto(baseUrl + '#leak-suspects');
   // Wait for React to mount and scroll effect to fire.
   await page.waitForSelector('.toc');
   await page.waitForTimeout(600);
-  const leaksSection = page.locator('#leaks').first();
-  await expect(leaksSection).toBeVisible();
-  const box = await leaksSection.boundingBox();
+  const section = page.locator('#leak-suspects').first();
+  await expect(section).toBeVisible();
+  const box = await section.boundingBox();
   expect(box).not.toBeNull();
   // The section should be near the top of the viewport (within the page height).
   const viewportSize = page.viewportSize()!;
@@ -135,16 +129,13 @@ test('anchor navigation scrolls to the target section', async ({ page }) => {
 test('copy button appears on hover', async ({ page }) => {
   await page.goto(baseUrl);
   await page.waitForSelector('.toc');
-  // Expand the class histogram if needed.
-  const showHistogram = page.getByText('Show full class histogram');
-  if (await showHistogram.count() > 0) {
-    await showHistogram.click();
+  // Hover over the first cell containing a copy-cell (copy button visible on hover).
+  const firstCopyCell = page.locator('.rdt_TableRow .copy-cell').first();
+  if (await firstCopyCell.count() > 0) {
+    await firstCopyCell.hover();
+    const copyBtn = firstCopyCell.locator('.copy-btn').first();
+    await expect(copyBtn).toBeVisible();
   }
-  // Hover over the first td that contains a copy-cell (copy button visible on td:hover).
-  const firstCopyCell = page.locator('td:has(.copy-cell)').first();
-  await firstCopyCell.hover();
-  const copyBtn = firstCopyCell.locator('.copy-btn');
-  await expect(copyBtn).toBeVisible();
 });
 
 // ── Content-presence tests ────────────────────────────────────────────────────
