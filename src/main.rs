@@ -3753,6 +3753,17 @@ fn input_is_hprof(input: &str) -> bool {
         return false;
     }
     let lower = input.to_ascii_lowercase();
+    // Gzip-compressed report re-render inputs are never dumps — the bare
+    // `.gz` catch-all below would otherwise swallow them and route
+    // `report.md.gz` / `report.json.gz` into the analyze pipeline.
+    if lower.ends_with(".json.gz")
+        || lower.ends_with(".md.gz")
+        || lower.ends_with(".markdown.gz")
+        || lower.ends_with(".html.gz")
+        || lower.ends_with(".htm.gz")
+    {
+        return false;
+    }
     if lower.ends_with(".hprof")
         || lower.ends_with(".hprof.gz")
         || lower.ends_with(".hprof.zip")
