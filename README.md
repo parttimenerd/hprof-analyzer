@@ -658,7 +658,7 @@ brew install hprof-analyzer
 Homebrew prints MCP setup instructions after install. To follow the rolling nightly build:
 
 ```sh
-brew install parttimenerd/hprof-analyzer/hprof-analyzer@nightly
+brew install parttimenerd/hprof-analyzer/hprof-analyzer-nightly
 ```
 
 ### With Cargo
@@ -731,24 +731,24 @@ untouched. Homebrew-managed installs are detected and told to use
 layout).
 
 **Homebrew** — channels are separate tap formulas; the unversioned name is
-the stable channel, and versioned tokens like `hprof-analyzer@nightly` are
+the stable channel, and `hprof-analyzer-nightly` is
 concurrent alternates:
 
 ```sh
 brew upgrade hprof-analyzer            # stable channel (latest tagged release)
-brew upgrade hprof-analyzer@nightly     # nightly channel (rolling build from main)
+brew upgrade hprof-analyzer-nightly     # nightly channel (rolling build from main)
 ```
 
 To switch channels:
 
 ```sh
-brew uninstall hprof-analyzer && brew install hprof-analyzer@nightly      # stable → nightly
-brew uninstall hprof-analyzer@nightly && brew install hprof-analyzer      # nightly → stable
+brew uninstall hprof-analyzer && brew install hprof-analyzer-nightly      # stable → nightly
+brew uninstall hprof-analyzer-nightly && brew install hprof-analyzer      # nightly → stable
 ```
 
 > The nightly formula was previously named `hprof-analyzer-nightly`; if you
 > installed it under that name, migrate once:
-> `brew uninstall hprof-analyzer-nightly && brew install parttimenerd/hprof-analyzer/hprof-analyzer@nightly`
+> `brew uninstall hprof-analyzer-nightly && brew install parttimenerd/hprof-analyzer/hprof-analyzer-nightly`
 > (see the [tap README](homebrew-tap/README.md) for details).
 
 > The nightly formula tracks a rolling artifact and uses `sha256 :no_check`
