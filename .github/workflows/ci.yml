@@ -379,11 +379,57 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Extract changelog for this release
+        id: changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          CHANGELOG=$(awk "/^## \[$VERSION\]/{found=1} found && /^## \[/ && !/^## \[$VERSION\]/{exit} found{print}" CHANGELOG.md)
+          {
+            echo 'notes<<NOTES_EOF'
+            cat <<'INSTALL'
+          ## Install
+
+          ```sh
+          # macOS / Linux (Homebrew)
+          brew install parttimenerd/hprof-analyzer/hprof-analyzer
+
+          # Cargo
+          cargo install hprof-analyzer
+
+          # Nightly build (macOS, Apple Silicon)
+          brew install --cask parttimenerd/hprof-analyzer/hprof-analyzer@nightly
+          ```
+
+          Or download a prebuilt binary from the assets below.
+
+          ## Quick start
+
+          ```sh
+          # Generate a self-contained HTML report
+          hprof-analyzer heap.hprof report.html
+
+          # Interactive cached analysis
+          hprof-analyzer heap summary heap.hprof
+          hprof-analyzer heap query heap.hprof --oql "SELECT @displayName, @retainedHeapSize FROM INSTANCEOF java.util.ArrayList ORDER BY @retainedHeapSize DESC LIMIT 20"
+
+          # MCP server for Claude / Cline / Claude Desktop
+          claude mcp add hprof -- hprof-analyzer mcp
+          ```
+
+          ---
+
+          INSTALL
+            echo "$CHANGELOG"
+            echo 'NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.notes }}
 
   # Tagged release: open a PR on the Homebrew tap with updated URLs + SHA256s.
   update-homebrew-tap:
