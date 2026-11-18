@@ -508,9 +508,13 @@ enum Cmd {
     /// (counters, hashes, enum ordinals) must not leak.
     ///
     /// The output is a valid HPROF file that MAT, jhat, and hprof-analyzer can
-    /// open. A custom marker record (tag 0xDE) is appended after the
+    /// open. A sentinel STRING record (payload
+    /// `hprof-analyzer:redacted:v1:<mode>`) is appended after the
     /// HPROF_HEAP_DUMP_END record so hprof-analyzer displays a "Redacted dump"
-    /// banner and skips meaningless analyses. Pass --no-marker to omit it.
+    /// banner and skips
+    /// meaningless analyses. Because it is a standard record type, every
+    /// parser accepts it — Eclipse MAT (strict mode), jhat, and hprof-slurp
+    /// included.
     ///
     /// Output format is inferred from the extension:
     ///   .hprof         raw binary
@@ -530,19 +534,14 @@ enum Cmd {
         /// Default is lean mode (single-pass, zeros only primitive array elements).
         #[arg(long)]
         complete: bool,
-        /// Don't embed the redaction marker record (tag 0xDE). Strict
-        /// third-party parsers reject the unknown tag (hprof-slurp exits with
-        /// "unhandled record tag 222"); with this flag the output also passes
-        /// such parsers. Trade-off: hprof-analyzer shows no "Redacted dump"
-        /// banner and `check-redacted` reports the dump as not redacted.
-        #[arg(long)]
-        no_marker: bool,
     },
     /// Check whether a heap dump has already been redacted.
     ///
-    /// Exits 0 and prints "redacted" if the redaction marker (tag 0xDE) is
-    /// present anywhere in the file. Exits 1 and prints "not redacted" if it
-    /// is absent. Exits 2 on I/O error.
+    /// Exits 0 and prints "redacted" if the redaction sentinel is present
+    /// (a STRING record whose payload starts with
+    /// `hprof-analyzer:redacted:v1:`, or the legacy tag-0xDE marker record
+    /// from older versions). Exits 1 and prints "not redacted" if it is
+    /// absent. Exits 2 on I/O error.
     ///
     /// Accepts .hprof, .hprof.gz, .hprof.zip, .hprof.tar.gz, .hprof.tgz.
     CheckRedacted {
@@ -1094,7 +1093,6 @@ fn run_redact(
     input: &str,
     output: &str,
     complete: bool,
-    no_marker: bool,
 ) -> io::Result<hprof_analyzer::redact::RedactStats> {
     use hprof_analyzer::redact::RedactMode;
     use hprof_analyzer::source::HprofSource;
@@ -1113,7 +1111,7 @@ fn run_redact(
     if lower.ends_with(".gz") {
         let file = File::create(output)?;
         let gz = flate2::write::GzEncoder::new(file, flate2::Compression::best());
-        hprof_analyzer::redact::redact(&source, gz, mode, !no_marker, progress)
+        hprof_analyzer::redact::redact(&source, gz, mode, true, progress)
     } else if lower.ends_with(".hprof.zip") || lower.ends_with(".zip") {
         let file = File::create(output)?;
         let mut zip = zip::ZipWriter::new(file);
@@ -1121,12 +1119,12 @@ fn run_redact(
             .compression_method(zip::CompressionMethod::Deflated);
         zip.start_file("dump.hprof", opts)
             .map_err(io::Error::other)?;
-        let stats = hprof_analyzer::redact::redact(&source, &mut zip, mode, !no_marker, progress)?;
+        let stats = hprof_analyzer::redact::redact(&source, &mut zip, mode, true, progress)?;
         zip.finish().map_err(io::Error::other)?;
         Ok(stats)
     } else {
         let file = File::create(output)?;
-        hprof_analyzer::redact::redact(&source, file, mode, !no_marker, progress)
+        hprof_analyzer::redact::redact(&source, file, mode, true, progress)
     }
 }
 
@@ -1726,8 +1724,7 @@ fn main() {
             input,
             output,
             complete,
-            no_marker,
-        }) => match run_redact(&input, &output, complete, no_marker) {
+        }) => match run_redact(&input, &output, complete) {
             Err(e) => {
                 eprintln!("error: {e}");
                 std::process::exit(1);
@@ -1751,13 +1748,6 @@ fn main() {
                              their bodies were copied verbatim (primitive values not redacted). \
                              This should not occur in a valid HPROF.\x1b[0m",
                         stats.unknown_class_instances
-                    );
-                }
-                if no_marker {
-                    eprintln!(
-                        "note: no redaction marker embedded — hprof-analyzer will not show \
-                         the 'Redacted dump' banner and `check-redacted` reports this dump \
-                         as not redacted"
                     );
                 }
             }
@@ -3814,8 +3804,7 @@ fn sniff_is_hprof(path: &str) -> bool {
             }
         }
         let h = &head[..filled];
-        return h.starts_with(b"JAVA PROFILE")
-            || (filled >= 262 && &h[257..262] == b"ustar");
+        return h.starts_with(b"JAVA PROFILE") || (filled >= 262 && &h[257..262] == b"ustar");
     }
     // Zip: any zip container is routed to the dump path; the zip reader then
     // reports precisely what is wrong (missing .hprof entry, corrupt archive).

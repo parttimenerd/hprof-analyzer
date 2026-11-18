@@ -2,14 +2,20 @@
 //!
 //! Two-pass streaming HPROF redactor. Zeroes all primitive field values and
 //! array element data while preserving the object graph structure (IDs, class
-//! hierarchy, reference fields). A custom top-level record (tag `0xDE`) is
-//! appended after the HPROF_HEAP_DUMP_END record so `hprof-analyzer` can
-//! detect and label the redacted dump.
+//! hierarchy, reference fields). A sentinel `STRING_IN_UTF8` record — payload
+//! `hprof-analyzer:redacted:v1:<mode>` — is appended after the
+//! HPROF_HEAP_DUMP_END record so `hprof-analyzer` can detect and label the
+//! redacted dump. Because the sentinel is a standard record type, every
+//! HPROF parser accepts it: hprof-analyzer, Eclipse MAT (strict mode), jhat,
+//! and hprof-slurp all parse the dump (hprof-slurp simply lists the sentinel
+//! as one more string).
 //!
 //! In complete mode, `STRING_IN_UTF8` record payloads are also zeroed: these
 //! records form the JVM symbol table and may contain interned string literals
 //! such as annotation values (`@Value("secret")`). The string IDs are preserved
 //! so LOAD_CLASS and CLASS_DUMP name references remain structurally intact.
+//! Sentinel strings from a previous redaction are dropped, so re-redacting
+//! never accumulates them.
 //!
 //! For INSTANCE_DUMP records: object-reference fields (type code 2) are always
 //! copied verbatim so that the heap reference graph is never corrupted. If a
@@ -19,18 +25,16 @@
 //! rather than zeroed — zeroing would null any object-reference fields in the
 //! unknown region, severing edges in the heap graph.
 //!
-//! External tools (MAT, jhat) skip the marker via the standard length-prefixed
-//! skip path and open the file normally.
+//! Backward compatibility: dumps redacted by older versions carry a custom
+//! record (tag `0xDE`); it is still detected (`check-redacted`) and is
+//! dropped when such a dump is re-redacted.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 use crate::reader::HprofReader;
 use crate::source::HprofSource;
-use crate::types::{
-    HprofType, heap,
-    tags::{self, REDACTED_MARKER},
-};
+use crate::types::{HprofType, REDACTED_SENTINEL_PREFIX, heap, tags};
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -63,12 +67,13 @@ pub struct RedactStats {
 /// `progress(phase, fraction)` is called periodically; `fraction` is in [0,1].
 ///
 /// When `write_marker` is true (the default for every caller that does not say
-/// otherwise) a custom marker record (tag 0xDE, body `HPROF-REDACT\x01\x00`)
-/// is appended after the last record so hprof-analyzer can recognize the
-/// dump. Strict third-party
-/// parsers reject the unknown tag (e.g. hprof-slurp exits with "unhandled
-/// record tag 222"), so `write_marker = false` omits it; the output is then
-/// indistinguishable from a redaction-free dump for `check-redacted`.
+/// otherwise) a sentinel `STRING_IN_UTF8` record is appended after the last
+/// record so hprof-analyzer can recognize the dump. The payload is the fixed
+/// string `hprof-analyzer:redacted:v1:<mode>`. Parsers that reject unknown
+/// record types accept the sentinel because `STRING_IN_UTF8` is a standard
+/// type; pass `write_marker = false` to omit it entirely (the output then
+/// contains no trace of the redaction and `check-redacted` reports it as not
+/// redacted).
 pub fn redact<W: Write>(
     source: &HprofSource,
     mut writer: W,
@@ -402,10 +407,8 @@ fn write_redacted<W: Write>(
     w.write_all(&(id_size as u32).to_be_bytes())?;
     w.write_all(&timestamp_ms.to_be_bytes())?;
 
-    // The marker is appended after the last input record (normally the
-    // HPROF_HEAP_DUMP_END record) — never inline in the record stream —
-    // so the dump body stays a genuine HPROF record sequence.
-
+    // The sentinel is appended after the last input record (normally the
+    // HPROF_HEAP_DUMP_END record) — never inline in the record stream.
     let mut record_count = 0u64;
 
     loop {
@@ -415,40 +418,66 @@ fn write_redacted<W: Write>(
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e),
         };
-        record_count += 1;
-        if record_count % 50_000 == 0 {
-            progress("pass2", 0.5); // can't know fraction without file scan; pulse at 0.5
-        }
+        // Count copied records (progress pulse only); dropped sentinels and
+        // legacy markers don't exist in the output and are not counted.
+        let mut dropped = false;
 
         let result = match tag {
             tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                 write_record_header(w, tag, length)?;
                 write_redacted_heap_segment(&mut r, w, id_size, length, mode, class_fields, stats)
             }
-            // Never copy an existing marker through: with write_marker=true we
-            // append a fresh one after the last record (re-redacting yields
-            // exactly one), and with write_marker=false the output must
-            // contain no marker at all.
-            tags::REDACTED_MARKER => r.skip(length),
+            // Legacy custom marker (tag 0xDE) from older redacted dumps: never
+            // copy it through — the output carries the sentinel instead (or
+            // nothing at all with write_marker=false).
+            tags::REDACTED_MARKER => {
+                dropped = true;
+                r.skip(length)
+            }
             // STRING_IN_UTF8: id(id_size) + UTF-8 bytes.
             // In complete mode: preserve the ID (name references in LOAD_CLASS /
             // CLASS_DUMP field descriptors must remain intact). Zero the UTF-8
             // payload only for non-structural IDs (annotation literals, interned
             // strings). Structural IDs (class names, field names, method names,
-            // source file names) are preserved readable.
-            tags::STRING_IN_UTF8 if mode == RedactMode::Complete => {
-                write_record_header(w, tag, length)?;
+            // source file names) are preserved readable. In lean mode the
+            // payload is preserved verbatim — except for sentinel strings from
+            // a previous redaction, which are dropped so re-redacting never
+            // accumulates them.
+            tags::STRING_IN_UTF8 => {
                 let ids = id_size as u64;
                 let str_id = r.id()?;
-                write_id(w, str_id, id_size)?; // always preserve the ID
                 let payload = length.saturating_sub(ids);
-                if structural_string_ids.contains(&str_id) {
-                    // Structural name — preserve verbatim.
-                    copy_exact(&mut r, w, payload)
+                // Peek the payload head to recognize a sentinel from a
+                // previous redaction. The peek consumes the head bytes, so
+                // the non-sentinel paths re-emit them explicitly (no
+                // double-read of the stream).
+                let head_len = (payload.min(REDACTED_SENTINEL_PREFIX.len() as u64)) as usize;
+                let mut head = vec![0u8; head_len];
+                let head_read = r.read_into(&mut head);
+                if let Err(e) = head_read {
+                    dropped = true;
+                    // Surface through the outer match: EOF/InvalidData break
+                    // leniently (truncated input), anything else fails hard.
+                    Err(e)
+                } else if payload >= REDACTED_SENTINEL_PREFIX.len() as u64
+                    && head == REDACTED_SENTINEL_PREFIX
+                {
+                    // Sentinel from a previous redaction — drop it.
+                    dropped = true;
+                    r.skip(payload - head_len as u64)
                 } else {
-                    // Non-structural literal — zero to prevent leaking annotation values etc.
-                    r.skip(payload)?;
-                    write_zeroes(w, payload)
+                    write_record_header(w, tag, length)?;
+                    write_id(w, str_id, id_size)?; // always preserve the ID
+                    if mode == RedactMode::Complete && !structural_string_ids.contains(&str_id) {
+                        // Non-structural literal — zero to prevent leaking
+                        // annotation values etc. (head bytes already consumed
+                        // from the reader; zeroes cover the full payload.)
+                        r.skip(payload - head_len as u64)?;
+                        write_zeroes(w, payload)
+                    } else {
+                        w.write_all(&head)?;
+                        copy_exact(&mut r, w, payload - head_len as u64)
+                    }
                 }
             }
             _ => {
@@ -457,30 +486,63 @@ fn write_redacted<W: Write>(
             }
         };
         match result {
-            Ok(()) => {}
+            Ok(()) => {
+                record_count += !dropped as u64;
+                if record_count % 50_000 == 0 {
+                    progress("pass2", 0.5); // can't know fraction without file scan; pulse at 0.5
+                }
+            }
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e),
         }
     }
 
-    // Append the redaction marker after the last input record — normally the
-    // HPROF_HEAP_DUMP_END record — so it never sits inline in the record
-    // stream (the dump body stays a genuine HPROF record sequence).
+    // Append the sentinel STRING record after the last input record — normally
+    // the HPROF_HEAP_DUMP_END record. Standard record type: every parser
+    // accepts it.
     if write_marker {
-        write_redaction_marker(w)?;
+        write_redaction_sentinel(w, id_size, mode)?;
     }
 
     Ok(())
 }
 
-fn write_redaction_marker<W: Write>(w: &mut W) -> io::Result<()> {
-    // tag (1) + timestamp (4) + length (4) + body (14) = 23 bytes total
-    const BODY: &[u8] = b"HPROF-REDACT\x01\x00";
-    w.write_all(&[REDACTED_MARKER])?; // tag
-    w.write_all(&0u32.to_be_bytes())?; // timestamp
-    w.write_all(&(BODY.len() as u32).to_be_bytes())?; // length
-    w.write_all(BODY)
+/// Modes encoded in the sentinel payload.
+fn sentinel_mode(mode: RedactMode) -> &'static str {
+    match mode {
+        RedactMode::Lean => "lean",
+        RedactMode::Complete => "complete",
+    }
 }
+
+/// Append the sentinel `STRING_IN_UTF8` record after the last record.
+///
+/// Payload: the fixed string `hprof-analyzer:redacted:v1:<mode>`. The ID is
+/// the reserved ASCII "REDACTED" (truncated to id_size). No hashing: the
+/// sentinel sits at the very end of the file where no genuine string record
+/// is written, and accidental occurrence of the exact literal in a dump is
+/// negligible.
+/// Append the sentinel `STRING_IN_UTF8` record after the last record.
+///
+/// Payload: the fixed string `hprof-analyzer:redacted:v1:<mode>`. The string
+/// ID is the reserved ASCII "REDACTED" (truncated to id_size); detection keys
+/// on the payload prefix, not the ID. No hashing — the sentinel sits at the
+/// very end of the file where no genuine string record is written, and an
+/// accidental occurrence of the exact literal is negligible.
+fn write_redaction_sentinel<W: Write>(w: &mut W, id_size: u8, mode: RedactMode) -> io::Result<()> {
+    let text = format!("hprof-analyzer:redacted:v1:{}", sentinel_mode(mode));
+    w.write_all(&[tags::STRING_IN_UTF8])?;
+    w.write_all(&0u32.to_be_bytes())?; // timestamp (zeroed)
+    let len32 = (id_size as u64 + text.len() as u64) as u32;
+    w.write_all(&len32.to_be_bytes())?;
+    // Reserved ID: ASCII "REDACTED" truncated to id_size ("REDA" for 4-byte
+    // dumps). Detection keys on the payload prefix, not the ID.
+    w.write_all(&SENTINEL_ID[..id_size as usize])?;
+    w.write_all(text.as_bytes())
+}
+
+/// Reserved sentinel string ID: ASCII "REDACTED".
+const SENTINEL_ID: &[u8; 8] = b"REDACTED";
 
 fn write_record_header<W: Write>(w: &mut W, tag: u8, length: u64) -> io::Result<()> {
     let len32 = u32::try_from(length).map_err(|_| {
@@ -1025,35 +1087,134 @@ mod tests {
         records.iter().filter(|(t, _)| *t == tag).count()
     }
 
-    // ── Test: marker is present and unique ────────────────────────────────────
+    // ── Sentinel helpers ──────────────────────────────────────────────────────
+
+    // Count sentinel STRING records (payload starts with the redaction prefix).
+    fn count_sentinels(records: &[(u8, Vec<u8>)]) -> usize {
+        records
+            .iter()
+            .filter(|(t, body)| is_sentinel(t, body))
+            .count()
+    }
+
+    // A sentinel STRING record: body = id(id_size) + payload, and the payload
+    // starts with the sentinel prefix. Offset-agnostic (works for both 4- and
+    // 8-byte dumps) via a window search.
+    fn is_sentinel(tag: &u8, body: &[u8]) -> bool {
+        *tag == tags::STRING_IN_UTF8
+            && body
+                .windows(REDACTED_SENTINEL_PREFIX.len())
+                .any(|w| w == REDACTED_SENTINEL_PREFIX)
+    }
+
+    // Extract the sentinel payload (everything from the prefix onward).
+    fn sentinel_payload(body: &[u8]) -> Vec<u8> {
+        let off = body
+            .windows(REDACTED_SENTINEL_PREFIX.len())
+            .position(|w| w == REDACTED_SENTINEL_PREFIX)
+            .expect("sentinel prefix not found");
+        body[off..].to_vec()
+    }
+
+    // ── Test: sentinel is present, unique, and last ───────────────────────────
 
     #[test]
-    fn marker_present_exactly_once() {
+    fn sentinel_present_exactly_once() {
         let mut dump = header();
         dump.extend(string_record(1, "hello"));
         let out = do_redact(&dump);
         let (_, records) = parse_records(&out);
         assert_eq!(
-            count_tag(&records, tags::REDACTED_MARKER),
+            count_sentinels(&records),
             1,
-            "exactly one REDACTED_MARKER record expected"
+            "exactly one sentinel STRING record expected"
         );
     }
 
     #[test]
-    fn marker_is_last_record() {
+    fn sentinel_is_last_record() {
         let mut dump = header();
         dump.extend(string_record(1, "world"));
         let out = do_redact(&dump);
         let (_, records) = parse_records(&out);
         let last = records.last().expect("at least one record");
         assert_eq!(
-            last.0, tags::REDACTED_MARKER,
-            "REDACTED_MARKER must be the last record (appended after HPROF_HEAP_DUMP_END)"
+            last.0,
+            tags::STRING_IN_UTF8,
+            "sentinel must be the last record (appended after HPROF_HEAP_DUMP_END)"
+        );
+        assert!(
+            last.1[ID_SIZE as usize..].starts_with(REDACTED_SENTINEL_PREFIX),
+            "last record payload must start with the sentinel prefix"
         );
     }
 
-    // ── Test: --no-marker omits the marker record ─────────────────────────────
+    #[test]
+    fn sentinel_payload_is_fixed() {
+        // The sentinel payload is the fixed mode-named string — identical
+        // across different dumps.
+        let d1 = {
+            let mut d = header();
+            d.extend(string_record(1, "a"));
+            d
+        };
+        let d2 = {
+            let mut d = header();
+            d.extend(string_record(1, "b"));
+            d.extend(string_record(2, "c"));
+            d
+        };
+        let (_, r1) = parse_records(&do_redact(&d1));
+        let (_, r2) = parse_records(&do_redact(&d2));
+        let s1 = r1
+            .iter()
+            .find(|(t, b)| is_sentinel(t, b))
+            .map(|(_, b)| sentinel_payload(b))
+            .unwrap();
+        let s2 = r2
+            .iter()
+            .find(|(t, b)| is_sentinel(t, b))
+            .map(|(_, b)| sentinel_payload(b))
+            .unwrap();
+        assert_eq!(s1, s2, "sentinel payload must be the fixed mode string");
+        assert_eq!(
+            std::str::from_utf8(&s1).unwrap(),
+            "hprof-analyzer:redacted:v1:complete"
+        );
+    }
+
+    #[test]
+    fn sentinel_id_is_reserved_ascii() {
+        let mut dump = header();
+        dump.extend(string_record(1, "hello"));
+        let (_, records) = parse_records(&do_redact(&dump));
+        let body = records
+            .iter()
+            .find(|(t, b)| is_sentinel(t, b))
+            .map(|(_, b)| b.clone())
+            .unwrap();
+        assert_eq!(
+            &body[..ID_SIZE as usize],
+            &b"REDACTED"[..ID_SIZE as usize],
+            "sentinel ID must be the reserved ASCII \"REDACTED\" truncated to id_size"
+        );
+    }
+
+    #[test]
+    fn sentinel_complete_mode_names_complete() {
+        let mut dump = header();
+        dump.extend(string_record(1, "hello"));
+        let (_, records) = parse_records(&do_redact(&dump));
+        let s = records
+            .iter()
+            .find(|(t, b)| is_sentinel(t, b))
+            .map(|(_, b)| sentinel_payload(b))
+            .unwrap();
+        assert!(
+            s == b"hprof-analyzer:redacted:v1:complete",
+            "complete-mode sentinel must be the fixed mode string"
+        );
+    }
 
     fn do_redact_no_marker(input: &[u8]) -> Vec<u8> {
         let source = HprofSource::from_bytes(input.to_vec(), "test.hprof");
@@ -1070,9 +1231,9 @@ mod tests {
         let out = do_redact_no_marker(&dump);
         let (_, records) = parse_records(&out);
         assert_eq!(
-            count_tag(&records, tags::REDACTED_MARKER),
+            count_sentinels(&records),
             0,
-            "write_marker=false must not embed a REDACTED_MARKER record"
+            "write_marker=false must not embed a sentinel record"
         );
         // The other records must survive untouched.
         assert_eq!(
@@ -1085,14 +1246,14 @@ mod tests {
     #[test]
     fn no_marker_on_marked_input_still_clean() {
         // Re-redacting an already-redacted dump with write_marker=false must
-        // drop the input's marker too: the output contains none.
+        // drop the input's sentinel too: the output contains none.
         let marked = do_redact(&header_plus_string());
         let out = do_redact_no_marker(&marked);
         let (_, records) = parse_records(&out);
         assert_eq!(
-            count_tag(&records, tags::REDACTED_MARKER),
+            count_sentinels(&records),
             0,
-            "existing marker in the input must not be copied through"
+            "existing sentinel in the input must not be copied through"
         );
     }
 
@@ -1103,37 +1264,60 @@ mod tests {
         dump
     }
 
-    // ── Test: re-redacting keeps exactly one marker ───────────────────────────
+    // ── Test: re-redacting keeps exactly one sentinel ─────────────────────────
 
     #[test]
-    fn re_redact_produces_exactly_one_marker() {
+    fn re_redact_produces_exactly_one_sentinel() {
         let mut dump = header();
         dump.extend(string_record(1, "name"));
         // First redaction
         let first = do_redact(&dump);
-        assert_eq!(
-            count_tag(&parse_records(&first).1, tags::REDACTED_MARKER),
-            1
-        );
+        assert_eq!(count_sentinels(&parse_records(&first).1), 1);
         // Second redaction of already-redacted output
         let second = do_redact(&first);
         let (_, records) = parse_records(&second);
         assert_eq!(
-            count_tag(&records, tags::REDACTED_MARKER),
+            count_sentinels(&records),
             1,
-            "re-redacting must not accumulate REDACTED_MARKER records"
+            "re-redacting must not accumulate sentinel records"
         );
     }
 
     #[test]
-    fn re_redact_three_times_still_one_marker() {
+    fn re_redact_three_times_still_one_sentinel() {
         let mut dump = header();
         dump.extend(string_record(1, "x"));
         let r1 = do_redact(&dump);
         let r2 = do_redact(&r1);
         let r3 = do_redact(&r2);
         let (_, records) = parse_records(&r3);
-        assert_eq!(count_tag(&records, tags::REDACTED_MARKER), 1);
+        assert_eq!(count_sentinels(&records), 1);
+    }
+
+    #[test]
+    fn legacy_tag_de_marker_is_dropped_and_detected() {
+        // A dump carrying the OLD custom marker (tag 0xDE, 23-byte record)
+        // must be detected as redacted and must not keep the legacy record
+        // when re-redacted.
+        let mut dump = header();
+        dump.extend(string_record(1, "legacy"));
+        dump.extend({
+            // record: tag(1) + ts(4) + len(4) + body
+            let body: &[u8] = b"HPROF-REDACT\x01\x00";
+            let mut rec = vec![tags::REDACTED_MARKER];
+            rec.extend_from_slice(&0u32.to_be_bytes());
+            rec.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            rec.extend_from_slice(body);
+            rec
+        });
+        let out = do_redact(&dump);
+        let (_, records) = parse_records(&out);
+        assert_eq!(
+            count_tag(&records, tags::REDACTED_MARKER),
+            0,
+            "legacy marker must not be copied through"
+        );
+        assert_eq!(count_sentinels(&records), 1);
     }
 
     // ── Test: STRING_IN_UTF8 records are preserved verbatim ───────────────────
@@ -1147,7 +1331,10 @@ mod tests {
         let (_, records) = parse_records(&out);
         let strs: Vec<&(u8, Vec<u8>)> = records
             .iter()
-            .filter(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .filter(|(t, b)| {
+                *t == tags::STRING_IN_UTF8
+                    && !b[ID_SIZE as usize..].starts_with(REDACTED_SENTINEL_PREFIX)
+            })
             .collect();
         assert_eq!(strs.len(), 2);
         assert!(strs[0].1.ends_with(b"java/lang/String"));
@@ -1193,7 +1380,10 @@ mod tests {
         let (_, records) = parse_records(&out);
         let strs: Vec<&(u8, Vec<u8>)> = records
             .iter()
-            .filter(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .filter(|(t, b)| {
+                *t == tags::STRING_IN_UTF8
+                    && !b[ID_SIZE as usize..].starts_with(REDACTED_SENTINEL_PREFIX)
+            })
             .collect();
         assert_eq!(strs.len(), 3);
         for (i, &(id, len)) in [(10u32, 5usize), (20, 4), (30, 0)].iter().enumerate() {
@@ -1221,6 +1411,9 @@ mod tests {
                 continue;
             }
             let payload = &body[ID_SIZE as usize..];
+            if payload.starts_with(REDACTED_SENTINEL_PREFIX) {
+                continue; // the sentinel itself is not zeroed
+            }
             assert!(
                 payload.iter().all(|&b| b == 0),
                 "non-structural STRING payloads must be zeroed in complete mode"
@@ -1250,7 +1443,10 @@ mod tests {
         let (_, records) = parse_records(&out);
         let strs: Vec<_> = records
             .iter()
-            .filter(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .filter(|(t, b)| {
+                *t == tags::STRING_IN_UTF8
+                    && !b[ID_SIZE as usize..].starts_with(REDACTED_SENTINEL_PREFIX)
+            })
             .collect();
         assert_eq!(strs.len(), 2);
 
@@ -1798,7 +1994,13 @@ mod tests {
         ] {
             let truncated = dump[..trunc_at].to_vec();
             let source = HprofSource::from_bytes(truncated, "truncated.hprof");
-            let result = redact(&source, std::io::sink(), RedactMode::Complete, true, |_, _| {});
+            let result = redact(
+                &source,
+                std::io::sink(),
+                RedactMode::Complete,
+                true,
+                |_, _| {},
+            );
             assert!(
                 result.is_ok(),
                 "truncated input at {trunc_at} must not error"
@@ -1815,7 +2017,7 @@ mod tests {
         let out = do_redact(&dump);
         assert!(!out.is_empty());
         let (_, records) = parse_records(&out);
-        assert_eq!(count_tag(&records, tags::REDACTED_MARKER), 1);
+        assert_eq!(count_sentinels(&records), 1);
         assert_eq!(count_tag(&records, tags::HEAP_DUMP), 1);
     }
 
@@ -1895,21 +2097,22 @@ mod tests {
         }
         let source = HprofSource::from(path.to_str().unwrap());
         let mut out = Vec::new();
-        redact(&source, &mut out, RedactMode::Complete, true, |_, _| {}).expect("redact fixture failed");
+        redact(&source, &mut out, RedactMode::Complete, true, |_, _| {})
+            .expect("redact fixture failed");
         out
     }
 
     #[test]
-    fn fixture_dump1_redact_has_marker() {
+    fn fixture_dump1_redact_has_sentinel() {
         let out = redact_fixture("dump_1_mnemonics.hprof");
         if out.is_empty() {
             return;
         }
         let (_, records) = parse_records(&out);
         assert_eq!(
-            count_tag(&records, tags::REDACTED_MARKER),
+            count_sentinels(&records),
             1,
-            "dump_1 redacted must have exactly one marker"
+            "dump_1 redacted must have exactly one sentinel"
         );
     }
 
@@ -1938,7 +2141,7 @@ mod tests {
     }
 
     #[test]
-    fn fixture_dump1_re_redact_one_marker() {
+    fn fixture_dump1_re_redact_one_sentinel() {
         let r1 = redact_fixture("dump_1_mnemonics.hprof");
         if r1.is_empty() {
             return;
@@ -1948,9 +2151,9 @@ mod tests {
         redact(&source2, &mut r2, RedactMode::Complete, true, |_, _| {}).expect("re-redact failed");
         let (_, records) = parse_records(&r2);
         assert_eq!(
-            count_tag(&records, tags::REDACTED_MARKER),
+            count_sentinels(&records),
             1,
-            "re-redacted fixture must have exactly one marker"
+            "re-redacted fixture must have exactly one sentinel"
         );
     }
 
@@ -2550,9 +2753,13 @@ mod tests {
         }
         let out = do_redact_lean(&dump);
         let (_, records) = parse_records(&out);
+        // Exclude the appended sentinel from the count.
         let string_bodies: Vec<_> = records
             .iter()
-            .filter(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .filter(|(t, b)| {
+                *t == tags::STRING_IN_UTF8
+                    && !b[ID_SIZE as usize..].starts_with(REDACTED_SENTINEL_PREFIX)
+            })
             .collect();
         assert_eq!(
             string_bodies.len(),
@@ -2637,17 +2844,27 @@ mod tests {
 
     #[test]
     fn redact_marker_body_is_correct() {
-        // Verify the redaction marker body bytes are exactly "HPROF-REDACT\x01\x00".
+        // Verify the sentinel record layout: standard STRING record whose
+        // body is id(ID_SIZE) + the fixed mode-named payload.
         let dump = header(); // empty — just the header
         let out = do_redact(&dump);
         let (_, records) = parse_records(&out);
-        let marker = records
+        let sentinel = records
             .iter()
-            .find(|(t, _)| *t == tags::REDACTED_MARKER)
-            .expect("redaction marker missing");
+            .find(|(t, _)| *t == tags::STRING_IN_UTF8)
+            .expect("sentinel STRING record missing");
+        let body = &sentinel.1;
+        assert!(body.len() > ID_SIZE as usize, "body = id + payload");
         assert_eq!(
-            marker.1, b"HPROF-REDACT\x01\x00",
-            "marker body must match spec"
+            &body[..ID_SIZE as usize],
+            &b"REDACTED"[..ID_SIZE as usize],
+            "sentinel ID must be the reserved ASCII \"REDACTED\" truncated to id_size"
+        );
+        let text =
+            std::str::from_utf8(&body[ID_SIZE as usize..]).expect("sentinel payload must be UTF-8");
+        assert_eq!(
+            text, "hprof-analyzer:redacted:v1:complete",
+            "complete-mode sentinel must be the fixed mode string"
         );
     }
 
@@ -2811,7 +3028,8 @@ mod tests {
         let mut gz_buf = Vec::new();
         {
             let gz = flate2::write::GzEncoder::new(&mut gz_buf, flate2::Compression::fast());
-            redact(&source, gz, RedactMode::Complete, true, |_, _| {}).expect("redact to gz failed");
+            redact(&source, gz, RedactMode::Complete, true, |_, _| {})
+                .expect("redact to gz failed");
         }
         let gz_source = HprofSource::from_bytes(gz_buf, "out.hprof.gz");
         let p1 = crate::pass1::Pass1::run(&gz_source, false).expect("pass1 on gz output failed");

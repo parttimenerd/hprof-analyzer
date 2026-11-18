@@ -554,7 +554,7 @@ hprof-analyzer redact heap.hprof safe.hprof
 hprof-analyzer redact --complete heap.hprof safe.hprof
 ```
 
-Redacted dumps are readable by hprof-analyzer, Eclipse MAT, and jhat. A marker record (body `HPROF-REDACT\x01\x00`, tag `0xDE`) is embedded so hprof-analyzer shows a "Redacted dump" banner in reports.
+Redacted dumps are readable by hprof-analyzer, Eclipse MAT (strict mode), jhat, and hprof-slurp. A sentinel `STRING` record with the fixed payload `hprof-analyzer:redacted:v1:<mode>` is appended after the `HPROF_HEAP_DUMP_END` record — a standard record type every parser accepts — so hprof-analyzer shows a "Redacted dump" banner in reports.
 
 **Object graph preserved in both modes:**
 

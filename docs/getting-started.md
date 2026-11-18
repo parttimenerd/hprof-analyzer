@@ -177,6 +177,8 @@ hprof-analyzer redact app.hprof safe.hprof
 hprof-analyzer redact --complete app.hprof safe.hprof
 ```
 
+The output stays a valid HPROF file that every tool can open: the redaction is marked with a sentinel `STRING` record (payload `hprof-analyzer:redacted:v1:<mode>`) appended after the `HPROF_HEAP_DUMP_END` record — a standard record type, so Eclipse MAT (strict mode), jhat, and hprof-slurp all parse it.
+
 ## Updating
 
 ```bash

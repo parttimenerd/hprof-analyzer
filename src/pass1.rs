@@ -17,7 +17,7 @@ use crate::{
     id_map::IdMap,
     pass2::sub_remaining,
     reader::{HEAP_DUMP_END_KIND, HprofReader},
-    types::{HprofType, heap, tags},
+    types::{HprofType, REDACTED_SENTINEL_PREFIX, heap, tags},
 };
 
 /// A thread-local GC-root edge: `(threadSerial, frameNumber, localAddr)`.
@@ -232,6 +232,12 @@ impl Pass1 {
                         )
                     })?;
                     let bytes = r.read_bytes(payload_len as usize)?;
+                    // Redaction sentinel (appended after HPROF_HEAP_DUMP_END by
+                    // the redactor; for single-0x0C dumps the trailing scan
+                    // never runs, so detect it here too).
+                    if bytes.as_slice().starts_with(REDACTED_SENTINEL_PREFIX) {
+                        plain_redacted = true;
+                    }
                     strings.insert(str_id, String::from_utf8_lossy(&bytes).into_owned());
                     Ok(())
                 }
@@ -334,10 +340,13 @@ impl Pass1 {
             match result {
                 Ok(()) => {}
                 Err(e) if e.kind() == HEAP_DUMP_END_KIND => {
-                    // The redaction marker is appended AFTER the heap dump
-                    // section (never inline in the record stream), so keep
-                    // scanning trailing records to EOF: every record is
-                    // skipped except REDACTED_MARKER, which sets the
+                    // The redaction sentinel is appended AFTER the heap dump
+                    // section (never inline in the record stream) as a
+                    // standard STRING_IN_UTF8 record whose payload starts
+                    // with `hprof-analyzer:redacted:v1:` (older versions
+                    // wrote a custom tag-0xDE record instead). Keep scanning
+                    // trailing records to EOF: every record is skipped
+                    // except the sentinel / legacy marker, which set the
                     // `redacted` flag for the banner / check-redacted.
                     loop {
                         let (tag, length) = match r.next_record() {
@@ -354,10 +363,30 @@ impl Pass1 {
                             }
                             Err(e2) => return Err(e2),
                         };
-                        if tag == tags::REDACTED_MARKER {
-                            plain_redacted = true;
-                        }
-                        if let Err(skip_err) = r.skip(length) {
+                        let consumed = match tag {
+                            tags::REDACTED_MARKER => {
+                                plain_redacted = true;
+                                r.skip(length)
+                            }
+                            tags::STRING_IN_UTF8 => {
+                                let ids = id_size as u64;
+                                let payload_len = length.saturating_sub(ids);
+                                if payload_len >= REDACTED_SENTINEL_PREFIX.len() as u64 {
+                                    let mut head = vec![0u8; REDACTED_SENTINEL_PREFIX.len()];
+                                    let ok = r.id().is_ok() // consume the string ID
+                                        && r.read_into(&mut head).is_ok()
+                                        && head == REDACTED_SENTINEL_PREFIX;
+                                    if ok {
+                                        plain_redacted = true;
+                                    }
+                                    r.skip(length - ids - REDACTED_SENTINEL_PREFIX.len() as u64)
+                                } else {
+                                    r.skip(length)
+                                }
+                            }
+                            _ => r.skip(length),
+                        };
+                        if let Err(skip_err) = consumed {
                             if skip_err.kind() == ErrorKind::UnexpectedEof
                                 || skip_err.kind() == ErrorKind::InvalidData
                             {

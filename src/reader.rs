@@ -305,13 +305,7 @@ impl HprofReader {
                     .map(|f| f.name().to_ascii_lowercase().ends_with(".hprof"))
                     .unwrap_or(false)
             })
-            .or_else(|| {
-                if archive.len() == 1 {
-                    Some(0)
-                } else {
-                    None
-                }
-            })
+            .or_else(|| if archive.len() == 1 { Some(0) } else { None })
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "no .hprof entry found in zip")
             })?;

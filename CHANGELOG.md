@@ -18,11 +18,9 @@ All notable changes to hprof-analyzer are documented here.
   with names) as FROM targets and JOIN partners, materialized in pass2.
 - **MCP: condensed mode for `overview` and `leaks`** — every list in these two
   sections is capped to the `limit` most-significant entries (overview default
-  12 / max 200; leaks default 10 / max 50), with `<field>_total` recorded per
-  truncated list plus an `_arrays_capped`/`_note` annotation. An 11 MB dump's
-  overview previously produced ~764 k characters that the output cap stubbed;
-  it now serves ~189 k characters of real content, widened on demand via
-  `limit`.
+  12 / max 200; leaks default 10 / max 50), with `<field>_total` and
+  `_note` annotations on truncated lists. This keeps the response well within
+  model context windows; widen on demand via `limit`.
 - **MCP: session epoch** — every tool response carries `session_epoch`
   (bumped on every `load_dump`); the index-taking tools accept an optional
   `expected_epoch` and reject stale indices after a dump switch ("stale
@@ -39,13 +37,6 @@ All notable changes to hprof-analyzer are documented here.
   `[workspace.package]` and `hprof-redact` inherits it
   (`version.workspace = true`): upgrading hprof-analyzer now upgrades the
   standalone redactor in the same step (0.3.2 → 0.3.4 immediately).
-- **`redact --no-marker` (CLI and `hprof-redact`)** — omit the redaction
-  marker record (tag `0xDE`, body `HPROF-REDACT\x01\x00`) from the output.
-  Strict third-party parsers reject the unknown tag — hprof-slurp exits with
-  "unhandled record tag 222" — so marker-less output also passes them. The
-  trade-off is documented in the flag help and echoed as a note after the
-  run: hprof-analyzer shows no "Redacted dump" banner and
-  `check-redacted`/`hprof-redact --check` report the dump as not redacted.
 - **Plain `.gz`, `.zip`, and `.tar` inputs** — accepted everywhere a dump is
   read (analyze, `heap` subcommands, redact, check-redacted), in addition to
   `.hprof`, `.hprof.gz`, `.hprof.zip`, `.tar.gz`, and `.tgz`: a gzip stream
@@ -55,16 +46,22 @@ All notable changes to hprof-analyzer are documented here.
   now accepted. Redact/check-redacted outputs also treat `.gz` and `.zip`
   suffixes as gzip/zip.
 - **`hprof-redact` uses clap** — the standalone redactor's hand-rolled argv
-  matching is replaced by a clap-derive CLI: proper `--help`, flag
-  combinations (`--complete --no-marker` in any order), `--version`, and
-  the same `--check` semantics as before.
-- **Redaction marker appended, not prepended** — the marker record (tag
-  `0xDE`) is now written after the final `HPROF_HEAP_DUMP_END` record
-  instead of before the first record, so the dump body is a genuine HPROF
-  record sequence from byte 0. pass1 scans the (typically empty) trailing
-  records after `0x2C` for the marker, keeping the "Redacted dump" banner
-  and `check-redacted` detection intact; re-redacting still yields exactly
-  one marker.
+  matching is replaced by a clap-derive CLI: proper `--help`, flag parsing,
+  `--version`, and the same `--check` semantics as before.
+- **Redaction marker is now a sentinel STRING record** — the custom record
+  (tag `0xDE`) is replaced with a standard `STRING_IN_UTF8` record (tag
+  `0x01`) whose payload is the well-known string
+  `hprof-analyzer:redacted:v1:<mode>`. The old `0xDE` tag was a non-standard
+  extension that broke Eclipse MAT in strict mode (the default since 2013)
+  and hprof-slurp. Because `STRING_IN_UTF8` is the most common HPROF record
+  type, every parser handles it — MAT (strict), hprof-slurp, VisualVM,
+  jhat. The string ID uses a reserved value
+  (0 or max+1) that no `LOAD_CLASS` or `CLASS_DUMP` references, making it an
+  inert orphan in every tool's string table. Detection: pass1 scans the
+  strings map for the `hprof-analyzer:redacted:` prefix. The legacy `0xDE`
+  marker is still recognized on read (backward compat) and stripped on
+  re-redaction. Re-redacting a dump with the new marker is byte-identical
+  (idempotent).
 
 ### Fixed
 
@@ -168,17 +165,16 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Docs
 
-- README restructured: outcome-first hero, capability table with sample
-  screenshots, benchmarks (incl. the MAT 1.17.0 comparison) moved into
-  collapsible `<details>`; the Homebrew section documents the
-  `hprof-analyzer@nightly` cask channel and the stable `hprof-analyzer`
-  formula.
-- `SUM(@retainedHeapSize)` double-counting caution (not comparable to
-  histogram/report dominator-accounted totals); the triage's
-  Off-Heap (DirectByteBuffer) total needs `--with-graph`/`load_dump({with_graph:true})`
-  to cross-check via OQL; every `get_oql_docs` example is swept by
-  `tests/oql_docs_sweep.rs` in CI; `INSTANCEOF <interface>` documented as a
-  data limitation with the concrete-class workaround.
+- README restructured: Quick Start leads with `brew install` / `cargo
+  install`, screenshots above the fold, AI assistant integration moved after
+  MCP server section, shell completions and compressed-format reference moved
+  out of Quick Start into Install and a collapsible block. Sample report link
+  added to the capabilities table.
+- OQL docs: `SUM(@retainedHeapSize)` double-counting caution (not comparable
+  to histogram/report dominator-accounted totals); triage's Off-Heap
+  (DirectByteBuffer) total notes the `--with-graph` requirement;
+  `INSTANCEOF <interface>` documented as a data limitation with the
+  concrete-class workaround. All `get_oql_docs` examples are validated in CI.
 
 ## [0.3.4] — 2026-11-13
 

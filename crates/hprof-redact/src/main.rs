@@ -3,16 +3,15 @@
 //! Zeroes primitive array elements (lean, default) or all primitive values
 //! (complete) in a Java heap dump while preserving the complete object graph
 //! (class/field names, reference links, dominator tree). The output is safe
-//! to share and remains readable by hprof-analyzer, Eclipse MAT, and jhat.
-//! With `--no-marker` the redaction marker record is omitted, so the output
-//! also passes strict third-party parsers (e.g. hprof-slurp) — at the cost of
-//! losing the machine-readable "this dump is redacted" marker.
+//! to share and remains readable by hprof-analyzer, Eclipse MAT, jhat, and
+//! hprof-slurp: the redaction is marked with a sentinel STRING record
+//! (`hprof-analyzer:redacted:v1:<mode>`) appended after the HPROF_HEAP_DUMP_END
+//! record — a
+//! standard record type every parser accepts.
 //!
 //! Usage:
 //!   hprof-redact <INPUT> <OUTPUT>                       # lean mode (default)
 //!   hprof-redact --complete <INPUT> <OUTPUT>            # complete (two-pass) mode
-//!   hprof-redact --no-marker <INPUT> <OUTPUT>           # lean, no marker record
-//!   hprof-redact --complete --no-marker <INPUT> <OUTPUT>
 //!   hprof-redact --check <INPUT>                        # check if already redacted
 //!   hprof-redact - <OUTPUT>                             # stdin → file
 //!   hprof-redact <INPUT> -                              # file  → stdout (raw .hprof only)
@@ -49,14 +48,6 @@ struct Cli {
     /// classes. Default is lean (single pass, arrays only).
     #[arg(long)]
     complete: bool,
-
-    /// Don't embed the redaction marker record (tag 0xDE). Strict third-party
-    /// parsers reject the unknown tag (hprof-slurp exits with "unhandled record
-    /// tag 222"); the output then also passes such parsers, but hprof-analyzer
-    /// shows no "Redacted dump" banner and --check reports the dump as not
-    /// redacted.
-    #[arg(long)]
-    no_marker: bool,
 
     /// Check whether INPUT is already redacted. Exits 0 if redacted, 1 if not,
     /// 2 on error. No OUTPUT required.
@@ -113,13 +104,13 @@ fn main() {
     } else {
         RedactMode::Lean
     };
-    if let Err(e) = run(&input, &output, mode, cli.no_marker) {
+    if let Err(e) = run(&input, &output, mode) {
         eprintln!("hprof-redact: {e}");
         process::exit(1);
     }
 }
 
-fn run(input: &str, output: &str, mode: RedactMode, no_marker: bool) -> io::Result<()> {
+fn run(input: &str, output: &str, mode: RedactMode) -> io::Result<()> {
     let progress = |_phase: &str, _fraction: f64| {};
 
     // Build the HprofSource — stdin is buffered into memory so the two-pass
@@ -137,13 +128,13 @@ fn run(input: &str, output: &str, mode: RedactMode, no_marker: bool) -> io::Resu
     let stats = if output == "-" {
         let stdout = io::stdout();
         let mut out = stdout.lock();
-        let stats = redact(&source, &mut out, mode, !no_marker, progress)?;
+        let stats = redact(&source, &mut out, mode, true, progress)?;
         out.flush()?;
         stats
     } else if lower.ends_with(".gz") {
         let file = std::fs::File::create(output)?;
         let gz = flate2::write::GzEncoder::new(file, flate2::Compression::best());
-        redact(&source, gz, mode, !no_marker, progress)?
+        redact(&source, gz, mode, true, progress)?
     } else if lower.ends_with(".hprof.zip") || lower.ends_with(".zip") {
         let file = std::fs::File::create(output)?;
         let mut zip = zip::ZipWriter::new(file);
@@ -151,12 +142,12 @@ fn run(input: &str, output: &str, mode: RedactMode, no_marker: bool) -> io::Resu
             .compression_method(zip::CompressionMethod::Deflated);
         zip.start_file("dump.hprof", opts)
             .map_err(io::Error::other)?;
-        let stats = redact(&source, &mut zip, mode, !no_marker, progress)?;
+        let stats = redact(&source, &mut zip, mode, true, progress)?;
         zip.finish().map_err(io::Error::other)?;
         stats
     } else {
         let file = std::fs::File::create(output)?;
-        redact(&source, file, mode, !no_marker, progress)?
+        redact(&source, file, mode, true, progress)?
     };
 
     if stats.unknown_class_instances > 0 {
@@ -165,12 +156,6 @@ fn run(input: &str, output: &str, mode: RedactMode, no_marker: bool) -> io::Resu
              copied verbatim (primitive values not redacted). This should not occur in a \
              valid HPROF.\x1b[0m",
             stats.unknown_class_instances
-        );
-    }
-    if no_marker {
-        eprintln!(
-            "note: no redaction marker embedded — hprof-analyzer will not show the \
-             'Redacted dump' banner and `--check` reports this dump as not redacted"
         );
     }
     Ok(())

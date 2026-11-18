@@ -3,6 +3,12 @@
 //! codes read off the dump stream so the rest of the pipeline can match on
 //! meaning rather than magic numbers.
 
+/// Payload prefix of the redaction sentinel `STRING_IN_UTF8` record
+/// (`hprof-analyzer:redacted:v1:<mode>`, appended after
+/// HPROF_HEAP_DUMP_END by the redactor). Lives here because both the lib and
+/// the bin module trees (which each compile pass1) need it.
+pub const REDACTED_SENTINEL_PREFIX: &[u8] = b"hprof-analyzer:redacted:v1:";
+
 /// Top-level record tags (HPROF spec §2)
 pub mod tags {
     pub const STRING_IN_UTF8: u8 = 0x01;
