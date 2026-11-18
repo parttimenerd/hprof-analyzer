@@ -121,9 +121,16 @@ impl HprofReader {
         // Gzip: a gz stream may wrap either a raw HPROF dump or a tar archive
         // containing one. Peek the decompressed head to route tar-wrapped
         // dumps (`.gz`/`.tgz`/`.tar.gz`) correctly.
+        // Extension-first: if the filename says .tar.gz/.tgz, always use the
+        // tar-aware reader — a truncated archive may not decompress enough bytes
+        // for gz_wraps_tar to detect the ustar magic, and routing it to the plain
+        // gz path would produce a misleading "not HPROF magic" error.
         #[cfg(any(feature = "native", feature = "redact-bin"))]
-        if filled >= 2 && magic[..2] == [0x1f, 0x8b] && Self::gz_wraps_tar(path) {
-            return Self::open_tar_gz(path);
+        if filled >= 2 && magic[..2] == [0x1f, 0x8b] {
+            let lower = path.to_ascii_lowercase();
+            if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || Self::gz_wraps_tar(path) {
+                return Self::open_tar_gz(path);
+            }
         }
 
         // Plain (uncompressed) tar: ustar magic at offset 257.
@@ -160,11 +167,14 @@ impl HprofReader {
     /// really tarballs to the tar-aware reader.
     #[cfg(any(feature = "native", feature = "redact-bin"))]
     fn gz_wraps_tar(path: &str) -> bool {
-        use flate2::read::GzDecoder;
         let Ok(file) = File::open(path) else {
             return false;
         };
-        let mut gz = GzDecoder::new(file);
+        // Use LenientGzDecoder so a truncated gzip still exposes whatever bytes
+        // were decompressed — a truncated .hprof.tar.gz must route to open_tar_gz,
+        // not fall through to the plain-gz path which would fail the HPROF magic check.
+        let truncated = Arc::new(AtomicBool::new(false));
+        let mut gz = LenientGzDecoder::new(BufReader::new(file), truncated);
         let mut head = vec![0u8; 262];
         let mut filled = 0;
         while filled < head.len() {

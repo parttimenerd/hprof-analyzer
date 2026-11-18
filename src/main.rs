@@ -3801,10 +3801,21 @@ fn sniff_is_hprof(path: &str) -> bool {
     // HPROF magic or a tar member header. Re-open the file — the magic read
     // above consumed the first bytes, and the gzip header starts at offset 0.
     if magic[..2] == [0x1f, 0x8b] {
+        // A .tar.gz / .tgz extension with gzip magic is always a plausible HPROF
+        // container — even if truncation prevents decompressing 262 bytes, we must
+        // not call it "not HPROF" and show the misleading "does not start with HPROF
+        // magic" error. Accept it here and let the reader produce the right message.
+        let lower = path.to_ascii_lowercase();
+        if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+            return true;
+        }
         let Ok(f2) = std::fs::File::open(path) else {
             return false;
         };
-        let mut gz = flate2::read::GzDecoder::new(f2);
+        // Use lenient decoding so a truncated gz stream still exposes whatever
+        // bytes were decompressed.
+        let truncated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut gz = crate::reader::LenientGzDecoder::new(f2, truncated);
         let mut head = vec![0u8; 262];
         let mut filled = 0;
         while filled < head.len() {
