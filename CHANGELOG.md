@@ -4,7 +4,10 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-11-18
+
 ### Added
+
 
 - **OQL: `WITH` (common table expressions)** — `WITH big AS (SELECT …) SELECT
   … FROM big` binds a name usable as a FROM target in the main query. Multiple
@@ -134,6 +137,15 @@ All notable changes to hprof-analyzer are documented here.
   not-found paths with a "the MCP server reads paths on ITS host" hint;
   negative `object_index` params produce an actionable message instead of a
   raw serde error.
+- **Truncated `.hprof.tar.gz` exits 0** — a heavily-truncated tar.gz that
+  could not decompress 262 bytes fell through to the plain-gz reader, which
+  failed the HPROF magic check and exited 1. `.tar.gz`/`.tgz` files with gzip
+  magic are now routed to the tar reader by extension, bypassing the ustar
+  content sniff.
+- **WASM browser: report opens inline** — the browser bundle opened the
+  analysis report in a new browser tab while showing the OQL shell in the
+  current tab; it now renders the report inline in the current tab with the OQL
+  shell accessible via the report's nav bar.
 - **`.mcp.json` fresh-checkout fix** — launches via
   `scripts/mcp-launcher.sh` (PATH → `target/release` → actionable error)
   instead of a hard `target/release/hprof-analyzer` ENOENT.
