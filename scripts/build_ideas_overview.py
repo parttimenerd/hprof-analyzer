@@ -11,8 +11,11 @@ from ideas_agent_notes import COMMON, for_id
 from ideas_demo_fixtures import PRIORITY
 
 ROOT = Path(__file__).resolve().parent.parent
-MAIN = ROOT / "VISUALIZATION_IDEAS.md"
-DEFERRED = ROOT / "VISUALIZATION_IDEAS_DEFERRED.md"
+# The VISUALIZATION_IDEAS* working notes live under docs/notes/ (moved out of
+# the repo root); the generated HTML stays in docs/.
+NOTES = ROOT / "docs" / "notes"
+MAIN = NOTES / "VISUALIZATION_IDEAS.md"
+DEFERRED = NOTES / "VISUALIZATION_IDEAS_DEFERRED.md"
 OUT = ROOT / "docs" / "ideas-overview.html"
 
 FIELDS = ["Verdict", "Analysis", "Pros", "Cons", "Improve", "Size", "Rust"]
