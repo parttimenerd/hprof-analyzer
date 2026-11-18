@@ -469,10 +469,12 @@ FROM INSTANCEOF java.lang.ClassLoader
 ```
 
 ```sql
--- Class count per loader
-SELECT classof(x) AS loader, COUNT(*) AS class_count
+-- Loader instances grouped by loader class. NOTE: OQL cannot see the
+-- CLASS_DUMP loader id, so true per-loader CLASS counts are not expressible
+-- as a query — use get_report({section:"classloaders"}) for those.
+SELECT classof(x) AS loader_class, COUNT(*) AS loader_instances
 FROM INSTANCEOF java.lang.ClassLoader x
-GROUP BY classof(x) ORDER BY class_count DESC
+GROUP BY classof(x) ORDER BY loader_instances DESC
 ```
 
 ## Reference graph (@inbounds / @outbounds)

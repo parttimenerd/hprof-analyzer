@@ -181,7 +181,7 @@ pub struct QueryParams {
     ///   "large-collections"       — collections with > 1000 elements
     ///   "empty-collections"       — empty collections (overhead waste)
     ///   "class-loaders"           — all ClassLoader instances
-    ///   "classes-per-loader"      — class count per loader
+    ///   "classes-per-loader"      — loader instances grouped by loader class (true per-loader CLASS counts live in get_report({section:"classloaders"}) — OQL cannot see the CLASS_DUMP loader id)
     ///   "top-retained-by-class"   — top 30 classes by RETAINED size (*)
     ///   "largest-retained-objects"— 20 objects with most retained bytes (*)
     ///   "leak-suspects"           — objects retaining > 10 MB (large heaps; for small heaps use get_report({section:"leaks"}) instead)

@@ -4,6 +4,129 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **OQL: `WITH` (common table expressions)** — `WITH big AS (SELECT …) SELECT
+  … FROM big` binds a name usable as a FROM target in the main query. Multiple
+  CTEs, explicit or default alias (the CTE name), and UNION branches are
+  supported; every reference runs its own copy of the body through the
+  FROM-subquery machinery. CTE bodies must be self-contained: CTE→CTE references
+  and recursive CTEs are rejected with clear parse-time messages (single-level
+  subquery nesting). Documented in `docs/OQL.md` and the MCP `get_oql_docs`.
+- **OQL: virtual tables** — `__classes__` (per-class instance/shallow/retained
+  totals), `__gc_roots__` (root objects + types), `__threads__` (thread records
+  with names) as FROM targets and JOIN partners, materialized in pass2.
+- **MCP: condensed mode for `overview` and `leaks`** — every list in these two
+  sections is capped to the `limit` most-significant entries (overview default
+  12 / max 200; leaks default 10 / max 50), with `<field>_total` recorded per
+  truncated list plus an `_arrays_capped`/`_note` annotation. An 11 MB dump's
+  overview previously produced ~764 k characters that the output cap stubbed;
+  it now serves ~189 k characters of real content, widened on demand via
+  `limit`.
+- **MCP: session epoch** — every tool response carries `session_epoch`
+  (bumped on every `load_dump`); the index-taking tools accept an optional
+  `expected_epoch` and reject stale indices after a dump switch ("stale
+  session: dump changed (epoch e ≠ expected x)").
+- **MCP: `needs_collections` view flags** — `list_views` (and `heap views`)
+  mark `static-collections`/`unclosed-resources` as requiring
+  `load_dump({collections:true})`, which previously made them silently empty.
+- **CLI: `heap histogram --class-filter <substr>`** — filter the histogram by
+  (pretty) class-name substring, applied before `--limit`.
+- **CLI: `heap cache-list`/`cache-clear --category` warnings** — the category
+  flags are analysis options ignored by the cache commands; they now warn
+  instead of silently doing nothing.
+- **Version lockstep for `hprof-redact`** — the package version moved into
+  `[workspace.package]` and `hprof-redact` inherits it
+  (`version.workspace = true`): upgrading hprof-analyzer now upgrades the
+  standalone redactor in the same step (0.3.2 → 0.3.4 immediately).
+
+### Fixed
+
+- **Truncated dumps refused** — `heap summary`/`heap load`/`heap report` detect
+  a plain `.hprof` that ended mid-record (missing HEAP_DUMP_END) and fail with
+  a prominent ⚠ DUMP IS TRUNCATED message; `--force` accepts the partial
+  analysis (the gzip/zip paths stay lenient).
+- **MCP: subquery routing** — batches with FROM-/IN-/EXISTS-subqueries route
+  through the two-phase pipeline inside `run_oql_escalated` for EVERY caller;
+  previously only the MCP tool had the routing, so `heap query` panicked
+  ("flat results shorter than groups describe") on
+  `SELECT COUNT(*) FROM (SELECT …) t`.
+- **Scan executor class filter** — `visit_instance` lost its `class_matches`
+  guard during an unrelated refactor, making every executor match every
+  scanned object (a Thread-only inner subquery returned all reachable
+  objects); guard restored.
+- **Lexer: char literals lex as `Int` again** — the `HexInt` variant insertion
+  for the `FROM OBJECTS` address/index split accidentally captured the char
+  regex (logos attaches each regex to the following variant), so `'a'` lexed
+  as `HexInt(97)`.
+- **OQL: `replace()` and window functions on scan paths** — `replace()` was
+  missing from the late-phase evaluator (null for every row); window columns
+  (`ROW_NUMBER()`/`RANK()`/`DENSE_RANK()` OVER …) stayed null because the
+  stage-runner paths never applied `apply_window_functions`.
+- **OQL: `@name` attribute** — now walks the `name` instance field and decodes
+  it (e.g. `SELECT @name FROM java.lang.Thread` returns thread names, not the
+  class name); string-field comparison `WHERE t.name = "main"` works via
+  RefPath promotion.
+- **MCP: honest errors** — empty `oql` and unknown FROM classes return tool
+  errors (previously `{"error": …}` inside a SUCCESS body);
+  `get_oql_docs({topic})` validates the topic; `get_histogram` limits are
+  server-capped; `get_report` defaults to the `triage` section.
+- **Report truth** — `field_stats` dispatch used the wrong field; `limit` is
+  honored for `waste`/`retainers`/`arrays`/`collections`/`indicators`/
+  `alloc_sites`; `alloc_sites` carries an honest `_note` on its accounting;
+  `indicators.anonymous_class_instances` counts instances (the old
+  `anonymous_class_count` counted distinct class names); empty sections
+  (`thread_locals`/`framework`/`waste_breakdown`) explain why they are empty.
+- **Empty-collection signal excludes singleton sentinels** — JDK/Scala
+  singletons (`Nil$`, `Collections.emptyList()`, Kotlin/Guava empties) are
+  counted separately in `singleton_sentinels` and labelled as expected in the
+  recommendation text.
+- **Graph tools** — `find_incoming_references` deduplicates multi-edge sources
+  (`edge_count` per row, unique total); `get_retained_set.class_filter` now
+  also filters `class_summary`; `total_shallow_in_subtree` includes the root
+  (explicit `root_shallow_bytes`); GC-root terminal nodes are marked
+  `synthetic: true` so their out-of-range indices are never fed back into
+  `inspect_object`.
+- **CLI nits** — `heap browse/inspect --index` out-of-range errors explain the
+  index space (objects AND classes/other entries); `browse` JSON emits the
+  0-based `object_index` twin; `heap inspect` on `java.lang.Class` shows a
+  `Fields:` note; histogram uses MiB math with MiB labels; `cache-clear`
+  removes ALL entries for a dump (plain + graph + stale-mtime siblings);
+  `cache-list` shows every entry.
+- **Load banner honesty** — "Top Leak Suspects" in `heap load` and the MCP
+  load summary come from the leak-suspect detector (the histogram's top
+  classes are now labelled "Top classes by retained size (not suspects)"),
+  and the banner states both index-space numbers.
+- **Input validation** — friendly errors for empty/garbage/lz4 inputs; the MCP
+  server rejects relative paths with a "use an absolute path" hint and
+  not-found paths with a "the MCP server reads paths on ITS host" hint;
+  negative `object_index` params produce an actionable message instead of a
+  raw serde error.
+- **`.mcp.json` fresh-checkout fix** — launches via
+  `scripts/mcp-launcher.sh` (PATH → `target/release` → actionable error)
+  instead of a hard `target/release/hprof-analyzer` ENOENT.
+
+### Changed
+
+- **`FROM OBJECTS` numeric forms** — hex literals (`0x…`) are heap addresses
+  resolved via the address→index map; decimal literals are dense indices
+  (the `@objectId` value), matching how query results feed back into
+  `FROM OBJECTS`.
+- **Complete-mode redaction warning** — `redact --complete` prints
+  "⚠ complete-mode redaction alters dominator/retained structure — do NOT use
+  this redacted dump for structural leak analysis; use lean mode for
+  suspect-preserving redaction" (verified empirically: lean mode's leak
+  suspects are byte-identical to the original, complete mode's differ).
+
+### Docs
+
+- `SUM(@retainedHeapSize)` double-counting caution (not comparable to
+  histogram/report dominator-accounted totals); the triage's
+  Off-Heap (DirectByteBuffer) total needs `--with-graph`/`load_dump({with_graph:true})`
+  to cross-check via OQL; every `get_oql_docs` example is swept by
+  `tests/oql_docs_sweep.rs` in CI; `INSTANCEOF <interface>` documented as a
+  data limitation with the concrete-class workaround.
+
 ## [0.3.4] — 2026-11-13
 
 ### Added
