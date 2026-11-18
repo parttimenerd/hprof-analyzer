@@ -4623,9 +4623,10 @@ fn viz_directive_line_in_query_file_attaches_to_next() {
     );
 }
 
-/// `FROM OBJECTS <address>` selects exactly the one heap object at that address.
-/// Take a real Thread address from a prior query, then query it back by address
-/// and confirm the same address appears; a bogus `FROM OBJECTS 0x1` yields no
+/// `FROM OBJECTS 0x<address>` selects exactly the one heap object at that
+/// address; `FROM OBJECTS <decimal>` selects the object at that DENSE INDEX
+/// (the @objectId value). Take a real Thread from a prior query, query it back
+/// both ways, and confirm round-trips; a bogus `FROM OBJECTS 0x1` yields no
 /// matching data row (MAT parity: missing address → zero rows, not an error).
 #[test]
 fn from_objects_single_address_returns_one_row() {
@@ -4646,15 +4647,17 @@ fn from_objects_single_address_returns_one_row() {
             t.parse::<u64>().ok().filter(|&n| n != 0)
         })
         .unwrap_or_else(|| panic!("no object address in seed output:\n{seed}"));
+    // Hex form carries ADDRESS semantics (resolved via address→dense-index).
+    let hex_addr = format!("0x{addr:x}");
 
     // 2) Query that exact object by address; the same address must appear.
     let by_addr = run_query_stdout(
         &hprof,
-        &format!("SELECT @objectAddress FROM OBJECTS {addr}"),
+        &format!("SELECT @objectAddress FROM OBJECTS {hex_addr}"),
     );
     assert!(
         by_addr.lines().any(|l| l.trim() == addr.to_string()),
-        "FROM OBJECTS {addr} did not return that address:\n{by_addr}"
+        "FROM OBJECTS {hex_addr} did not return that address:\n{by_addr}"
     );
     assert_eq!(
         parse_row_count(&by_addr),
@@ -4664,11 +4667,30 @@ fn from_objects_single_address_returns_one_row() {
 
     // 2b) COUNT(*) over the single object is exactly 1 (SingleScan aggregate path,
     // not the class-name histogram).
-    let count = run_query_stdout(&hprof, &format!("SELECT COUNT(*) FROM OBJECTS {addr}"));
+    let count = run_query_stdout(&hprof, &format!("SELECT COUNT(*) FROM OBJECTS {hex_addr}"));
     assert_eq!(
         parse_single_count(&count),
         1,
         "COUNT(*) FROM OBJECTS <real addr> must be 1:\n{count}"
+    );
+
+    // 2c) DECIMAL literals carry DENSE-INDEX semantics (matching @objectId
+    // values from query results) — the same object must come back.
+    let idx_seed = run_query_stdout(&hprof, "SELECT @objectId FROM java.lang.Thread LIMIT 1");
+    let idx = idx_seed
+        .lines()
+        .find_map(|l| {
+            let t = l.trim();
+            if t.starts_with('(') {
+                return None;
+            }
+            t.parse::<u64>().ok().filter(|&n| n != 0)
+        })
+        .unwrap_or_else(|| panic!("no object index in seed output:\n{idx_seed}"));
+    let by_idx = run_query_stdout(&hprof, &format!("SELECT @objectId FROM OBJECTS {idx}"));
+    assert!(
+        by_idx.lines().any(|l| l.trim() == idx.to_string()),
+        "FROM OBJECTS {idx} (decimal = dense index) must return object {idx}:\n{by_idx}"
     );
 
     // 3) A bogus address returns zero data rows (no matching object).
