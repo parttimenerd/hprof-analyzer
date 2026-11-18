@@ -12,6 +12,7 @@ ledgers that no longer match current state; each carries its own context.
 | `ALL_BUGS_LIST.md` | consolidated bug list from the campaigns |
 | `BUG_ANALYSIS.md` | root-cause analysis write-ups |
 | `TEST_RESULTS.md`, `QA_TEST_SUMMARY.md` | test-campaign outputs |
+| `FOUND_BUGS2.md` | the campaign bug ledger — **closed** (all entries resolved; reproducers kept) |
 | `GAPS.md` | known gaps at the time of writing |
 | `PLAN.md`, `DESIGN.md`, `DESIGN_UNIFIED_SERVING.md` | design/planning notes |
 | `RESEARCH_FINDINGS.md`, `LEAKCANARY_RESEARCH.md`, `LEAKCANARY_INSPIRED_PROPOSALS.md` | research findings and proposals (LeakCanary comparison) |
@@ -21,5 +22,5 @@ ledgers that no longer match current state; each carries its own context.
 
 ## Live tracking files
 
-The active bug ledger is **`FOUND_BUGS2.md` in the repo root** (kept there
-during the campaigns); `CHANGELOG.md` records shipped changes.
+Bugs are tracked via GitHub issues; shipped changes in the root
+`CHANGELOG.md`.

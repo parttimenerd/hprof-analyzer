@@ -1,4 +1,8 @@
-# FOUND_BUGS2.md — hprof-analyzer bug ledger (post-campaign)
+# FOUND_BUGS2.md — hprof-analyzer bug ledger (CLOSED)
+
+> **Closed & archived** (2026-11-18): every entry below is resolved — the
+> "Still open" section is empty. Tracked here for the reproducers and the
+> fixed-summary. New bugs go to GitHub issues + CHANGELOG, not this file.
 
 Final status after the 2026-11-17 campaign (CLI reproducer matrix + MCP stdio
 matrix + cheap-agent implementation batch, all verified against fresh builds).
