@@ -104,7 +104,7 @@ hprof-analyzer heap.hprof.gz report.json.gz
 hprof-analyzer report.json.gz --format html report.html
 ```
 
-**Truncated and corrupt files are detected, not fatal.** If the JVM was killed mid-dump, the file was copied incompletely, the gzip stream ends early, or random bytes follow a valid HPROF header, the analyzer recovers whatever objects were successfully parsed and produces a partial report rather than aborting; `truncated_input: true` is set in the JSON output. The `heap` subcommands additionally refuse a truncated plain `.hprof` unless you pass `--force` (which proceeds with a loud warning), so partial numbers are never mistaken for complete ones.
+**Truncated and corrupt files are detected, not fatal.** If the JVM was killed mid-dump, the file was copied incompletely, the gzip stream ends early, or random bytes follow a valid HPROF header, the analyzer recovers whatever objects were successfully parsed and produces a partial report rather than aborting; `truncated_input: true` is set in the JSON output (the default analyze path prints no stderr warning). `heap summary`, `heap report`, and `heap load` refuse a truncated plain `.hprof` unless you pass `--force`; `heap summary --force` then proceeds with a loud warning on stderr. The gate applies to plain `.hprof` only — gzip/zip/tar inputs are always lenient, and the remaining `heap` subcommands (histogram, query, …) run on partial data without a gate.
 
 </details>
 

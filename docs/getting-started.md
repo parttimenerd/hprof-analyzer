@@ -64,7 +64,7 @@ Open `report.html` in any browser. No server required — the file is fully self
 
 The tool reads `.hprof`, `.hprof.gz`, `.hprof.zip`, `.hprof.tar.gz`, `.tar.gz`, and `.tgz` directly — no manual decompression needed.
 
-**Truncated dumps are detected.** If the JVM was killed mid-dump or the file was copied incompletely, the `heap` subcommands refuse the dump (`⚠ DUMP IS TRUNCATED`) until you pass `--force`, which produces a partial report with a loud warning on stderr. The default analyze command reads leniently and emits a partial report covering the records that were fully written.
+**Truncated dumps are detected.** If the JVM was killed mid-dump or the file was copied incompletely, the dump still analyzes: the default command emits a partial report covering the records that were fully written, with no warning on stderr — the only trace is `truncated_input: true` in the JSON output. `heap summary`, `heap report`, and `heap load` additionally refuse a truncated plain `.hprof` unless you pass `--force`; `heap summary --force` proceeds with a loud warning on stderr. The gate applies to plain `.hprof` only — gzip/zip/tar inputs are always lenient.
 
 ## What the report shows
 
