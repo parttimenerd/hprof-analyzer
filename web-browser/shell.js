@@ -1198,8 +1198,7 @@ async function loadWasmSessionWithReport(file, opts = {}) {
     await new Promise(r => setTimeout(r, 16));
     hasRetained = true;
     classNames = JSON.parse(wasmSession.class_names());
-    openReportTab(reportHtml);
-    showWasmShell(file.name);
+    showReport(reportHtml, file.name);
   } catch (e) {
     msg.innerHTML = _errorHtml('Analysis', file.name, e);
   }
