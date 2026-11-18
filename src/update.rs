@@ -70,6 +70,23 @@ pub fn run(channel: Option<Channel>) -> Result<(), String> {
     }
 }
 
+/// True if the running binary was installed with Homebrew (its real path lives
+/// under a `Cellar` directory).  Self-updating must be left to `brew upgrade`
+/// in that case — replacing the binary directly would fight the brew-managed
+/// symlink into the Cellar.
+fn is_brew_install() -> bool {
+    match std::env::current_exe() {
+        Ok(exe) => is_brew_cellar_path(&exe),
+        Err(_) => false,
+    }
+}
+
+/// Resolve `exe` through symlinks and check for a `Cellar` path component.
+fn is_brew_cellar_path(exe: &std::path::Path) -> bool {
+    let resolved = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    resolved.components().any(|c| c.as_os_str() == "Cellar")
+}
+
 /// Fetch release info for both channels and print a comparison table.
 fn show_status() -> Result<(), String> {
     println!("hprof-analyzer {CURRENT_VERSION}  (target: {TARGET})");
@@ -103,9 +120,14 @@ fn show_status() -> Result<(), String> {
         }
     }
 
-    println!("To update, run:");
-    println!("  hprof-analyzer update nightly   # replace with latest nightly build");
-    println!("  hprof-analyzer update latest    # replace with latest stable release");
+    if is_brew_install() {
+        println!("Installed with Homebrew — to update, run:");
+        println!("  brew upgrade hprof-analyzer");
+    } else {
+        println!("To update, run:");
+        println!("  hprof-analyzer update nightly   # replace with latest nightly build");
+        println!("  hprof-analyzer update latest    # replace with latest stable release");
+    }
     Ok(())
 }
 
@@ -239,6 +261,15 @@ fn format_release_summary(r: &Result<ReleaseInfo, String>) -> String {
 
 /// Download the given channel and atomically replace this binary.
 fn do_update(channel: Channel) -> Result<(), String> {
+    if is_brew_install() {
+        return Err(
+            "this binary was installed with Homebrew — self-update would clobber the \
+             brew-managed Cellar layout. Update it with `brew upgrade hprof-analyzer` \
+             instead."
+                .to_string(),
+        );
+    }
+
     let exe =
         std::env::current_exe().map_err(|e| format!("cannot locate current executable: {e}"))?;
 
@@ -430,10 +461,7 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
     const ATTEMPTS: u32 = 3;
     let mut last_transport_err = String::new();
     for attempt in 1..=ATTEMPTS {
-        let mut resp = match ureq::get(url)
-            .header("User-Agent", "hprof-analyzer")
-            .call()
-        {
+        let mut resp = match ureq::get(url).header("User-Agent", "hprof-analyzer").call() {
             Ok(r) => r,
             Err(e) => {
                 last_transport_err = format!("HTTP request failed: {e}");
@@ -557,6 +585,36 @@ mod tests {
         assert!(!version_gt("v0.2.0", "0.2.0"));
         assert!(!version_gt("v0.1.9", "0.2.0"));
         assert!(!version_gt("0.2.0", "v0.2.0"));
+    }
+
+    #[test]
+    fn brew_detection_resolves_symlinks_into_cellar() {
+        let tmp = std::env::temp_dir().join("hprof-update-brew-test");
+        let cellar_bin = tmp.join("Cellar/hprof-analyzer/1.2.3/bin/hprof-analyzer");
+        std::fs::create_dir_all(cellar_bin.parent().unwrap()).unwrap();
+        std::fs::write(&cellar_bin, b"x").unwrap();
+
+        // Symlink outside the Cellar must still be detected as brew-managed.
+        let link = tmp.join("hprof-analyzer");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&cellar_bin, &link).unwrap();
+        #[cfg(not(unix))]
+        std::fs::copy(&cellar_bin, &link).unwrap();
+
+        assert!(is_brew_cellar_path(&link));
+
+        // A plain path outside the Cellar is not.
+        std::fs::write(tmp.join("plain"), b"x").unwrap();
+        assert!(!is_brew_cellar_path(&tmp.join("plain")));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn brew_detection_survives_unresolvable_path() {
+        assert!(!is_brew_cellar_path(std::path::Path::new(
+            "/definitely/not/a/real/binary"
+        )));
     }
 
     #[test]
