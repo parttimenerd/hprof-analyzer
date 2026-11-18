@@ -40,6 +40,15 @@ Update to the latest nightly build:
 hprof-analyzer update nightly
 ```
 
+Or upgrade via Homebrew (the nightly formula uses `sha256 :no_check` because
+the tarball is re-uploaded on every push to `main`; the stable `hprof-analyzer`
+formula pins a checksum per release):
+
+```sh
+brew upgrade parttimenerd/hprof-analyzer/hprof-analyzer-nightly   # nightly
+brew upgrade hprof-analyzer                                       # stable
+```
+
 OQL language reference (no dump needed):
 
 ```sh

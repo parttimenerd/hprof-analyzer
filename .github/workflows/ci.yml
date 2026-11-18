@@ -552,18 +552,18 @@ jobs:
             on_macos do
               on_arm do
                 url "{base_url}/hprof-analyzer-aarch64-apple-darwin.tar.gz"
-                sha256 "{sha_mac}"
+                sha256 :no_check
               end
             end
 
             on_linux do
               on_intel do
                 url "{base_url}/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz"
-                sha256 "{sha_x86}"
+                sha256 :no_check
               end
               on_arm do
                 url "{base_url}/hprof-analyzer-aarch64-unknown-linux-gnu.tar.gz"
-                sha256 "{sha_arm}"
+                sha256 :no_check
               end
             end
 

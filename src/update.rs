@@ -292,25 +292,44 @@ fn do_update(channel: Channel) -> Result<(), String> {
         extract_from_tar_gz(&bytes)?
     };
 
-    // Write to a sibling temp file, then atomically replace.
+    // Refuse to install something that is clearly not an executable for this
+    // platform before we touch anything (a tar.gz of an HTML error page, a
+    // truncated archive, an empty file, …).
+    validate_binary(&new_binary)?;
+
+    // Write to a sibling temp file, then atomically replace. Keep the temp
+    // file cleaned up on every failure path past the write.
     let tmp = exe.with_extension("update_tmp");
+    let cleanup = |msg: String| -> String {
+        let _ = std::fs::remove_file(&tmp);
+        msg
+    };
+
     std::fs::write(&tmp, &new_binary)
-        .map_err(|e| format!("failed to write temp file {}: {e}", tmp.display()))?;
+        .map_err(|e| cleanup(format!("failed to write temp file {}: {e}", tmp.display())))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&tmp)
-            .map_err(|e| format!("metadata error: {e}"))?
+        let perms = std::fs::metadata(&tmp)
+            .map_err(|e| cleanup(format!("metadata error: {e}")))?
             .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&tmp, perms).map_err(|e| format!("chmod error: {e}"))?;
+        std::fs::set_permissions(&tmp, {
+            let mut p = perms.clone();
+            p.set_mode(0o755);
+            p
+        })
+        .map_err(|e| cleanup(format!("chmod error: {e}")))?;
     }
 
     eprintln!("Smoke-testing downloaded binary …");
-    smoke_test(&tmp).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })?;
+    smoke_test(&tmp).map_err(cleanup)?;
+
+    // Best-effort backup of the current binary so a bad update can be rolled
+    // back by hand; a failure to copy is not fatal (rename below is the real
+    // safety net).
+    let backup = exe.with_extension("bak");
+    let _ = std::fs::copy(&exe, &backup);
 
     eprintln!("Replacing {} …", exe.display());
     // The `self-replace` crate exists for Windows (where the running binary is
@@ -332,6 +351,41 @@ fn do_update(channel: Channel) -> Result<(), String> {
     let _ = std::fs::remove_file(&tmp);
 
     eprintln!("Done. Run `hprof-analyzer --version` to confirm.");
+    Ok(())
+}
+
+/// Sanity-check an extracted binary before we install it: non-trivial size and
+/// an executable magic matching the platform this build runs on.
+fn validate_binary(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() < 100_000 {
+        return Err(format!(
+            "downloaded binary is suspiciously small ({} bytes) — refusing to install",
+            bytes.len()
+        ));
+    }
+    #[cfg(target_os = "linux")]
+    let looks_executable = bytes.starts_with(b"\x7fELF");
+    #[cfg(target_os = "macos")]
+    let looks_executable = [
+        // Mach-O 64-bit (little/big endian), 32-bit, and fat/universal magics.
+        &b"\xcf\xfa\xed\xfe"[..],
+        b"\xfe\xed\xfa\xcf",
+        b"\xce\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xce",
+        b"\xca\xfe\xba\xbe",
+        b"\xbe\xba\xfe\xca",
+    ]
+    .iter()
+    .any(|m| bytes.starts_with(m));
+    #[cfg(windows)]
+    let looks_executable = bytes.starts_with(b"MZ");
+    if !looks_executable {
+        return Err(
+            "downloaded binary does not look like an executable for this platform — \
+             refusing to install (the archive may contain an error page or be corrupt)"
+                .into(),
+        );
+    }
     Ok(())
 }
 
@@ -369,28 +423,52 @@ fn archive_name() -> (String, bool) {
     (format!("hprof-analyzer-{TARGET}.{ext}"), is_zip)
 }
 
-/// Download `url` into memory.
+/// Download `url` into memory, retrying transient transport errors a few times
+/// (DNS blips, resets, timeouts). HTTP status errors (404 target missing, 500)
+/// are permanent and fail fast with the actionable message.
 fn download(url: &str) -> Result<Vec<u8>, String> {
-    let mut resp = ureq::get(url)
-        .header("User-Agent", "hprof-analyzer")
-        .call()
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
+    const ATTEMPTS: u32 = 3;
+    let mut last_transport_err = String::new();
+    for attempt in 1..=ATTEMPTS {
+        let mut resp = match ureq::get(url)
+            .header("User-Agent", "hprof-analyzer")
+            .call()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                last_transport_err = format!("HTTP request failed: {e}");
+                if attempt < ATTEMPTS {
+                    eprintln!(
+                        "  download failed ({last_transport_err}); retrying ({attempt}/{ATTEMPTS})…"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(750 * attempt as u64));
+                    continue;
+                }
+                return Err(last_transport_err);
+            }
+        };
 
-    let status = resp.status();
-    if status != 200 {
-        return Err(format!(
-            "server returned HTTP {status} for {url}\n\
-             Is a build available for target `{TARGET}`?"
-        ));
+        let status = resp.status();
+        if status != 200 {
+            return Err(format!(
+                "server returned HTTP {status} for {url}\n\
+                 Is a build available for target `{TARGET}`?"
+            ));
+        }
+
+        let mut buf = Vec::new();
+        resp.body_mut()
+            .as_reader()
+            .take(200_000_000)
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("failed to read response body: {e}"))?;
+        if buf.len() >= 200_000_000 {
+            return Err("archive exceeds the 200 MB download cap — refusing".into());
+        }
+        return Ok(buf);
     }
-
-    let mut buf = Vec::new();
-    resp.body_mut()
-        .as_reader()
-        .take(200_000_000)
-        .read_to_end(&mut buf)
-        .map_err(|e| format!("failed to read response body: {e}"))?;
-    Ok(buf)
+    // The loop always returns (the last transport error is returned above).
+    Err(last_transport_err)
 }
 
 fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
@@ -479,5 +557,30 @@ mod tests {
         assert!(!version_gt("v0.2.0", "0.2.0"));
         assert!(!version_gt("v0.1.9", "0.2.0"));
         assert!(!version_gt("0.2.0", "v0.2.0"));
+    }
+
+    #[test]
+    fn validate_binary_rejects_garbage() {
+        // Too small to be a real binary.
+        assert!(validate_binary(b"tiny").is_err());
+        // Right size but not an executable (e.g. an HTML error page).
+        let big_text = vec![b'x'; 200_000];
+        assert!(validate_binary(&big_text).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn validate_binary_accepts_macho() {
+        let mut bytes = vec![0u8; 200_000];
+        bytes[0..4].copy_from_slice(b"\xcf\xfa\xed\xfe");
+        assert!(validate_binary(&bytes).is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn validate_binary_accepts_elf() {
+        let mut bytes = vec![0u8; 200_000];
+        bytes[0..4].copy_from_slice(b"\x7fELF");
+        assert!(validate_binary(&bytes).is_ok());
     }
 }

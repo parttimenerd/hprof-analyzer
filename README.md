@@ -732,6 +732,50 @@ cargo build --release
 
 Node.js/npm is only needed if you modify the web sources under `web/src/`.
 
+## Upgrading
+
+Three ways, depending on how you installed it.
+
+**In-place (any install)** — the binary replaces itself from GitHub releases:
+
+```sh
+hprof-analyzer update latest    # latest stable release
+hprof-analyzer update nightly   # rolling nightly build (tracks main)
+hprof-analyzer update           # show versions + changelog, no changes
+```
+
+`update` downloads the archive for your platform, verifies the extracted
+binary is a real executable, smoke-tests it, keeps a `.bak` backup, and swaps
+it in atomically. On failure it cleans up and leaves the current binary
+untouched.
+
+**Homebrew**:
+
+```sh
+brew upgrade hprof-analyzer                                     # stable release
+brew upgrade parttimenerd/hprof-analyzer/hprof-analyzer-nightly  # rolling nightly
+```
+
+> The nightly formula tracks a rolling artifact and uses `sha256 :no_check`
+> (its bytes change on every push); the stable formula pins a checksum per
+> release. If you see a checksum-mismatch error on the stable formula, run
+> `brew update` to refresh the tap.
+
+**Cargo**:
+
+```sh
+cargo install hprof-analyzer --force
+```
+
+**Shell completion** — generate a script for your shell and install it (e.g.
+for zsh into a `$fpath` directory):
+
+```sh
+hprof-analyzer completions zsh
+hprof-analyzer completions bash
+hprof-analyzer completions fish
+```
+
 ## Command reference
 
 ### Subcommand overview
