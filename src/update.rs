@@ -121,13 +121,17 @@ fn show_status() -> Result<(), String> {
     }
 
     if is_brew_install() {
-        println!("Installed with Homebrew — updates come from the tap, one formula per channel:");
-        println!("  brew upgrade hprof-analyzer            # latest stable release");
-        println!("  brew upgrade hprof-analyzer@nightly    # rolling nightly build from main");
+        println!(
+            "Installed with Homebrew — updates come from the tap (formula = stable, cask = nightly):"
+        );
+        println!("  brew upgrade hprof-analyzer                    # latest stable release");
+        println!(
+            "  brew upgrade --cask hprof-analyzer@nightly    # rolling nightly build from main"
+        );
         println!();
         println!("To switch channels:");
-        println!("  brew uninstall hprof-analyzer && brew install hprof-analyzer@nightly");
-        println!("  brew uninstall hprof-analyzer@nightly && brew install hprof-analyzer");
+        println!("  brew uninstall hprof-analyzer && brew install --cask hprof-analyzer@nightly");
+        println!("  brew uninstall --cask hprof-analyzer@nightly && brew install hprof-analyzer");
     } else {
         println!("To update, run:");
         println!("  hprof-analyzer update nightly   # replace with latest nightly build");
@@ -265,13 +269,13 @@ fn format_release_summary(r: &Result<ReleaseInfo, String>) -> String {
 }
 
 /// Self-update refusal message for a brew-managed binary, pointing at the tap
-/// formula that matches the requested channel.  Concurrent channels use
-/// versioned-formula tokens (`hprof-analyzer@nightly`), with the unversioned
-/// `hprof-analyzer` being the latest stable release.
+/// package that matches the requested channel. The stable channel is the
+/// `hprof-analyzer` formula; the rolling nightly is the `hprof-analyzer@nightly`
+/// CASK (macOS only).
 fn brew_update_hint(channel: Channel) -> String {
     let channel_note = match channel {
         Channel::Nightly => {
-            "Update the nightly channel with `brew upgrade hprof-analyzer@nightly`."
+            "Update the nightly channel with `brew upgrade --cask hprof-analyzer@nightly`."
         }
         Channel::Latest => "Update the stable channel with `brew upgrade hprof-analyzer`.",
     };
