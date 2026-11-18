@@ -104,7 +104,7 @@ hprof-analyzer heap.hprof.gz report.json.gz
 hprof-analyzer report.json.gz --format html report.html
 ```
 
-**Truncated and corrupt files are handled gracefully.** If the JVM was killed mid-dump, the file was copied incompletely, the gzip stream ends early, or random bytes follow a valid HPROF header, the analyzer recovers whatever objects were successfully parsed and produces a partial report rather than aborting. A warning is printed to stderr and `truncated_input: true` is set in the JSON output.
+**Truncated and corrupt files are detected, not fatal.** If the JVM was killed mid-dump, the file was copied incompletely, the gzip stream ends early, or random bytes follow a valid HPROF header, the analyzer recovers whatever objects were successfully parsed and produces a partial report rather than aborting; `truncated_input: true` is set in the JSON output. The `heap` subcommands additionally refuse a truncated plain `.hprof` unless you pass `--force` (which proceeds with a loud warning), so partial numbers are never mistaken for complete ones.
 
 </details>
 
@@ -338,7 +338,7 @@ hprof-analyzer heap summary heap.hprof
 
 # All subsequent runs load from cache in ~1 s — any subcommand:
 hprof-analyzer heap histogram heap.hprof
-hprof-analyzer heap query heap.hprof --oql "SELECT @displayName, COUNT(*) FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY COUNT(*) DESC LIMIT 20"
+hprof-analyzer heap query heap.hprof --oql "SELECT @displayName, COUNT(*) AS n FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY n DESC LIMIT 20"
 ```
 
 The `heap` subcommand group accepts the same `--category` / `--category-config` flags as the top-level command. Pass them on any call; the cache is (re-)built with the supplied categories on first use:
@@ -552,12 +552,9 @@ hprof-analyzer redact heap.hprof safe.hprof
 
 # Complete mode — also zeroes scalar instance fields, static values, and annotation literals
 hprof-analyzer redact --complete heap.hprof safe.hprof
-
-# Pipe-friendly: write to stdout (progress suppressed automatically)
-hprof-analyzer redact heap.hprof - > safe.hprof
 ```
 
-Redacted dumps are readable by hprof-analyzer, Eclipse MAT, and jhat. A marker record (`REDACTED\x01`, tag `0xDE`) is embedded so hprof-analyzer shows a "Redacted dump" banner in reports.
+Redacted dumps are readable by hprof-analyzer, Eclipse MAT, and jhat. A marker record (body `HPROF-REDACT\x01\x00`, tag `0xDE`) is embedded so hprof-analyzer shows a "Redacted dump" banner in reports.
 
 **Object graph preserved in both modes:**
 
@@ -603,7 +600,7 @@ A standalone `hprof-redact` binary is also available for environments where a sm
 
 ## Secret detection
 
-Heap dumps contain everything the JVM held in memory at the time of capture: database passwords, API keys, session tokens, bearer tokens, connection strings. The `detect-secrets` subcommand scans all `String` values and JVM symbol table strings against [betterleaks](https://github.com/betterleaks/betterleaks) patterns (460 service-specific rules, MIT License) plus heap-dump-specific extras (JDBC URLs, JWT tokens, Spring Security encoded passwords, and more).
+Heap dumps contain everything the JVM held in memory at the time of capture: database passwords, API keys, session tokens, bearer tokens, connection strings. The `detect-secrets` subcommand scans all `String` values and JVM symbol table strings against [betterleaks](https://github.com/betterleaks/betterleaks) patterns (463 service-specific rules, MIT License) plus heap-dump-specific extras (JDBC URLs, JWT tokens, Spring Security encoded passwords, and more).
 
 ```sh
 # Human-readable output grouped by category (default)
@@ -919,7 +916,7 @@ Correctness is validated against MAT 1.17.0: the `compare mat` subcommand diffs 
 
 ## How it works
 
-The two-pass parser, the dominator-tree construction, the shallow/retained size formulas, and the compressed index structures are described in [DESIGN.md](DESIGN.md).
+The two-pass parser, the dominator-tree construction, the shallow/retained size formulas, and the compressed index structures are described in [DESIGN.md](docs/notes/DESIGN.md).
 
 ## Contributing
 

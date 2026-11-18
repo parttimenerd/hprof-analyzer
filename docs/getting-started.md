@@ -64,7 +64,7 @@ Open `report.html` in any browser. No server required — the file is fully self
 
 The tool reads `.hprof`, `.hprof.gz`, `.hprof.zip`, `.hprof.tar.gz`, `.tar.gz`, and `.tgz` directly — no manual decompression needed.
 
-**Truncated dumps work.** If the JVM was killed mid-dump or the file was copied incompletely, the analyzer recovers whatever was written and produces a partial report with a warning on stderr.
+**Truncated dumps are detected.** If the JVM was killed mid-dump or the file was copied incompletely, the `heap` subcommands refuse the dump (`⚠ DUMP IS TRUNCATED`) until you pass `--force`, which produces a partial report with a loud warning on stderr. The default analyze command reads leniently and emits a partial report covering the records that were fully written.
 
 ## What the report shows
 
@@ -156,7 +156,7 @@ Equivalent to `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak R
 claude mcp add hprof -- hprof-analyzer mcp
 ```
 
-Once registered, Claude can load dumps, run OQL queries, browse the dominator tree, traverse inbound references, and redact dumps directly. See the [README MCP section](../README.md#mcp-server--ai-assisted-heap-analysis) for full setup instructions for Claude Desktop and Cline.
+Once registered, Claude can load dumps, run OQL queries, browse the dominator tree, traverse inbound references, and redact dumps directly. See the [README MCP section](../README.md#mcp-server) for full setup instructions for Claude Desktop and Cline.
 
 Key traversal tools:
 - `browse_dominators` — navigate the dominator tree downward from the GC root

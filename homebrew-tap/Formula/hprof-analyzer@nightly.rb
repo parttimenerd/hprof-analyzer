@@ -1,4 +1,4 @@
-class HprofAnalyzerNightly < Formula
+class HprofAnalyzerATNightly < Formula
   desc "hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)"
   homepage "https://github.com/parttimenerd/hprof-analyzer"
   license "MIT"
