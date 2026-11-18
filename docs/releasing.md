@@ -26,7 +26,9 @@ Both `hprof-analyzer` and `hprof-redact` inherit this via `version.workspace = t
 
 ### 2. Update `CHANGELOG.md`
 
-Move the `## [Unreleased]` items into a new dated section:
+Move the `## [Unreleased]` items into a new dated section and fill it out
+completely — CI extracts this section verbatim as the GitHub Release body,
+prepended with an install/quick-start preamble:
 
 ```markdown
 ## [0.3.6] — 2026-11-25
