@@ -1674,7 +1674,7 @@ impl HprofSession {
             name: name.to_string(),
         };
         let mut out: Vec<u8> = Vec::new();
-        hprof_analyzer::redact::redact(&source, &mut out, redact_mode, |phase, frac| {
+        hprof_analyzer::redact::redact(&source, &mut out, redact_mode, true, |phase, frac| {
             call_progress(&cb, phase, frac as f32);
         })
         .map_err(|e| JsValue::from_str(&e.to_string()))?;

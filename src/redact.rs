@@ -3,7 +3,8 @@
 //! Two-pass streaming HPROF redactor. Zeroes all primitive field values and
 //! array element data while preserving the object graph structure (IDs, class
 //! hierarchy, reference fields). A custom top-level record (tag `0xDE`) is
-//! prepended so `hprof-analyzer` can detect and label the redacted dump.
+//! appended after the HPROF_HEAP_DUMP_END record so `hprof-analyzer` can
+//! detect and label the redacted dump.
 //!
 //! In complete mode, `STRING_IN_UTF8` record payloads are also zeroed: these
 //! records form the JVM symbol table and may contain interned string literals
@@ -60,10 +61,19 @@ pub struct RedactStats {
 /// Redact `source` and write the result to `writer`.
 ///
 /// `progress(phase, fraction)` is called periodically; `fraction` is in [0,1].
+///
+/// When `write_marker` is true (the default for every caller that does not say
+/// otherwise) a custom marker record (tag 0xDE, body `HPROF-REDACT\x01\x00`)
+/// is appended after the last record so hprof-analyzer can recognize the
+/// dump. Strict third-party
+/// parsers reject the unknown tag (e.g. hprof-slurp exits with "unhandled
+/// record tag 222"), so `write_marker = false` omits it; the output is then
+/// indistinguishable from a redaction-free dump for `check-redacted`.
 pub fn redact<W: Write>(
     source: &HprofSource,
     mut writer: W,
     mode: RedactMode,
+    write_marker: bool,
     progress: impl Fn(&str, f64),
 ) -> io::Result<RedactStats> {
     let (class_fields, structural_string_ids) = if mode == RedactMode::Complete {
@@ -88,6 +98,7 @@ pub fn redact<W: Write>(
         &format,
         timestamp_ms,
         mode,
+        write_marker,
         &class_fields,
         &structural_string_ids,
         &progress,
@@ -379,6 +390,7 @@ fn write_redacted<W: Write>(
     format: &str,
     timestamp_ms: u64,
     mode: RedactMode,
+    write_marker: bool,
     class_fields: &ClassFields,
     structural_string_ids: &HashSet<u64>,
     progress: &impl Fn(&str, f64),
@@ -390,8 +402,9 @@ fn write_redacted<W: Write>(
     w.write_all(&(id_size as u32).to_be_bytes())?;
     w.write_all(&timestamp_ms.to_be_bytes())?;
 
-    // Prepend redaction marker record.
-    write_redaction_marker(w)?;
+    // The marker is appended after the last input record (normally the
+    // HPROF_HEAP_DUMP_END record) — never inline in the record stream —
+    // so the dump body stays a genuine HPROF record sequence.
 
     let mut record_count = 0u64;
 
@@ -412,8 +425,10 @@ fn write_redacted<W: Write>(
                 write_record_header(w, tag, length)?;
                 write_redacted_heap_segment(&mut r, w, id_size, length, mode, class_fields, stats)
             }
-            // Skip any existing redaction marker — we already wrote one at the
-            // top, so re-redacting an already-redacted dump produces exactly one.
+            // Never copy an existing marker through: with write_marker=true we
+            // append a fresh one after the last record (re-redacting yields
+            // exactly one), and with write_marker=false the output must
+            // contain no marker at all.
             tags::REDACTED_MARKER => r.skip(length),
             // STRING_IN_UTF8: id(id_size) + UTF-8 bytes.
             // In complete mode: preserve the ID (name references in LOAD_CLASS /
@@ -446,6 +461,13 @@ fn write_redacted<W: Write>(
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e),
         }
+    }
+
+    // Append the redaction marker after the last input record — normally the
+    // HPROF_HEAP_DUMP_END record — so it never sits inline in the record
+    // stream (the dump body stays a genuine HPROF record sequence).
+    if write_marker {
+        write_redaction_marker(w)?;
     }
 
     Ok(())
@@ -965,14 +987,14 @@ mod tests {
     fn do_redact(input: &[u8]) -> Vec<u8> {
         let source = HprofSource::from_bytes(input.to_vec(), "test.hprof");
         let mut out = Vec::new();
-        redact(&source, &mut out, RedactMode::Complete, |_, _| {}).expect("redact failed");
+        redact(&source, &mut out, RedactMode::Complete, true, |_, _| {}).expect("redact failed");
         out
     }
 
     fn do_redact_lean(input: &[u8]) -> Vec<u8> {
         let source = HprofSource::from_bytes(input.to_vec(), "test.hprof");
         let mut out = Vec::new();
-        redact(&source, &mut out, RedactMode::Lean, |_, _| {}).expect("redact lean failed");
+        redact(&source, &mut out, RedactMode::Lean, true, |_, _| {}).expect("redact lean failed");
         out
     }
 
@@ -1019,16 +1041,66 @@ mod tests {
     }
 
     #[test]
-    fn marker_is_first_record() {
+    fn marker_is_last_record() {
         let mut dump = header();
         dump.extend(string_record(1, "world"));
         let out = do_redact(&dump);
         let (_, records) = parse_records(&out);
+        let last = records.last().expect("at least one record");
         assert_eq!(
-            records[0].0,
-            tags::REDACTED_MARKER,
-            "REDACTED_MARKER must be the first record"
+            last.0, tags::REDACTED_MARKER,
+            "REDACTED_MARKER must be the last record (appended after HPROF_HEAP_DUMP_END)"
         );
+    }
+
+    // ── Test: --no-marker omits the marker record ─────────────────────────────
+
+    fn do_redact_no_marker(input: &[u8]) -> Vec<u8> {
+        let source = HprofSource::from_bytes(input.to_vec(), "test.hprof");
+        let mut out = Vec::new();
+        redact(&source, &mut out, RedactMode::Lean, false, |_, _| {})
+            .expect("redact without marker failed");
+        out
+    }
+
+    #[test]
+    fn no_marker_omits_record() {
+        let mut dump = header();
+        dump.extend(string_record(1, "hello"));
+        let out = do_redact_no_marker(&dump);
+        let (_, records) = parse_records(&out);
+        assert_eq!(
+            count_tag(&records, tags::REDACTED_MARKER),
+            0,
+            "write_marker=false must not embed a REDACTED_MARKER record"
+        );
+        // The other records must survive untouched.
+        assert_eq!(
+            count_tag(&records, tags::STRING_IN_UTF8),
+            1,
+            "STRING_IN_UTF8 record must still be present"
+        );
+    }
+
+    #[test]
+    fn no_marker_on_marked_input_still_clean() {
+        // Re-redacting an already-redacted dump with write_marker=false must
+        // drop the input's marker too: the output contains none.
+        let marked = do_redact(&header_plus_string());
+        let out = do_redact_no_marker(&marked);
+        let (_, records) = parse_records(&out);
+        assert_eq!(
+            count_tag(&records, tags::REDACTED_MARKER),
+            0,
+            "existing marker in the input must not be copied through"
+        );
+    }
+
+    // Helper for the no_marker_on_marked_input_still_clean test.
+    fn header_plus_string() -> Vec<u8> {
+        let mut dump = header();
+        dump.extend(string_record(1, "world"));
+        dump
     }
 
     // ── Test: re-redacting keeps exactly one marker ───────────────────────────
@@ -1726,7 +1798,7 @@ mod tests {
         ] {
             let truncated = dump[..trunc_at].to_vec();
             let source = HprofSource::from_bytes(truncated, "truncated.hprof");
-            let result = redact(&source, std::io::sink(), RedactMode::Complete, |_, _| {});
+            let result = redact(&source, std::io::sink(), RedactMode::Complete, true, |_, _| {});
             assert!(
                 result.is_ok(),
                 "truncated input at {trunc_at} must not error"
@@ -1823,7 +1895,7 @@ mod tests {
         }
         let source = HprofSource::from(path.to_str().unwrap());
         let mut out = Vec::new();
-        redact(&source, &mut out, RedactMode::Complete, |_, _| {}).expect("redact fixture failed");
+        redact(&source, &mut out, RedactMode::Complete, true, |_, _| {}).expect("redact fixture failed");
         out
     }
 
@@ -1861,7 +1933,7 @@ mod tests {
         }
         let source2 = HprofSource::from_bytes(r1.clone(), "r1.hprof");
         let mut r2 = Vec::new();
-        redact(&source2, &mut r2, RedactMode::Complete, |_, _| {}).expect("re-redact failed");
+        redact(&source2, &mut r2, RedactMode::Complete, true, |_, _| {}).expect("re-redact failed");
         assert_eq!(r1, r2, "re-redacting fixture must be idempotent");
     }
 
@@ -1873,7 +1945,7 @@ mod tests {
         }
         let source2 = HprofSource::from_bytes(r1, "r1.hprof");
         let mut r2 = Vec::new();
-        redact(&source2, &mut r2, RedactMode::Complete, |_, _| {}).expect("re-redact failed");
+        redact(&source2, &mut r2, RedactMode::Complete, true, |_, _| {}).expect("re-redact failed");
         let (_, records) = parse_records(&r2);
         assert_eq!(
             count_tag(&records, tags::REDACTED_MARKER),
@@ -2679,6 +2751,7 @@ mod tests {
             &gz_source,
             &mut gz_redacted,
             RedactMode::Complete,
+            true,
             |_, _| {},
         )
         .expect("redact gz failed");
@@ -2715,6 +2788,7 @@ mod tests {
             &zip_source,
             &mut zip_redacted,
             RedactMode::Complete,
+            true,
             |_, _| {},
         )
         .expect("redact zip failed");
@@ -2737,7 +2811,7 @@ mod tests {
         let mut gz_buf = Vec::new();
         {
             let gz = flate2::write::GzEncoder::new(&mut gz_buf, flate2::Compression::fast());
-            redact(&source, gz, RedactMode::Complete, |_, _| {}).expect("redact to gz failed");
+            redact(&source, gz, RedactMode::Complete, true, |_, _| {}).expect("redact to gz failed");
         }
         let gz_source = HprofSource::from_bytes(gz_buf, "out.hprof.gz");
         let p1 = crate::pass1::Pass1::run(&gz_source, false).expect("pass1 on gz output failed");
@@ -2765,7 +2839,7 @@ mod tests {
             let opts = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated);
             zip.start_file("dump.hprof", opts).unwrap();
-            redact(&source, &mut zip, RedactMode::Complete, |_, _| {})
+            redact(&source, &mut zip, RedactMode::Complete, true, |_, _| {})
                 .expect("redact to zip failed");
             zip.finish().unwrap();
         }
@@ -3293,7 +3367,8 @@ mod tests {
             &source,
             std::io::sink(),
             RedactMode::Complete,
-            |phase, _frac| {
+            true,
+            |phase: &str, _frac: f64| {
                 phases_seen.lock().unwrap().push(phase.to_string());
             },
         )

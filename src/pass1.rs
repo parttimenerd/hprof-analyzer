@@ -333,7 +333,41 @@ impl Pass1 {
             })();
             match result {
                 Ok(()) => {}
-                Err(e) if e.kind() == HEAP_DUMP_END_KIND => break,
+                Err(e) if e.kind() == HEAP_DUMP_END_KIND => {
+                    // The redaction marker is appended AFTER the heap dump
+                    // section (never inline in the record stream), so keep
+                    // scanning trailing records to EOF: every record is
+                    // skipped except REDACTED_MARKER, which sets the
+                    // `redacted` flag for the banner / check-redacted.
+                    loop {
+                        let (tag, length) = match r.next_record() {
+                            Ok(None) => break,
+                            Ok(Some(h)) => h,
+                            Err(e2)
+                                if e2.kind() == ErrorKind::UnexpectedEof
+                                    || e2.kind() == ErrorKind::InvalidData =>
+                            {
+                                // Truncated trailing bytes — the heap dump
+                                // section itself was complete, so leave
+                                // `saw_heap_dump_end` as-is.
+                                break;
+                            }
+                            Err(e2) => return Err(e2),
+                        };
+                        if tag == tags::REDACTED_MARKER {
+                            plain_redacted = true;
+                        }
+                        if let Err(skip_err) = r.skip(length) {
+                            if skip_err.kind() == ErrorKind::UnexpectedEof
+                                || skip_err.kind() == ErrorKind::InvalidData
+                            {
+                                break;
+                            }
+                            return Err(skip_err);
+                        }
+                    }
+                    break;
+                }
                 Err(e)
                     if e.kind() == ErrorKind::UnexpectedEof
                         || e.kind() == ErrorKind::InvalidData =>

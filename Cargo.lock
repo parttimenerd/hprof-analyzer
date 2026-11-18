@@ -1074,6 +1074,7 @@ dependencies = [
 name = "hprof-redact"
 version = "0.3.4"
 dependencies = [
+ "clap",
  "flate2",
  "hprof-analyzer",
  "zip",

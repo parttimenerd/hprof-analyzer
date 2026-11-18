@@ -48,7 +48,7 @@ pub struct GetOqlDocsParams {
 /// collections=true here).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct LoadDumpParams {
-    /// Absolute path to the .hprof file (also accepts .hprof.gz, .hprof.zip, .tgz).
+    /// Absolute path to the .hprof file (also accepts .hprof.gz, .hprof.zip, .hprof.tar.gz, .hprof.tgz).
     /// First load takes 5–15 min and writes a disk cache; every subsequent load of
     /// the same file completes in ~1 s.
     pub path: String,
@@ -389,7 +389,7 @@ pub struct GetGcRootsParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RedactParams {
-    /// Absolute path to the input .hprof file (also accepts .hprof.gz, .hprof.zip, .tgz).
+    /// Absolute path to the input .hprof file (also accepts .hprof.gz, .hprof.zip, .hprof.tar.gz, .hprof.tgz).
     pub input: String,
     /// Absolute path for the redacted output file.
     /// Extension controls compression: .hprof (raw), .hprof.gz (gzip), .hprof.zip (zip).
@@ -564,15 +564,16 @@ impl HprofMcpServer {
         let _gate = self.gate.lock().await;
         let path = PathBuf::from(&p.path);
         // I-01: validate extension to prevent path traversal via symlinks to
-        // arbitrary files (e.g. /etc/passwd).  Only .hprof, .hprof.gz, and
-        // .hprof.zip are valid heap dump paths.
+        // arbitrary files (e.g. /etc/passwd). Only the advertised `.hprof*`
+        // spellings are valid heap-dump paths.
         let ext_ok = p.path.ends_with(".hprof")
             || p.path.ends_with(".hprof.gz")
             || p.path.ends_with(".hprof.zip")
-            || p.path.ends_with(".tgz");
+            || p.path.ends_with(".hprof.tar.gz")
+            || p.path.ends_with(".hprof.tgz");
         if !ext_ok {
             return Err(McpError::invalid_params(
-                "path must end with .hprof, .hprof.gz, .hprof.zip, or .tgz",
+                "path must end with .hprof, .hprof.gz, .hprof.zip, .hprof.tar.gz, or .hprof.tgz",
                 None,
             ));
         }
@@ -1246,10 +1247,11 @@ impl HprofMcpServer {
         let input_ext_ok = p.input.ends_with(".hprof")
             || p.input.ends_with(".hprof.gz")
             || p.input.ends_with(".hprof.zip")
-            || p.input.ends_with(".tgz");
+            || p.input.ends_with(".hprof.tar.gz")
+            || p.input.ends_with(".hprof.tgz");
         if !input_ext_ok {
             return Err(McpError::invalid_params(
-                "input path must end with .hprof, .hprof.gz, .hprof.zip, or .tgz",
+                "input path must end with .hprof, .hprof.gz, .hprof.zip, .hprof.tar.gz, or .hprof.tgz",
                 None,
             ));
         }
@@ -1282,7 +1284,7 @@ impl HprofMcpServer {
             if lower.ends_with(".hprof.gz") {
                 let file = File::create(&output)?;
                 let gz = flate2::write::GzEncoder::new(file, flate2::Compression::best());
-                crate::redact::redact(&source, gz, mode, progress)
+                crate::redact::redact(&source, gz, mode, true, progress)
             } else if lower.ends_with(".hprof.zip") {
                 let file = File::create(&output)?;
                 let mut zip = zip::ZipWriter::new(file);
@@ -1290,12 +1292,12 @@ impl HprofMcpServer {
                     .compression_method(zip::CompressionMethod::Deflated);
                 zip.start_file("dump.hprof", opts)
                     .map_err(io::Error::other)?;
-                let stats = crate::redact::redact(&source, &mut zip, mode, progress)?;
+                let stats = crate::redact::redact(&source, &mut zip, mode, true, progress)?;
                 zip.finish().map_err(io::Error::other)?;
                 Ok(stats)
             } else {
                 let file = File::create(&output)?;
-                crate::redact::redact(&source, file, mode, progress)
+                crate::redact::redact(&source, file, mode, true, progress)
             }
         })
         .await

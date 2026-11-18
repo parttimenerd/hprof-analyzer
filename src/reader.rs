@@ -91,31 +91,50 @@ impl<R: Read> Read for LenientGzDecoder<R> {
 }
 
 impl HprofReader {
-    /// Open a dump (gzip/zip/tar.gz auto-detected) and consume its HPROF header.
+    /// Open a dump (gzip/zip/tar auto-detected by content magic) and consume
+    /// its HPROF header.
     pub fn open(path: &str) -> io::Result<Self> {
-        #[cfg(any(feature = "native", feature = "redact-bin"))]
-        let lower = path.to_ascii_lowercase();
-
-        // tar.gz: gunzip then stream the first .hprof entry from the tar archive.
-        #[cfg(any(feature = "native", feature = "redact-bin"))]
-        if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-            return Self::open_tar_gz(path);
-        }
-
         let file = File::open(path)?;
         let mut peek = BufReader::new(file);
-        let mut magic = [0u8; 4];
-        peek.read_exact(&mut magic)?;
+
+        // Sniff by CONTENT, not extension: gzip/zip magic (2 bytes) and the tar
+        // "ustar" field (offset 257). Bare `.tar` / `.tgz` / `.zip` / `.gz`
+        // names are still accepted this way, but only the `.hprof*` spellings
+        // are advertised.
+        let mut magic = [0u8; 262];
+        let mut filled = 0;
+        while filled < magic.len() {
+            match peek.read(&mut magic[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        }
 
         // ZIP archive (PK\x03\x04): re-open with Seek and extract the .hprof entry.
         #[cfg(any(feature = "native", feature = "redact-bin"))]
-        if magic[..2] == [0x50, 0x4b] {
+        if filled >= 4 && magic[..2] == [0x50, 0x4b] {
             return Self::open_zip(path);
         }
 
+        // Gzip: a gz stream may wrap either a raw HPROF dump or a tar archive
+        // containing one. Peek the decompressed head to route tar-wrapped
+        // dumps (`.gz`/`.tgz`/`.tar.gz`) correctly.
+        #[cfg(any(feature = "native", feature = "redact-bin"))]
+        if filled >= 2 && magic[..2] == [0x1f, 0x8b] && Self::gz_wraps_tar(path) {
+            return Self::open_tar_gz(path);
+        }
+
+        // Plain (uncompressed) tar: ustar magic at offset 257.
+        #[cfg(any(feature = "native", feature = "redact-bin"))]
+        if filled >= 262 && &magic[257..262] == b"ustar" {
+            return Self::open_tar(path);
+        }
+
         let truncated = Arc::new(AtomicBool::new(false));
-        let stream = Cursor::new(magic.to_vec()).chain(peek);
-        let inner: Box<dyn Read> = if magic[..2] == [0x1f, 0x8b] {
+        let stream = Cursor::new(magic[..filled].to_vec()).chain(peek);
+        let inner: Box<dyn Read> = if filled >= 2 && magic[..2] == [0x1f, 0x8b] {
             Box::new(LenientGzDecoder::new(stream, Arc::clone(&truncated)))
         } else {
             Box::new(stream)
@@ -133,6 +152,29 @@ impl HprofReader {
         };
         r.read_header()?;
         Ok(r)
+    }
+
+    /// True when the gzip stream at `path` decompresses to a tar archive
+    /// (ustar magic at offset 257 of the decompressed head). Cheap: decodes
+    /// at most a few hundred bytes. Used to route `.gz` inputs that are
+    /// really tarballs to the tar-aware reader.
+    #[cfg(any(feature = "native", feature = "redact-bin"))]
+    fn gz_wraps_tar(path: &str) -> bool {
+        use flate2::read::GzDecoder;
+        let Ok(file) = File::open(path) else {
+            return false;
+        };
+        let mut gz = GzDecoder::new(file);
+        let mut head = vec![0u8; 262];
+        let mut filled = 0;
+        while filled < head.len() {
+            match gz.read(&mut head[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(_) => return false,
+            }
+        }
+        filled >= 262 && &head[257..262] == b"ustar"
     }
 
     /// Open a `.hprof.tar.gz` (or `.tgz`), find the first `.hprof` entry, and
@@ -204,8 +246,48 @@ impl HprofReader {
         ))
     }
 
+    /// Open a plain (uncompressed) `.tar`, find the first `.hprof` entry, and
+    /// stream it through the parser. Mirrors [`Self::open_tar_gz`] without the
+    /// gzip layer.
+    #[cfg(any(feature = "native", feature = "redact-bin"))]
+    fn open_tar(path: &str) -> io::Result<Self> {
+        let file = File::open(path)?;
+        let truncated = Arc::new(AtomicBool::new(false));
+        let archive: &'static mut tar::Archive<BufReader<File>> =
+            Box::leak(Box::new(tar::Archive::new(BufReader::new(file))));
+        let entries = archive
+            .entries()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            if entry.path_bytes().to_ascii_lowercase().ends_with(b".hprof") {
+                let inner: Box<dyn Read> = Box::new(entry);
+                let mut r = HprofReader {
+                    format: String::new(),
+                    id_size: 4,
+                    timestamp_ms: 0,
+                    inner,
+                    buf: vec![0u8; BUF_CAP],
+                    pos: 0,
+                    end: 0,
+                    bytes_consumed: 0,
+                    truncated_input: truncated,
+                };
+                r.read_header()?;
+                return Ok(r);
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "no .hprof entry found in tar archive",
+        ))
+    }
+
     /// Open a `.hprof.zip`, find the first `.hprof` entry, and stream it through
     /// the parser. The entry is decompressed on-the-fly with no full-file buffering.
+    ///
+    /// If no entry ends with `.hprof` but the archive holds exactly one file,
+    /// that entry is used (accepts archives from tools that use other names).
     ///
     /// `ZipFile` borrows `ZipArchive`, so we use the same `Box::leak` pattern as
     /// the tar path: leak the archive (just a File handle + central directory) and
@@ -222,6 +304,13 @@ impl HprofReader {
                     .by_index(i)
                     .map(|f| f.name().to_ascii_lowercase().ends_with(".hprof"))
                     .unwrap_or(false)
+            })
+            .or_else(|| {
+                if archive.len() == 1 {
+                    Some(0)
+                } else {
+                    None
+                }
             })
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "no .hprof entry found in zip")

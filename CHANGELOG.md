@@ -39,9 +39,44 @@ All notable changes to hprof-analyzer are documented here.
   `[workspace.package]` and `hprof-redact` inherits it
   (`version.workspace = true`): upgrading hprof-analyzer now upgrades the
   standalone redactor in the same step (0.3.2 → 0.3.4 immediately).
+- **`redact --no-marker` (CLI and `hprof-redact`)** — omit the redaction
+  marker record (tag `0xDE`, body `HPROF-REDACT\x01\x00`) from the output.
+  Strict third-party parsers reject the unknown tag — hprof-slurp exits with
+  "unhandled record tag 222" — so marker-less output also passes them. The
+  trade-off is documented in the flag help and echoed as a note after the
+  run: hprof-analyzer shows no "Redacted dump" banner and
+  `check-redacted`/`hprof-redact --check` report the dump as not redacted.
+- **Plain `.gz`, `.zip`, and `.tar` inputs** — accepted everywhere a dump is
+  read (analyze, `heap` subcommands, redact, check-redacted), in addition to
+  `.hprof`, `.hprof.gz`, `.hprof.zip`, `.tar.gz`, and `.tgz`: a gzip stream
+  that decompresses to a tar is routed to the tar reader automatically
+  (ustar-magic sniff of the decompressed head), plain `.tar` archives get a
+  dedicated reader, and a single-entry zip with a non-`.hprof` entry name is
+  now accepted. Redact/check-redacted outputs also treat `.gz` and `.zip`
+  suffixes as gzip/zip.
+- **`hprof-redact` uses clap** — the standalone redactor's hand-rolled argv
+  matching is replaced by a clap-derive CLI: proper `--help`, flag
+  combinations (`--complete --no-marker` in any order), `--version`, and
+  the same `--check` semantics as before.
+- **Redaction marker appended, not prepended** — the marker record (tag
+  `0xDE`) is now written after the final `HPROF_HEAP_DUMP_END` record
+  instead of before the first record, so the dump body is a genuine HPROF
+  record sequence from byte 0. pass1 scans the (typically empty) trailing
+  records after `0x2C` for the marker, keeping the "Redacted dump" banner
+  and `check-redacted` detection intact; re-redacting still yields exactly
+  one marker.
 
 ### Fixed
 
+- **Misleading error hint for compressed dumps** — `analyze_error_hint`
+  checked the raw file bytes for the HPROF magic, so a gzip/zip/tar input
+  that failed to parse was told it "does not start with the HPROF magic;
+  if it is a saved report JSON, rename it…" even when it was a genuine
+  (corrupt) dump container. The sniff is now container-aware
+  (`sniff_is_hprof`: decompresses gzip heads, detects zip/ustar magics), and
+  the misleading hint only fires for files that are neither raw dumps nor
+  containers — the real reader error (e.g. the exact gzip decode failure or
+  "no .hprof entry found in zip") surfaces instead.
 - **Truncated dumps refused** — `heap summary`/`heap load`/`heap report` detect
   a plain `.hprof` that ended mid-record (missing HEAP_DUMP_END) and fail with
   a prominent ⚠ DUMP IS TRUNCATED message; `--force` accepts the partial

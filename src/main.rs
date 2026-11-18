@@ -368,7 +368,7 @@ enum Cmd {
         after_help = "For the full OQL grammar, see `docs/OQL.md` or run `hprof-analyzer query dump.hprof --server` and GET /help."
     )]
     Query {
-        /// Path to the .hprof dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
+        /// Path to the .hprof dump (.hprof, .hprof.gz, .hprof.zip, .hprof.tar.gz, .hprof.tgz).
         #[arg(value_hint = ValueHint::FilePath)]
         input: String,
         /// OQL query text (may be repeated). For a `-- @viz` directive use the
@@ -508,18 +508,19 @@ enum Cmd {
     /// (counters, hashes, enum ordinals) must not leak.
     ///
     /// The output is a valid HPROF file that MAT, jhat, and hprof-analyzer can
-    /// open. A custom marker record (tag 0xDE) is prepended so hprof-analyzer
-    /// displays a "Redacted dump" banner and skips meaningless analyses.
+    /// open. A custom marker record (tag 0xDE) is appended after the
+    /// HPROF_HEAP_DUMP_END record so hprof-analyzer displays a "Redacted dump"
+    /// banner and skips meaningless analyses. Pass --no-marker to omit it.
     ///
     /// Output format is inferred from the extension:
     ///   .hprof         raw binary
-    ///   .hprof.gz      gzip-compressed
+    ///   .gz            gzip-compressed (.hprof.gz and plain .gz)
     ///   .hprof.zip     zip archive (single entry "dump.hprof")
     Redact {
-        /// Input dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
+        /// Input dump (.hprof, .hprof.gz, .hprof.zip, .hprof.tar.gz, .hprof.tgz).
         #[arg(value_hint = ValueHint::FilePath)]
         input: String,
-        /// Output path (.hprof, .hprof.gz, or .hprof.zip).
+        /// Output path (.hprof, .gz, or .hprof.zip).
         #[arg(value_hint = ValueHint::FilePath)]
         output: String,
         /// Complete (two-pass) mode: also zeros scalar instance fields, CLASS_DUMP
@@ -529,6 +530,13 @@ enum Cmd {
         /// Default is lean mode (single-pass, zeros only primitive array elements).
         #[arg(long)]
         complete: bool,
+        /// Don't embed the redaction marker record (tag 0xDE). Strict
+        /// third-party parsers reject the unknown tag (hprof-slurp exits with
+        /// "unhandled record tag 222"); with this flag the output also passes
+        /// such parsers. Trade-off: hprof-analyzer shows no "Redacted dump"
+        /// banner and `check-redacted` reports the dump as not redacted.
+        #[arg(long)]
+        no_marker: bool,
     },
     /// Check whether a heap dump has already been redacted.
     ///
@@ -536,9 +544,9 @@ enum Cmd {
     /// present anywhere in the file. Exits 1 and prints "not redacted" if it
     /// is absent. Exits 2 on I/O error.
     ///
-    /// Accepts .hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz.
+    /// Accepts .hprof, .hprof.gz, .hprof.zip, .hprof.tar.gz, .hprof.tgz.
     CheckRedacted {
-        /// Path to the heap dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
+        /// Path to the heap dump (.hprof, .hprof.gz, .hprof.zip, .hprof.tar.gz, .hprof.tgz).
         #[arg(value_hint = ValueHint::FilePath)]
         input: String,
     },
@@ -551,7 +559,7 @@ enum Cmd {
     ///
     /// Values are masked by default; use --verbatim to print them in plain text.
     DetectSecrets {
-        /// Path to the heap dump (.hprof, .hprof.gz, .hprof.zip, .tar.gz, .tgz).
+        /// Path to the heap dump (.hprof, .hprof.gz, .hprof.zip, .hprof.tar.gz, .hprof.tgz).
         #[arg(value_hint = ValueHint::FilePath)]
         input: String,
         /// When to show the live progress line on stderr.
@@ -1086,6 +1094,7 @@ fn run_redact(
     input: &str,
     output: &str,
     complete: bool,
+    no_marker: bool,
 ) -> io::Result<hprof_analyzer::redact::RedactStats> {
     use hprof_analyzer::redact::RedactMode;
     use hprof_analyzer::source::HprofSource;
@@ -1101,23 +1110,23 @@ fn run_redact(
 
     let progress = |_phase: &str, _fraction: f64| {};
 
-    if lower.ends_with(".hprof.gz") {
+    if lower.ends_with(".gz") {
         let file = File::create(output)?;
         let gz = flate2::write::GzEncoder::new(file, flate2::Compression::best());
-        hprof_analyzer::redact::redact(&source, gz, mode, progress)
-    } else if lower.ends_with(".hprof.zip") {
+        hprof_analyzer::redact::redact(&source, gz, mode, !no_marker, progress)
+    } else if lower.ends_with(".hprof.zip") || lower.ends_with(".zip") {
         let file = File::create(output)?;
         let mut zip = zip::ZipWriter::new(file);
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
         zip.start_file("dump.hprof", opts)
             .map_err(io::Error::other)?;
-        let stats = hprof_analyzer::redact::redact(&source, &mut zip, mode, progress)?;
+        let stats = hprof_analyzer::redact::redact(&source, &mut zip, mode, !no_marker, progress)?;
         zip.finish().map_err(io::Error::other)?;
         Ok(stats)
     } else {
         let file = File::create(output)?;
-        hprof_analyzer::redact::redact(&source, file, mode, progress)
+        hprof_analyzer::redact::redact(&source, file, mode, !no_marker, progress)
     }
 }
 
@@ -1717,7 +1726,8 @@ fn main() {
             input,
             output,
             complete,
-        }) => match run_redact(&input, &output, complete) {
+            no_marker,
+        }) => match run_redact(&input, &output, complete, no_marker) {
             Err(e) => {
                 eprintln!("error: {e}");
                 std::process::exit(1);
@@ -1741,6 +1751,13 @@ fn main() {
                              their bodies were copied verbatim (primitive values not redacted). \
                              This should not occur in a valid HPROF.\x1b[0m",
                         stats.unknown_class_instances
+                    );
+                }
+                if no_marker {
+                    eprintln!(
+                        "note: no redaction marker embedded — hprof-analyzer will not show \
+                         the 'Redacted dump' banner and `check-redacted` reports this dump \
+                         as not redacted"
                     );
                 }
             }
@@ -3737,9 +3754,10 @@ fn analyze_to_report_inner(
 }
 
 /// Decide whether `input` should run the analyze pipeline. True when the path
-/// has a `.hprof` / `.hprof.gz` extension OR the file begins with the HPROF
-/// magic (`JAVA PROFILE`). `-` (stdin) is never HPROF: a non-seekable pipe of a
-/// dump was never supported, and the render path handles `-`.
+/// has a heap-dump (or container) extension OR the file content sniffs as an
+/// HPROF dump (possibly inside a gzip/zip/tar container). `-` (stdin) is never
+/// HPROF: a non-seekable pipe of a dump was never supported, and the render
+/// path handles `-`.
 fn input_is_hprof(input: &str) -> bool {
     if input == "-" {
         return false;
@@ -3748,12 +3766,77 @@ fn input_is_hprof(input: &str) -> bool {
     if lower.ends_with(".hprof")
         || lower.ends_with(".hprof.gz")
         || lower.ends_with(".hprof.zip")
+        || lower.ends_with(".gz")
+        || lower.ends_with(".zip")
+        || lower.ends_with(".tar")
         || lower.ends_with(".tar.gz")
         || lower.ends_with(".tgz")
     {
         return true;
     }
-    looks_like_hprof(input)
+    sniff_is_hprof(input)
+}
+
+/// True when `path` holds (or plausibly wraps) an HPROF dump. Unlike
+/// [`looks_like_hprof`], this is container-aware: gzip streams are
+/// decompressed for the head check, zip archives are searched for a
+/// `.hprof` (or single) entry, and tar members are detected via the ustar
+/// magic. Used both for input routing and for error hints — a gzip/zip/tar
+/// input must never be told it "does not start with the HPROF magic" just
+/// because the container's raw bytes differ.
+fn sniff_is_hprof(path: &str) -> bool {
+    use std::io::Read;
+    if path == "-" {
+        return false;
+    }
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut magic = [0u8; 4];
+    if f.read_exact(&mut magic).is_err() {
+        return false;
+    }
+    // Gzip: decompress the head (a few hundred bytes) and look for either the
+    // HPROF magic or a tar member header. Re-open the file — the magic read
+    // above consumed the first bytes, and the gzip header starts at offset 0.
+    if magic[..2] == [0x1f, 0x8b] {
+        let Ok(f2) = std::fs::File::open(path) else {
+            return false;
+        };
+        let mut gz = flate2::read::GzDecoder::new(f2);
+        let mut head = vec![0u8; 262];
+        let mut filled = 0;
+        while filled < head.len() {
+            match gz.read(&mut head[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(_) => return false,
+            }
+        }
+        let h = &head[..filled];
+        return h.starts_with(b"JAVA PROFILE")
+            || (filled >= 262 && &h[257..262] == b"ustar");
+    }
+    // Zip: any zip container is routed to the dump path; the zip reader then
+    // reports precisely what is wrong (missing .hprof entry, corrupt archive).
+    if magic[..2] == [0x50, 0x4b] {
+        return true;
+    }
+    // Plain tar or raw HPROF: read the head and check the magics.
+    let Ok(mut f2) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = vec![0u8; 262];
+    let mut filled = 0;
+    while filled < head.len() {
+        match f2.read(&mut head[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(_) => return false,
+        }
+    }
+    let h = &head[..filled];
+    h.starts_with(b"JAVA PROFILE") || (filled >= 262 && &h[257..262] == b"ustar")
 }
 
 /// Turn an `analyze` pipeline error into an actionable message. A missing input
@@ -3767,19 +3850,21 @@ fn analyze_error_hint(input: &str, e: &io::Error) -> String {
     if e.kind() == io::ErrorKind::NotFound && !msg.starts_with("cannot ") {
         return format!("cannot open '{input}': no such file or directory");
     }
-    // A genuine dump (HPROF magic present) that hits EOF mid-record is almost
-    // always a truncated or partially-copied file. Replace the raw internal
-    // reader message with a user-actionable one.
-    if e.kind() == io::ErrorKind::UnexpectedEof && looks_like_hprof(input) {
+    // A genuine dump (HPROF magic present, possibly inside a gzip/zip/tar
+    // container) that hits EOF mid-record is almost always a truncated or
+    // partially-copied file. Replace the raw internal reader message with a
+    // user-actionable one.
+    if e.kind() == io::ErrorKind::UnexpectedEof && sniff_is_hprof(input) {
         return format!(
             "'{input}' appears truncated or corrupt — hit end of file mid-record; \
              re-copy the .hprof dump and retry"
         );
     }
-    // A file with a .hprof extension that lacks the HPROF magic is almost certainly
-    // a saved report JSON misnamed as a dump. Suppress the raw IO error string and
-    // give a clean actionable message instead.
-    if input != "-" && std::fs::metadata(input).is_ok() && !looks_like_hprof(input) {
+    // A file that neither is an HPROF dump nor sniffs as one inside a
+    // gzip/zip/tar container is almost certainly a saved report JSON misnamed
+    // as a dump. Suppress the raw IO error string and give a clean actionable
+    // message instead.
+    if input != "-" && std::fs::metadata(input).is_ok() && !sniff_is_hprof(input) {
         return format!(
             "'{input}' does not start with the HPROF magic; \
              if it is a saved report JSON, rename it without the .hprof \
@@ -3861,19 +3946,6 @@ fn sniff_report_kind(path: &str) -> Option<&'static str> {
         return Some("markdown");
     }
     None
-}
-
-/// True when the file at `path` begins with the HPROF magic (`JAVA PROFILE`).
-fn looks_like_hprof(path: &str) -> bool {
-    use std::io::Read;
-    if path == "-" {
-        return false;
-    }
-    let Ok(mut f) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut head = [0u8; 12];
-    matches!(f.read_exact(&mut head), Ok(())) && head.starts_with(b"JAVA PROFILE")
 }
 
 /// Returns true when a file could plausibly be a truncated (or tiny) HPROF dump,
