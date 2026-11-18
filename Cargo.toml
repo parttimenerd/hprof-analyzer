@@ -7,7 +7,7 @@ resolver = "2"
 # upgrade of hprof-analyzer upgrades hprof-redact in lockstep (the standalone
 # redactor is versioned with the repo, not independently).
 [workspace.package]
-version = "0.3.4"
+version = "0.3.5"
 
 [package]
 name = "hprof-analyzer"
