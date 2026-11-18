@@ -8,7 +8,7 @@ Rust CLI + MCP server for Java heap dump analysis. Investigates OutOfMemoryError
 
 - Parses `.hprof`, `.hprof.gz`, `.hprof.zip`, `.hprof.tar.gz` heap dumps from HotSpot, OpenJ9, and Android ART
 - Builds a dominator tree, computes retained sizes, identifies leak suspects and top consumers
-- Runs SQL-flavoured OQL queries (Eclipse MAT-compatible dialect with extensions: JOINs, GROUP BY, HAVING, VALUES, aggregates, visualization directives)
+- Runs SQL-flavoured OQL queries (Eclipse MAT-compatible dialect with extensions: JOINs, `WITH` CTEs, virtual tables `__classes__`/`__gc_roots__`/`__threads__`, GROUP BY, HAVING, VALUES, aggregates, window functions, visualization directives)
 - Exposes all of the above via an MCP server for AI assistant integration
 - Generates Eclipse MAT-compatible cache files (lower RSS than MAT itself)
 - Redacts sensitive values from heap dumps before sharing
@@ -59,6 +59,8 @@ claude mcp add hprof -- hprof-analyzer mcp
 | `get_dominator_path` | Retention chain from object to GC root |
 | `get_outbound_references` | Forward edges: what does this object reference? (needs `with_graph: true`) |
 | `get_retained_set` | Dominator subtree: what would be freed? Optional `class_filter` |
+| `get_gc_roots` | List GC roots with retained sizes (after any load) |
+| `get_field_name` | Java field name for a reference edge (needs `with_graph: true`) |
 | `get_oql_docs` | OQL language reference (no dump needed) |
 | `compare_dumps` | Diff two dumps for class-level growth leaders |
 | `redact` | Zero primitive values before sharing |
@@ -68,7 +70,7 @@ claude mcp add hprof -- hprof-analyzer mcp
 ```
 1. load_dump({path: "/abs/path/to/heap.hprof"})
 2. get_report({section: "triage"})            ⭐ — severity-tagged signals, fastest orientation
-3. get_report({section: "leaks"})                — root paths, accumulation points
+3. get_report({section: "leaks"})                — root paths, accumulation points (lists capped via `limit`; same for overview)
 4. get_histogram                                 — class-level breakdown
 5. query({oql: "..."})                           — drill in with OQL
 6. browse_dominators                             — walk the dominator tree downward
@@ -103,9 +105,9 @@ hprof-analyzer heap inspect heap.hprof --index 42
 
 Add `--json` to any `heap` subcommand for machine-readable output.
 
-Available `--section` values: `triage`, `leaks`, `top`, `threads`, `overview`, `waste`, `indicators`, `retainers`, `arrays`, `collections`, `references`, `dominators`, `components`, `alloc_sites`, `thread_locals`, `framework`, `field_stats`, `all`.
+Available `--section` values: `triage`, `leaks`, `top`, `top-objects`, `top-classes`, `threads`, `overview`, `waste`, `indicators`, `retainers`, `arrays`, `collections`, `references`, `dominators`, `components`, `alloc_sites`, `thread_locals`, `framework`, `field_stats`, `gc-roots`, `classloaders`, `strings`, `categories`, `all`.
 
-**Important:** use `heap query` (not the `query` subcommand) for queries that need `@retainedHeapSize` or dominator attributes — the `query` subcommand does a fast streaming parse only.
+**Note:** the `query` subcommand auto-escalates queries that need `@retainedHeapSize`, dominator, or graph attributes to the full pipeline (slower on first run, ~1 s from cache); `heap query` is the streaming fast path. Query results carry `@objectId` (dense index) values — feed them to `FROM OBJECTS <decimal>` or `inspect_object`.
 
 ## Install
 
@@ -136,6 +138,7 @@ cargo install hprof-analyzer
 | `skills/hprof-analyzer.md` | Ready-made skill for AI assistants using the HTTP server |
 | `skills/hprof-analyzer-cli.md` | Ready-made skill for AI assistants using the CLI (no MCP) |
 | `docs/schema.json` | JSON Schema for the report format |
-| `DESIGN.md` | Architecture: two-pass parser, dominator tree, compressed indices |
+| `docs/notes/DESIGN.md` | Architecture: two-pass parser, dominator tree, compressed indices |
+| `docs/notes/` | Working notes (design, research, campaign records; not user-facing) |
 | `CONTRIBUTING.md` | Project structure, build instructions, contribution guidelines |
 | `CHANGELOG.md` | Release history |

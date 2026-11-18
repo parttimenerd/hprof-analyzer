@@ -34,11 +34,24 @@ claude mcp add hprof -- hprof-analyzer mcp
 - `find_incoming_references_by_class({class_name: "..."})` — aggregate inbound refs to all instances of a class grouped by source class.
 - `browse_dominators({object_index: N})` — walk the dominator tree downward from a node.
 
-**For sharing a dump:** `redact({input: "...", output: "...-redacted.hprof"})` zeros primitive values while preserving the object graph.
+**Stale-index guard:** every response carries a `session_epoch` (bumped on
+each `load_dump`). Indices (`object_index` etc.) from a previously loaded dump
+are invalid after a reload — pass `expected_epoch` on index-taking tools to
+fail fast instead of silently reading the wrong object.
+
+**Truncated dumps:** a plain `.hprof` that ended mid-record is REFUSED with a
+⚠ DUMP IS TRUNCATED error; use `load_dump({force: true})` / `heap <cmd> --force`
+to accept the partial data (gzip/zip inputs stay lenient).
+
+**For sharing a dump:** `redact({input: "...", output: "...-redacted.hprof"})`
+zeros primitive values while preserving the object graph — use lean mode for
+suspect-preserving redaction (lean's leak suspects match the original dump
+byte-for-byte; complete mode alters dominator/retained structure and is
+marked as unsafe for structural analysis).
 
 ## Build
 
-All `cargo build` and `cargo test` must run on the ThinkStation (Mac disk is full). Sync with rsync first.
+Build/test locally (`cargo build --release --features native`); builds are incremental and fast.
 
 **Disk cache gotcha:** `heap report`/`heap summary`/MCP `load_dump` all read from a per-dump on-disk cache (`<dump>.hprof-cache/`), and `Report.triage` is computed ONCE and cached as part of the serialized report — it is NOT re-evaluated on every read. If you change triage-rule logic, a new report-model field's population, or anything else that alters what `build_model`/`evaluate_triage` produce WITHOUT changing the raw array format, you must bump `VERSION` in `src/cache.rs` (it's the only thing that invalidates a stale cached report under these circumstances — `report.json.zst`'s own staleness check is just `.exists()`, never content-based). Forgetting this makes a correct code change silently appear to do nothing when tested against an already-cached dump. When in doubt, `hprof-analyzer heap cache-clear <dump>` or delete `<dump>.hprof-cache/` before testing.
 
@@ -47,5 +60,4 @@ All `cargo build` and `cargo test` must run on the ThinkStation (Mac disk is ful
 ## Conventions
 
 - No `git push` or `gh pr create` without explicit instruction
-- All performance benchmarks on ThinkStation, not local Mac
 - Commit per logical change; don't batch unrelated changes
