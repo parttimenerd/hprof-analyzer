@@ -655,10 +655,10 @@ brew trust parttimenerd/hprof-analyzer   # required once for third-party taps (H
 brew install hprof-analyzer
 ```
 
-Homebrew prints MCP setup instructions after install. To follow the rolling nightly build:
+Homebrew prints MCP setup instructions after install. To follow the rolling nightly build (macOS / Apple Silicon):
 
 ```sh
-brew install parttimenerd/hprof-analyzer/hprof-analyzer-nightly
+brew install --cask parttimenerd/hprof-analyzer/hprof-analyzer@nightly
 ```
 
 ### With Cargo
@@ -730,31 +730,25 @@ untouched. Homebrew-managed installs are detected and told to use
 `brew upgrade` instead (self-replacing a brew symlink breaks the Cellar
 layout).
 
-**Homebrew** — channels are separate tap formulas; the unversioned name is
-the stable channel, and `hprof-analyzer-nightly` is
-concurrent alternates:
+**Homebrew** — the stable channel is the `hprof-analyzer` formula; the rolling
+nightly build is the `hprof-analyzer@nightly` **cask** (macOS / Apple Silicon):
 
 ```sh
-brew upgrade hprof-analyzer            # stable channel (latest tagged release)
-brew upgrade hprof-analyzer-nightly     # nightly channel (rolling build from main)
+brew upgrade hprof-analyzer                # stable channel (latest tagged release)
+brew upgrade --cask hprof-analyzer@nightly # nightly channel (rolling build from main)
 ```
 
 To switch channels:
 
 ```sh
-brew uninstall hprof-analyzer && brew install hprof-analyzer-nightly      # stable → nightly
-brew uninstall hprof-analyzer-nightly && brew install hprof-analyzer      # nightly → stable
+brew uninstall hprof-analyzer && brew install --cask hprof-analyzer@nightly      # stable → nightly
+brew uninstall --cask hprof-analyzer@nightly && brew install hprof-analyzer      # nightly → stable
 ```
 
-> The nightly formula was previously named `hprof-analyzer-nightly`; if you
-> installed it under that name, migrate once:
-> `brew uninstall hprof-analyzer-nightly && brew install parttimenerd/hprof-analyzer/hprof-analyzer-nightly`
-> (see the [tap README](homebrew-tap/README.md) for details).
-
-> The nightly formula tracks a rolling artifact and uses `sha256 :no_check`
-> (its bytes change on every push); the stable formula pins a checksum per
-> release. If you see a checksum-mismatch error on the stable formula, run
-> `brew update` to refresh the tap.
+> The nightly cask tracks a rolling artifact and uses `version :latest` +
+> `sha256 :no_check` (its bytes change on every push); the stable formula pins
+> a checksum per release. If you see a checksum-mismatch error on the stable
+> formula, run `brew update` to refresh the tap.
 
 **Cargo**:
 

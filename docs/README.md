@@ -30,7 +30,7 @@ Research, design, and campaign notes — not user-facing documentation.
 
 | Document | Description |
 |----------|-------------|
-| [DESIGN.md](../DESIGN.md) | Algorithm design: shallow-size formulas, dominator tree, GC roots, leak suspects, top consumers |
+| [DESIGN.md](notes/DESIGN.md) | Algorithm design: shallow-size formulas, dominator tree, GC roots, leak suspects, top consumers |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Project structure, build instructions, testing, and contribution guidelines |
 | [CHANGELOG.md](../CHANGELOG.md) | Release history and feature changelog |
 

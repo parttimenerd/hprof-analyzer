@@ -439,9 +439,9 @@ enum Cmd {
         category_config: Option<std::path::PathBuf>,
         /// Proceed despite a truncated dump (D1): `heap summary`/`heap load`/
         /// `heap report` refuse a plain .hprof file that ended mid-record;
-        /// pass --force to accept the partial analysis (the ⚠ warning is
-        /// still printed). The gzip/zip/tar paths stay lenient and ignore
-        /// this flag.
+        /// pass --force to accept the partial analysis (`heap summary` then
+        /// prints a loud warning on stderr). The gzip/zip/tar paths stay
+        /// lenient and ignore this flag.
         #[arg(long, global = true)]
         force: bool,
     },

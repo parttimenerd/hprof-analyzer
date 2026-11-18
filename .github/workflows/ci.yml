@@ -500,15 +500,6 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Compute SHA256 sums
-        id: sha
-        run: |
-          mac_arm=$(sha256sum artifacts/hprof-analyzer-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
-          linux_x86=$(sha256sum artifacts/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
-          linux_arm=$(sha256sum artifacts/hprof-analyzer-aarch64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
-          echo "mac_arm=$mac_arm"       >> "$GITHUB_OUTPUT"
-          echo "linux_x86=$linux_x86"  >> "$GITHUB_OUTPUT"
-          echo "linux_arm=$linux_arm"  >> "$GITHUB_OUTPUT"
 
       - name: Checkout tap repo
         uses: actions/checkout@v7
@@ -517,90 +508,40 @@ jobs:
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
           path: tap
 
-      - name: Write nightly formula and push
+      - name: Write nightly cask and push
         env:
-          SHA_MAC_ARM: ${{ steps.sha.outputs.mac_arm }}
-          SHA_LINUX_X86: ${{ steps.sha.outputs.linux_x86 }}
-          SHA_LINUX_ARM: ${{ steps.sha.outputs.linux_arm }}
           COMMIT: ${{ github.sha }}
         run: |
-          BASE_URL="https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly"
-          NIGHTLY_DATE=$(date -u '+%Y.%m.%d')
-
           cd tap
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          python3 - "$BASE_URL" "$SHA_MAC_ARM" "$SHA_LINUX_X86" "$SHA_LINUX_ARM" "$NIGHTLY_DATE" <<'PYEOF'
-          import sys
-          base_url, sha_mac, sha_x86, sha_arm, version = sys.argv[1:]
-          nightly = f'''class HprofAnalyzerNightly < Formula
-            desc "hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)"
+          mkdir -p Casks
+          cat > Casks/hprof-analyzer@nightly.rb <<'CASKEOS'
+          cask "hprof-analyzer@nightly" do
+            version :latest
+            sha256 :no_check
+
+            url "https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-aarch64-apple-darwin.tar.gz"
+            name "hprof-analyzer"
+            desc "Fast, low-memory Java HPROF heap-dump analyzer (nightly build)"
             homepage "https://github.com/parttimenerd/hprof-analyzer"
-            license "MIT"
-            version "{version}"
 
-            on_macos do
-              on_arm do
-                url "{base_url}/hprof-analyzer-aarch64-apple-darwin.tar.gz"
-                sha256 :no_check
-              end
-            end
+            depends_on arch: :arm64
 
-            on_linux do
-              on_intel do
-                url "{base_url}/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz"
-                sha256 :no_check
-              end
-              on_arm do
-                url "{base_url}/hprof-analyzer-aarch64-unknown-linux-gnu.tar.gz"
-                sha256 :no_check
-              end
-            end
+            binary "hprof-analyzer-aarch64-apple-darwin/hprof-analyzer"
 
-            def install
-              bin.install "hprof-analyzer"
-            end
-
-            def caveats
-              <<~EOS
-                Add the MCP server to Claude Code:
-                  claude mcp add hprof -- hprof-analyzer mcp
-
-                See https://github.com/parttimenerd/hprof-analyzer#mcp-server--ai-integration
-              EOS
-            end
-
-            test do
-              system "#{{bin}}/hprof-analyzer", "--version"
-              assert_match "SELECT", shell_output("#{{bin}}/hprof-analyzer heap docs --topic syntax")
+            caveats do
+              "Uninstall the stable hprof-analyzer formula first if both are needed on the same box: `brew uninstall hprof-analyzer`"
             end
           end
-          '''
-          stable = nightly.replace(
-              "class HprofAnalyzerNightly",
-              "class HprofAnalyzer",
-          ).replace(
-              "hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)",
-              "Fast, low-memory Java HPROF heap-dump analyzer with MCP server and OQL query engine",
-          )
-          with open("Formula/hprof-analyzer-nightly.rb", "w") as f:
-              f.write(nightly)
-          # Only overwrite stable formula if it still points to nightly URLs
-          # (once a tagged release is published, update-homebrew-tap takes over).
-          with open("Formula/hprof-analyzer.rb") as f:
-              current_stable = f.read()
-          if "releases/download/nightly" in current_stable:
-              with open("Formula/hprof-analyzer.rb", "w") as f:
-                  f.write(stable)
-          PYEOF
+          CASKEOS
 
-          # Clean up the short-lived @nightly name (Homebrew @ only supports
-          # numeric versions); the nightly formula lives at -nightly.
-          git rm --ignore-unmatch Formula/hprof-analyzer@nightly.rb
-          git add 'Formula/hprof-analyzer-nightly.rb' Formula/hprof-analyzer.rb
+          # The legacy -nightly FORMULA is superseded by this cask.
+          git rm --ignore-unmatch Formula/hprof-analyzer-nightly.rb
+          git add 'Casks/hprof-analyzer@nightly.rb'
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Update nightly formula (${COMMIT::8})"
+          git commit -m "Update nightly cask (${COMMIT::8})"
           git push origin main
 
   # Main push / manual: replace the single rolling `nightly` pre-release.

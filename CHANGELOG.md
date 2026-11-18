@@ -122,35 +122,22 @@ All notable changes to hprof-analyzer are documented here.
   (the previous behavior failed with `No such file or directory` on
   brew-symlinked installs). `update latest`/`update nightly` refuse with the
   channel-mapped command (`brew upgrade hprof-analyzer` /
-  `brew upgrade hprof-analyzer@nightly`); plain `update` shows both channels
-  and how to switch.
-- **Homebrew channels use versioned-formula tokens** — the tap's rolling
-  nightly formula is renamed `hprof-analyzer-nightly` → `hprof-analyzer@nightly`
-  (class `HprofAnalyzerATNightly`), matching the brew convention for
-  concurrent channels (`@latest`/`@beta`/`@nightly`); the unversioned
-  `hprof-analyzer` formula is the stable channel pinned to tagged releases.
-  CI writes the new file name and removes the legacy one on its next run.
-
-### Migration
-
-- **Existing nightly-formula users** — Homebrew treats `hprof-analyzer-nightly`
-  and `hprof-analyzer@nightly` as distinct formulae, and CI stops updating
-  the legacy name. To move to the new token (keeps the same binary; done once):
-
-  ```sh
-  brew uninstall hprof-analyzer-nightly
-  brew install parttimenerd/hprof-analyzer/hprof-analyzer@nightly
-  ```
-
-  Stable-channel (`brew install hprof-analyzer`) users are unaffected.
+  `brew upgrade --cask hprof-analyzer@nightly`); plain `update` shows both
+  channels and how to switch.
+- **Homebrew nightly ships as a cask** — the rolling nightly is now the
+  `hprof-analyzer@nightly` **cask** (macOS / Apple Silicon; `@` versioning is
+  only valid on casks — formulae derive a Ruby class name from the filename,
+  where `@` requires a numeric suffix). It uses `version :latest` +
+  `sha256 :no_check`. The unversioned `hprof-analyzer` formula is the stable
+  channel, pinned to tagged releases; CI writes the cask on every `main` push.
 
 ### Docs
 
 - README restructured: outcome-first hero, capability table with sample
   screenshots, benchmarks (incl. the MAT 1.17.0 comparison) moved into
   collapsible `<details>`; the Homebrew section documents the
-  `hprof-analyzer@nightly` channel token and the one-time migration from
-  `hprof-analyzer-nightly`.
+  `hprof-analyzer@nightly` cask channel and the stable `hprof-analyzer`
+  formula.
 - `SUM(@retainedHeapSize)` double-counting caution (not comparable to
   histogram/report dominator-accounted totals); the triage's
   Off-Heap (DirectByteBuffer) total needs `--with-graph`/`load_dump({with_graph:true})`
