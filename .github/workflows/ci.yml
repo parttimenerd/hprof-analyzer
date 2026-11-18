@@ -543,8 +543,8 @@ jobs:
           python3 - "$BASE_URL" "$SHA_MAC_ARM" "$SHA_LINUX_X86" "$SHA_LINUX_ARM" "$NIGHTLY_DATE" <<'PYEOF'
           import sys
           base_url, sha_mac, sha_x86, sha_arm, version = sys.argv[1:]
-          nightly = f'''class HprofAnalyzerNightly < Formula
-            desc "hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)"
+          nightly = f'''class HprofAnalyzerATNightly < Formula
+            desc "hprof-analyzer@nightly — rolling build from main (MCP server + heap CLI)"
             homepage "https://github.com/parttimenerd/hprof-analyzer"
             license "MIT"
             version "{version}"
@@ -587,13 +587,13 @@ jobs:
           end
           '''
           stable = nightly.replace(
-              "class HprofAnalyzerNightly",
+              "class HprofAnalyzerATNightly",
               "class HprofAnalyzer",
           ).replace(
-              "hprof-analyzer nightly — rolling build from main (MCP server + heap CLI)",
+              "hprof-analyzer@nightly — rolling build from main (MCP server + heap CLI)",
               "Fast, low-memory Java HPROF heap-dump analyzer with MCP server and OQL query engine",
           )
-          with open("Formula/hprof-analyzer-nightly.rb", "w") as f:
+          with open("Formula/hprof-analyzer@nightly.rb", "w") as f:
               f.write(nightly)
           # Only overwrite stable formula if it still points to nightly URLs
           # (once a tagged release is published, update-homebrew-tap takes over).
@@ -604,7 +604,9 @@ jobs:
                   f.write(stable)
           PYEOF
 
-          git add Formula/hprof-analyzer-nightly.rb Formula/hprof-analyzer.rb
+          # One-time migration: drop the pre-@nightly-token formula name.
+          git rm --ignore-unmatch Formula/hprof-analyzer-nightly.rb
+          git add 'Formula/hprof-analyzer@nightly.rb' Formula/hprof-analyzer.rb
           git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "Update nightly formula (${COMMIT::8})"
           git push origin main
@@ -648,6 +650,9 @@ jobs:
             ```sh
             hprof-analyzer update nightly
             ```
+            (Homebrew installs defer to the tap: `brew upgrade hprof-analyzer@nightly` —
+            renamed from `hprof-analyzer-nightly`; migrate once with
+            `brew uninstall hprof-analyzer-nightly && brew install parttimenerd/hprof-analyzer/hprof-analyzer@nightly`)
 
             **First install** — pick your platform below, then use `hprof-analyzer update nightly` to stay current.
 

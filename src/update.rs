@@ -121,8 +121,13 @@ fn show_status() -> Result<(), String> {
     }
 
     if is_brew_install() {
-        println!("Installed with Homebrew — to update, run:");
-        println!("  brew upgrade hprof-analyzer");
+        println!("Installed with Homebrew — updates come from the tap, one formula per channel:");
+        println!("  brew upgrade hprof-analyzer            # latest stable release");
+        println!("  brew upgrade hprof-analyzer@nightly    # rolling nightly build from main");
+        println!();
+        println!("To switch channels:");
+        println!("  brew uninstall hprof-analyzer && brew install hprof-analyzer@nightly");
+        println!("  brew uninstall hprof-analyzer@nightly && brew install hprof-analyzer");
     } else {
         println!("To update, run:");
         println!("  hprof-analyzer update nightly   # replace with latest nightly build");
@@ -259,15 +264,27 @@ fn format_release_summary(r: &Result<ReleaseInfo, String>) -> String {
     }
 }
 
+/// Self-update refusal message for a brew-managed binary, pointing at the tap
+/// formula that matches the requested channel.  Concurrent channels use
+/// versioned-formula tokens (`hprof-analyzer@nightly`), with the unversioned
+/// `hprof-analyzer` being the latest stable release.
+fn brew_update_hint(channel: Channel) -> String {
+    let channel_note = match channel {
+        Channel::Nightly => {
+            "Update the nightly channel with `brew upgrade hprof-analyzer@nightly`."
+        }
+        Channel::Latest => "Update the stable channel with `brew upgrade hprof-analyzer`.",
+    };
+    format!(
+        "this binary was installed with Homebrew — self-update would clobber the \
+         brew-managed Cellar layout. {channel_note}"
+    )
+}
+
 /// Download the given channel and atomically replace this binary.
 fn do_update(channel: Channel) -> Result<(), String> {
     if is_brew_install() {
-        return Err(
-            "this binary was installed with Homebrew — self-update would clobber the \
-             brew-managed Cellar layout. Update it with `brew upgrade hprof-analyzer` \
-             instead."
-                .to_string(),
-        );
+        return Err(brew_update_hint(channel));
     }
 
     let exe =

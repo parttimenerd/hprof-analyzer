@@ -117,6 +117,32 @@ All notable changes to hprof-analyzer are documented here.
   this redacted dump for structural leak analysis; use lean mode for
   suspect-preserving redaction" (verified empirically: lean mode's leak
   suspects are byte-identical to the original, complete mode's differ).
+- **`update` defers to Homebrew for brew-managed installs** — a binary whose
+  real path lives under a Homebrew `Cellar` directory no longer self-replaces
+  (the previous behavior failed with `No such file or directory` on
+  brew-symlinked installs). `update latest`/`update nightly` refuse with the
+  channel-mapped command (`brew upgrade hprof-analyzer` /
+  `brew upgrade hprof-analyzer@nightly`); plain `update` shows both channels
+  and how to switch.
+- **Homebrew channels use versioned-formula tokens** — the tap's rolling
+  nightly formula is renamed `hprof-analyzer-nightly` → `hprof-analyzer@nightly`
+  (class `HprofAnalyzerATNightly`), matching the brew convention for
+  concurrent channels (`@latest`/`@beta`/`@nightly`); the unversioned
+  `hprof-analyzer` formula is the stable channel pinned to tagged releases.
+  CI writes the new file name and removes the legacy one on its next run.
+
+### Migration
+
+- **Existing nightly-formula users** — Homebrew treats `hprof-analyzer-nightly`
+  and `hprof-analyzer@nightly` as distinct formulae, and CI stops updating
+  the legacy name. To move to the new token (keeps the same binary; done once):
+
+  ```sh
+  brew uninstall hprof-analyzer-nightly
+  brew install parttimenerd/hprof-analyzer/hprof-analyzer@nightly
+  ```
+
+  Stable-channel (`brew install hprof-analyzer`) users are unaffected.
 
 ### Docs
 

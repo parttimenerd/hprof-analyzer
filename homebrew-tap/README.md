@@ -15,8 +15,22 @@ After install, Homebrew prints setup instructions for the MCP server.
 ### Nightly build (tracks `main`)
 
 ```sh
-brew install parttimenerd/hprof-analyzer/hprof-analyzer-nightly
+brew install parttimenerd/hprof-analyzer/hprof-analyzer@nightly
 ```
+
+### Migrating from `hprof-analyzer-nightly`
+
+The nightly formula was renamed to the brew versioned-formula token
+`hprof-analyzer@nightly` (the convention for concurrent channels, like
+`@latest`/`@beta`). Homebrew treats the old and new names as distinct
+formulae, and the tap no longer updates the legacy name. Migrate once:
+
+```sh
+brew uninstall hprof-analyzer-nightly
+brew install parttimenerd/hprof-analyzer/hprof-analyzer@nightly
+```
+
+You end up with the same rolling nightly build, just under its new name.
 
 ## Quick usage
 
@@ -40,14 +54,25 @@ Update to the latest nightly build:
 hprof-analyzer update nightly
 ```
 
-Or upgrade via Homebrew (the nightly formula uses `sha256 :no_check` because
-the tarball is re-uploaded on every push to `main`; the stable `hprof-analyzer`
-formula pins a checksum per release):
+For Homebrew-managed installs this command detects the brew Cellar and tells
+you to use `brew upgrade` instead. Or upgrade directly — channels are
+separate formulas, so each upgrades independently:
 
 ```sh
-brew upgrade parttimenerd/hprof-analyzer/hprof-analyzer-nightly   # nightly
-brew upgrade hprof-analyzer                                       # stable
+brew upgrade hprof-analyzer@nightly     # nightly channel
+brew upgrade hprof-analyzer             # stable channel
 ```
+
+To switch channels:
+
+```sh
+brew uninstall hprof-analyzer && brew install hprof-analyzer@nightly      # stable → nightly
+brew uninstall hprof-analyzer@nightly && brew install hprof-analyzer      # nightly → stable
+```
+
+> The nightly formula uses `sha256 :no_check` because the tarball is
+> re-uploaded on every push to `main`; the stable `hprof-analyzer` formula
+> pins a checksum per release.
 
 OQL language reference (no dump needed):
 
