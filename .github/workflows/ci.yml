@@ -424,12 +424,10 @@ jobs:
         run: |
           VERSION="${TAG#v}"
           BASE_URL="https://github.com/parttimenerd/hprof-analyzer/releases/download/${TAG}"
-          BRANCH="release-${TAG}"
 
           cd tap
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
 
           python3 - "$BASE_URL" "$SHA_MAC_ARM" "$SHA_LINUX_X86" "$SHA_LINUX_ARM" "$VERSION" <<'PYEOF'
           import sys
@@ -488,14 +486,7 @@ jobs:
 
           git add Formula/hprof-analyzer.rb
           git commit -m "Update hprof-analyzer formula to ${TAG}"
-          git push origin "$BRANCH"
-
-          gh pr create \
-            --repo parttimenerd/homebrew-hprof-analyzer \
-            --head "$BRANCH" \
-            --base main \
-            --title "Update hprof-analyzer to ${TAG}" \
-            --body "Automated formula update for release ${TAG}."
+          git push origin main
 
   # Nightly push: also update the tap's nightly formula (separate file).
   update-homebrew-tap-nightly:
