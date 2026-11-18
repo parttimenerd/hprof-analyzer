@@ -313,7 +313,22 @@ fn do_update(channel: Channel) -> Result<(), String> {
     })?;
 
     eprintln!("Replacing {} …", exe.display());
+    // The `self-replace` crate exists for Windows (where the running binary is
+    // file-locked and a plain rename fails). On Unix a rename over the running
+    // binary is atomic and the process keeps its old inode; the crate returned
+    // ENOENT on macOS Homebrew installs (it resolves the running exe through a
+    // Linux-only path), so do the rename directly there.
+    #[cfg(windows)]
     self_replace::self_replace(&tmp).map_err(|e| format!("failed to replace binary: {e}"))?;
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(&tmp, &exe).map_err(|e| {
+            format!(
+                "failed to replace binary: {e} (is {} writable?)",
+                exe.display()
+            )
+        })?;
+    }
     let _ = std::fs::remove_file(&tmp);
 
     eprintln!("Done. Run `hprof-analyzer --version` to confirm.");
