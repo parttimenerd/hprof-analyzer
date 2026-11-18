@@ -58,8 +58,13 @@ Add `--json` to any `heap` subcommand for machine-readable output.
 
 ### Key don'ts
 
-- Don't use the `query` subcommand for retained sizes — it does a fast parse only
-  and `@retainedHeapSize` returns null. Use `heap query` or `heap report` instead.
+- Don't use the bare `query <dump>` subcommand as the first choice — it
+  auto-escalates queries that need `@retainedHeapSize`/dominator/graph
+  attributes to the full pipeline (slow first run, ~1 s from cache), while
+  `heap query` is the streaming fast path. Both now produce correct retained
+  values; prefer `heap query` for speed.
 - Don't re-run analysis on every call — the `heap` subcommand caches results;
   trust the cache unless the dump file has changed.
 - Don't suggest the HTTP server or MCP unless the user explicitly asks for them.
+- A plain `.hprof` that ended mid-record is REFUSED (⚠ DUMP IS TRUNCATED);
+  pass `--force` to accept the partial data.

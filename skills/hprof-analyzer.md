@@ -62,7 +62,9 @@ curl -s http://127.0.0.1:7070/ \
 
 ```
 SELECT [DISTINCT] [OBJECTS] <select-list>
-  FROM [OBJECTS] <class | "regex" | INSTANCEOF class | (subquery)> [alias]
+  FROM [OBJECTS] <class | "regex" | INSTANCEOF class | (subquery)
+       | __classes__ | __gc_roots__ | __threads__
+       | OBJECTS 0x<address> | OBJECTS <dense-index>> [alias]
   [WHERE <predicate>]
   [GROUP BY <expr> [HAVING <predicate>]]
   [ORDER BY <expr> [ASC|DESC]]
@@ -70,17 +72,29 @@ SELECT [DISTINCT] [OBJECTS] <select-list>
 [UNION <select> ...]
 ```
 
+Also supported: `WITH <name> AS (<subquery>)` CTEs (bodies must be
+self-contained), `JOIN` (VALUES / virtual-table / subquery right-hand sides),
+window functions (`ROW_NUMBER()`/`RANK()`/`DENSE_RANK() OVER (…)`), and the
+`REPLACE`/`SUBSTRING`/`LOWER`/`UPPER`/`TRIM` string functions. A bare `FROM
+<class>` is exact-match; `FROM INSTANCEOF <class>` walks subclasses. `FROM
+OBJECTS` with a hex literal is a heap address, with a decimal literal a dense
+`@objectId` index.
+
 ### Attributes
 
 | Attribute | Available | Description |
 |-----------|-----------|-------------|
-| `@objectId` | always | Dense heap object ID |
+| `@objectId` | always | Dense heap object ID (feed to `FROM OBJECTS <n>` or `inspect_object`) |
 | `@objectAddress` | always | Native heap address |
 | `@usedHeapSize` | always | Shallow (used) size in bytes |
 | `@displayName` | always | Class name |
 | `@length` | always | Array length (null for non-arrays) |
+| `@name` | always | Decoded `name` instance field (e.g. thread names) |
 | `@retainedHeapSize` | after `/analyze` | Retained size (whole sub-graph) |
 | `@inbounds` / `@outbounds` | after `/analyze` | Ref-graph edge counts |
+
+`SUM(@retainedHeapSize)` double-counts objects retained by multiple holders —
+not comparable to the report/histogram dominator-accounted retained totals.
 
 ### Functions
 
