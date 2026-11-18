@@ -146,6 +146,11 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Docs
 
+- README restructured: outcome-first hero, capability table with sample
+  screenshots, benchmarks (incl. the MAT 1.17.0 comparison) moved into
+  collapsible `<details>`; the Homebrew section documents the
+  `hprof-analyzer@nightly` channel token and the one-time migration from
+  `hprof-analyzer-nightly`.
 - `SUM(@retainedHeapSize)` double-counting caution (not comparable to
   histogram/report dominator-accounted totals); the triage's
   Off-Heap (DirectByteBuffer) total needs `--with-graph`/`load_dump({with_graph:true})`

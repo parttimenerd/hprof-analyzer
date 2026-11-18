@@ -4,29 +4,30 @@
 [![crates.io](https://img.shields.io/crates/v/hprof-analyzer.svg)](https://crates.io/crates/hprof-analyzer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Heap dump analyzer for JVM applications. Generates MAT-parity reports (leak suspects, retained-size breakdown, OQL queries) with peak RSS well below the dump size for dumps ≥ 1 GiB. One binary covers the full workflow: automated reports, interactive analysis, AI-assisted triage via MCP, heap redaction, and Eclipse MAT cache generation. For dumps up to 3 GB there is also a [browser version](https://parttimenerd.github.io/hprof-analyzer/) that runs entirely in WebAssembly.
+Analyze Java heap dumps and find memory leaks. One binary, no JVM required — generates self-contained HTML reports you can email, diff in CI, or open offline. Peak RSS stays well below the dump size (15 GiB on a 34 GiB dump), so you can analyze on the same machine that took the dump.
 
 *By the [SapMachine](https://sapmachine.io) team.*
 
-## Capabilities at a glance
-
-| Capability | How to use |
+| | |
 |-----------|------------|
-| **[Analysis reports](#analysis-reports)** (System Overview, Leak Suspects, Top Consumers, Threads) | `hprof-analyzer heap.hprof report.html` |
-| **[OQL queries](#oql-queries)** (SQL-flavoured, MAT-compatible, with extensions) | `hprof-analyzer query heap.hprof --query "..."` |
-| **[Cached interactive analysis](#cached-interactive-analysis)** (histogram, dominator tree, inspect objects) | `hprof-analyzer heap summary heap.hprof` |
-| **[MCP server](#mcp-server)** (AI-assisted triage in Claude, Cline, and other agents) | `hprof-analyzer mcp` |
-| **[HTTP API](#http-api-server-subcommand)** (browser UI backend for large dumps and LLM agents) | `hprof-analyzer server heap.hprof` |
-| **[Heap redaction](#heap-redaction)** (zero primitive values before sharing, object graph preserved) | `hprof-analyzer redact heap.hprof safe.hprof` |
-| **[MAT cache generation](#speeding-up-eclipse-mat)** (low-RSS alternative to MAT's first-open parse) | `hprof-analyzer mat caches heap.hprof` |
-| **Browser UI** (WebAssembly, works offline, up to 3 GB) | [Open in browser](https://parttimenerd.github.io/hprof-analyzer/) |
-| **[Secret detection](#secret-detection)** (scan heap strings for credentials and tokens using [betterleaks](https://github.com/betterleaks/betterleaks) patterns) | `hprof-analyzer detect-secrets heap.hprof` · [Try in browser](https://parttimenerd.github.io/hprof-analyzer/find-leaks/) |
-| **Re-render saved reports** (JSON to HTML/Markdown without the original dump) | `hprof-analyzer report.json report.html` |
+| **[Analysis reports](#analysis-reports)** — leak suspects, retained-size breakdown, top consumers, threads ([sample](https://parttimenerd.github.io/hprof-analyzer/reports/)) | `hprof-analyzer heap.hprof report.html` |
+| **[OQL queries](#oql-queries)** — GROUP BY, aggregates, viz directives, Eclipse MAT-compatible | `hprof-analyzer query heap.hprof --query "..."` |
+| **[Interactive analysis](#cached-interactive-analysis)** — histogram, dominator tree, inspect objects (cached, sub-second after first run) | `hprof-analyzer heap summary heap.hprof` |
+| **[MCP server](#mcp-server)** — AI-assisted triage in Claude, Cline, and other agents | `hprof-analyzer mcp` |
+| **[Browser UI](https://parttimenerd.github.io/hprof-analyzer/)** — WebAssembly, works offline, up to 3 GB | [Open in browser](https://parttimenerd.github.io/hprof-analyzer/) |
+| **[Secret detection](#secret-detection)** — find credentials and tokens in heap strings ([betterleaks](https://github.com/betterleaks/betterleaks) patterns) | `hprof-analyzer detect-secrets heap.hprof` |
 
-## Table of contents
+Also: [heap redaction](#heap-redaction), [HTTP API](#http-api-server-subcommand) for large dumps, [Eclipse MAT cache generation](#speeding-up-eclipse-mat), and re-rendering saved JSON reports to HTML/Markdown.
 
-- [Capabilities at a glance](#capabilities-at-a-glance)
-- [AI assistant integration](#ai-assistant-integration)
+| Leak suspects | OQL shell |
+|:---:|:---:|
+| ![Leak suspects report](docs/screenshots/screenshot-report-leaks.png) | ![OQL shell](docs/screenshots/screenshot-shell.png) |
+
+> **AI agents:** a machine-readable project summary is in [`llms.txt`](llms.txt).
+
+<details>
+<summary>Table of contents</summary>
+
 - [Quick start](#quick-start)
 - [Try it in the browser](#try-it-in-the-browser)
 - [Analysis reports](#analysis-reports)
@@ -37,49 +38,30 @@ Heap dump analyzer for JVM applications. Generates MAT-parity reports (leak susp
 - [OQL queries](#oql-queries)
 - [Cached interactive analysis](#cached-interactive-analysis)
 - [MCP server](#mcp-server)
+- [AI assistant integration](#ai-assistant-integration)
 - [HTTP API (`server` subcommand)](#http-api-server-subcommand)
 - [Heap redaction](#heap-redaction)
 - [Secret detection](#secret-detection)
-- [Speeding up Eclipse MAT](#speeding-up-eclipse-mat)
 - [Install](#install)
 - [Command reference](#command-reference)
+- [Other tools](#other-tools)
+- [Speeding up Eclipse MAT](#speeding-up-eclipse-mat)
 - [Performance](#performance)
 - [How it works](#how-it-works)
 - [Contributing](#contributing)
 - [Documentation](#documentation)
 - [License](#license)
 
-## AI assistant integration
-
-> **AI agents:** a compact machine-readable summary of this project and all integration options is in [`llms.txt`](llms.txt).
-
-If you are an AI assistant reading this README to understand what tools are available:
-
-- **MCP server (recommended):** `hprof-analyzer` ships a built-in [Model Context Protocol](https://modelcontextprotocol.io) server. Register it with one command and use it to load dumps, run OQL queries, browse the dominator tree, and get structured reports — all without leaving your conversation.
-  ```sh
-  # Claude Code
-  claude mcp add hprof -- hprof-analyzer mcp
-  ```
-  Full setup for Claude Desktop, Cline, and other agents is in the [MCP server](#mcp-server) section below.
-
-- **CLI fallback (no MCP needed):** If you cannot register an MCP server, use the `heap` subcommand group instead. It caches results on first run and answers all subsequent calls in ~1 s:
-  ```sh
-  hprof-analyzer heap summary heap.hprof        # top leak suspects + top classes
-  hprof-analyzer heap report heap.hprof --section triage   # severity-tagged signals
-  hprof-analyzer heap query heap.hprof --oql "SELECT COUNT(*) FROM java.lang.String"
-  ```
-  See the [Cached interactive analysis](#cached-interactive-analysis) section for the full subcommand list.
-
-**Why use it:**
-- **Low memory.** Two-pass streaming keeps peak RSS well below the dump size for dumps ≥ 1 GiB (e.g. ~15 GiB on a 34 GiB dump, where MAT needs ~76 GiB of Java heap). Tiny dumps have a fixed ~130–200 MiB floor. No heap-size flag to tune.
-- **Broad JVM support.** Reads dumps from HotSpot, OpenJ9/IBM J9, and Android ART, including IBM J9 and ART-specific root tags.
-- **CI-friendly.** No prompts, no GUI. JSON output is stable enough to diff; use it to gate a build on retained-size regressions.
-- **Resilient.** Truncated dumps, corrupt gzip, and malformed records produce a partial report with a warning rather than a crash.
-- **Self-contained HTML.** The report is a single file with no server and no external assets.
+</details>
 
 ## Quick start
 
-Grab a prebuilt binary and analyze a dump in two commands. No Rust, no Node, no build step.
+```sh
+brew install parttimenerd/hprof-analyzer/hprof-analyzer   # macOS / Linux
+# or: cargo install hprof-analyzer
+```
+
+No Homebrew or Cargo? Grab a prebuilt binary:
 
 ```sh
 # macOS (Apple Silicon)
@@ -87,49 +69,19 @@ curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly
 
 # Linux (x86_64, glibc)
 curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz | tar xz
-```
-
-That unpacks a folder containing the `hprof-analyzer` binary. Run it on your dump:
-
-```sh
-./hprof-analyzer-*/hprof-analyzer heap.hprof report.html
-```
-
-Open `report.html` in any browser. To run it from anywhere, move the binary onto your `PATH`:
-
-```sh
 sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/
+```
+
+Run it on your dump:
+
+```sh
 hprof-analyzer heap.hprof report.html
 ```
 
-### Shell completions
+Open `report.html` in any browser. See the [Install](#install) section for all platforms, shell completions, and upgrade instructions.
 
-`hprof-analyzer` ships tab-completion for **zsh** and **bash**. Completions filter file arguments by extension — only `.hprof` and related files are shown for dump inputs, and only `.json` files for report inputs.
-
-**zsh**
-
-```sh
-hprof-analyzer completions zsh > "${fpath[1]}/_hprof-analyzer"
-exec zsh   # reload the shell to activate completions
-```
-
-If you see a permission error, pick any directory on your `$fpath`:
-
-```sh
-echo $fpath
-hprof-analyzer completions zsh > /usr/local/share/zsh/site-functions/_hprof-analyzer
-exec zsh
-```
-
-**bash**
-
-```sh
-hprof-analyzer completions bash > ~/.local/share/bash-completion/completions/hprof-analyzer
-# Or, for system-wide completions:
-sudo hprof-analyzer completions bash > /etc/bash_completion.d/hprof-analyzer
-```
-
-Then open a new shell (or run `source ~/.local/share/bash-completion/completions/hprof-analyzer`) to activate.
+<details>
+<summary>Compressed dumps, tips, and resilience</summary>
 
 Compressed dumps are read transparently — no manual decompression needed:
 
@@ -153,6 +105,8 @@ hprof-analyzer report.json.gz --format html report.html
 ```
 
 **Truncated and corrupt files are handled gracefully.** If the JVM was killed mid-dump, the file was copied incompletely, the gzip stream ends early, or random bytes follow a valid HPROF header, the analyzer recovers whatever objects were successfully parsed and produces a partial report rather than aborting. A warning is printed to stderr and `truncated_input: true` is set in the JSON output.
+
+</details>
 
 ## Try it in the browser
 
@@ -188,7 +142,7 @@ All REPL commands (`!top`, `!sort`, `!stats`, `!obj`, …) and the full OQL engi
 
 ## Analysis reports
 
-Run one command and get a report covering the same ground as Eclipse MAT's System Overview, Leak Suspects, and Top Consumers analyses, plus additional views. Peak RSS stays well below the dump size for dumps ≥ 1 GiB: ~15 GiB on a 34 GiB dump, where MAT needs ~76 GiB of Java heap (see [Performance](#performance)). Tiny dumps have a fixed ~130–200 MiB floor. The report is a single file you can email, attach to a ticket, or diff in CI.
+Run one command and get a report covering leak suspects, retained-size breakdown, thread analysis, and more. Peak RSS stays well below the dump size for dumps ≥ 1 GiB (see [Performance](#performance)). The report is a single file you can email, attach to a ticket, or diff in CI.
 
 Report sections:
 
@@ -250,7 +204,7 @@ hprof-analyzer heap report heap.hprof --section leaks
 | `--full-analysis` | Shorthand for `--obj-graph --collections --find-duplicates`. Adds ~330 MB peak RSS on large dumps. Also forces the unreachable-forest dominator pass regardless of unreachable object count (see note below). **Note:** on dumps with a large unreachable object set the `unreachable-retained` phase (iterative dominator over the garbage subgraph) can dominate wall time; use `heap report` / `heap query` (disk-cached) for repeated analysis instead. |
 | `--field-stats` | Per-class reference-field null/non-null/retained stats for the top-50 classes by instance count. |
 | `--ref-paths` | Capture field-name labels on reference edges (~2 bytes/edge). Enables named field breakdowns in `--field-stats` and richer root paths. |
-| `--reachable-only` | Restrict OQL results to GC-reachable objects (Eclipse MAT parity). Off by default for `heap report`; the `heap query` subcommand defaults to reachable-only and uses `--all` to include unreachable objects instead. |
+| `--reachable-only` | Restrict OQL results to GC-reachable objects (excludes garbage). Off by default for `heap report`; the `heap query` subcommand defaults to reachable-only and uses `--all` to include unreachable objects instead. |
 | `--detail minimal\|default\|max` | Adjust output-size caps. See [detail preset table](#tune-the-report-size-with---detail) below. |
 | `--mat <DIR>` | Emit Eclipse MAT-compatible binary index files into `DIR` alongside the normal analysis. |
 | `--query <OQL>` | Run an OQL query and embed results in the report. May be repeated. |
@@ -319,7 +273,7 @@ The built-in `framework` category covers: `org.hibernate.`, `org.springframework
 
 ## OQL queries
 
-Run SQL-flavoured queries against a heap dump. The OQL engine follows Eclipse MAT's dialect and adds aggregates, grouping, visualization directives, an interactive REPL, and named queries.
+Run SQL-flavoured queries against a heap dump. The OQL engine supports `GROUP BY` / `HAVING`, aggregate functions (`COUNT`, `SUM`, `AVG`, `MEDIAN`, `PERCENTILE`), visualization directives, an interactive REPL with tab-completion, and a built-in named-query library. Compatible with Eclipse MAT's OQL dialect and extends it significantly.
 
 ### `query` subcommand
 
@@ -526,6 +480,27 @@ Ready-made skills teach Claude the full API and common heap-triage workflows. Co
 cp skills/hprof-analyzer-cli.md ~/.claude/skills/hprof-analyzer-cli/SKILL.md
 ```
 
+## AI assistant integration
+
+> **AI agents:** a compact machine-readable summary of this project and all integration options is in [`llms.txt`](llms.txt).
+
+If you are an AI assistant reading this README to understand what tools are available:
+
+- **MCP server (recommended):** `hprof-analyzer` ships a built-in [Model Context Protocol](https://modelcontextprotocol.io) server. Register it with one command and use it to load dumps, run OQL queries, browse the dominator tree, and get structured reports — all without leaving your conversation.
+  ```sh
+  # Claude Code
+  claude mcp add hprof -- hprof-analyzer mcp
+  ```
+  Full setup for Claude Desktop, Cline, and other agents is in the [MCP server](#mcp-server) section above.
+
+- **CLI fallback (no MCP needed):** If you cannot register an MCP server, use the `heap` subcommand group instead. It caches results on first run and answers all subsequent calls in ~1 s:
+  ```sh
+  hprof-analyzer heap summary heap.hprof        # top leak suspects + top classes
+  hprof-analyzer heap report heap.hprof --section triage   # severity-tagged signals
+  hprof-analyzer heap query heap.hprof --oql "SELECT COUNT(*) FROM java.lang.String"
+  ```
+  See the [Cached interactive analysis](#cached-interactive-analysis) section for the full subcommand list.
+
 ## HTTP API (`server` subcommand)
 
 `server` starts a lightweight HTTP server on `127.0.0.1` (loopback only). The primary use cases are: connecting the browser UI to a local server for dumps larger than 3 GB, and giving LLM agents a persistent endpoint for OQL queries and report sections. For scripting and CI, the individual CLI commands (`hprof-analyzer heap query`, `hprof-analyzer heap report`, etc.) are simpler.
@@ -647,29 +622,6 @@ Attribution is included where possible: for each finding, the class and field na
 
 **[Try it in the browser →](https://parttimenerd.github.io/hprof-analyzer/find-leaks/)** — runs entirely in WebAssembly, nothing is uploaded.
 
-## Speeding up Eclipse MAT
-
-If you use Eclipse MAT for interactive heap exploration, hprof-analyzer can reduce the time and memory needed for MAT's first open of a large dump.
-
-MAT's first open of a 34 GB heap dump peaks at **~76 GB RSS** inside the JVM. hprof-analyzer generates the same cache files in a single pass at **~19 GB RSS**:
-
-```sh
-# Generate MAT cache files (low RSS, no JVM tuning needed)
-hprof-analyzer mat caches heap.hprof
-
-# Now open heap.hprof in MAT as usual — it detects the cache and skips parsing
-```
-
-MAT auto-detects the cache: if the index files are present and newer than the `.hprof`, it prints "Reopening parsed heap dump file" and skips its own parser.
-
-If you also want hprof-analyzer's own report, generate both in one pass (single hprof read, shared pipeline):
-
-```sh
-hprof-analyzer heap.hprof --mat /path/to/heap-dir/ report.html
-```
-
-See [`docs/mat-cache.md`](docs/mat-cache.md) for the full list of generated files, known divergences from MAT's output, and the RSS budget details.
-
 ## Install
 
 ### Prebuilt binary (recommended)
@@ -709,7 +661,7 @@ brew install hprof-analyzer
 Homebrew prints MCP setup instructions after install. To follow the rolling nightly build:
 
 ```sh
-brew install parttimenerd/hprof-analyzer/hprof-analyzer-nightly
+brew install parttimenerd/hprof-analyzer/hprof-analyzer@nightly
 ```
 
 ### With Cargo
@@ -732,11 +684,41 @@ cargo build --release
 
 Node.js/npm is only needed if you modify the web sources under `web/src/`.
 
+### Shell completions
+
+`hprof-analyzer` ships tab-completion for **zsh**, **bash**, and **fish**. Completions filter file arguments by extension — only `.hprof` and related files are shown for dump inputs, and only `.json` files for report inputs.
+
+**zsh**
+
+```sh
+hprof-analyzer completions zsh > "${fpath[1]}/_hprof-analyzer"
+exec zsh   # reload the shell to activate completions
+```
+
+If you see a permission error, pick any directory on your `$fpath`:
+
+```sh
+echo $fpath
+hprof-analyzer completions zsh > /usr/local/share/zsh/site-functions/_hprof-analyzer
+exec zsh
+```
+
+**bash**
+
+```sh
+hprof-analyzer completions bash > ~/.local/share/bash-completion/completions/hprof-analyzer
+# Or, for system-wide completions:
+sudo hprof-analyzer completions bash > /etc/bash_completion.d/hprof-analyzer
+```
+
+Then open a new shell (or run `source ~/.local/share/bash-completion/completions/hprof-analyzer`) to activate.
+
 ## Upgrading
 
 Three ways, depending on how you installed it.
 
-**In-place (any install)** — the binary replaces itself from GitHub releases:
+**In-place (non-Homebrew installs)** — the binary replaces itself from GitHub
+releases:
 
 ```sh
 hprof-analyzer update latest    # latest stable release
@@ -747,14 +729,30 @@ hprof-analyzer update           # show versions + changelog, no changes
 `update` downloads the archive for your platform, verifies the extracted
 binary is a real executable, smoke-tests it, keeps a `.bak` backup, and swaps
 it in atomically. On failure it cleans up and leaves the current binary
-untouched.
+untouched. Homebrew-managed installs are detected and told to use
+`brew upgrade` instead (self-replacing a brew symlink breaks the Cellar
+layout).
 
-**Homebrew**:
+**Homebrew** — channels are separate tap formulas; the unversioned name is
+the stable channel, and versioned tokens like `hprof-analyzer@nightly` are
+concurrent alternates:
 
 ```sh
-brew upgrade hprof-analyzer                                     # stable release
-brew upgrade parttimenerd/hprof-analyzer/hprof-analyzer-nightly  # rolling nightly
+brew upgrade hprof-analyzer            # stable channel (latest tagged release)
+brew upgrade hprof-analyzer@nightly     # nightly channel (rolling build from main)
 ```
+
+To switch channels:
+
+```sh
+brew uninstall hprof-analyzer && brew install hprof-analyzer@nightly      # stable → nightly
+brew uninstall hprof-analyzer@nightly && brew install hprof-analyzer      # nightly → stable
+```
+
+> The nightly formula was previously named `hprof-analyzer-nightly`; if you
+> installed it under that name, migrate once:
+> `brew uninstall hprof-analyzer-nightly && brew install parttimenerd/hprof-analyzer/hprof-analyzer@nightly`
+> (see the [tap README](homebrew-tap/README.md) for details).
 
 > The nightly formula tracks a rolling artifact and uses `sha256 :no_check`
 > (its bytes change on every push); the stable formula pins a checksum per
@@ -853,29 +851,71 @@ hprof-analyzer dev emit-schema > schema/report.schema.json
 cp schema/report.schema.json docs/schema.json
 ```
 
-## Eclipse MAT and other tools
+## Other tools
 
-hprof-analyzer works well for most heap analysis: automated reports, OQL scripting, CI integration, AI-assisted triage, and low-memory environments. For interactive GUI exploration (walking the object graph manually, inspecting arbitrary fields, using MAT's analysis plugins) **[Eclipse MAT](https://eclipse.dev/mat/)** remains the better choice. The two tools complement each other: use hprof-analyzer for triage, CI, and MAT cache generation; use MAT when you need hands-on exploration.
+hprof-analyzer covers automated reports, OQL scripting, CI integration, AI-assisted triage, and low-memory environments. For hands-on GUI exploration — walking the object graph field by field, using analysis plugins — **[Eclipse MAT](https://eclipse.dev/mat/)** is a good complement. The two tools work well together: hprof-analyzer can [pre-generate MAT's cache files](#speeding-up-eclipse-mat) so MAT opens large dumps faster and at lower RSS.
 
 If all you need is a class histogram, [`hprof-slurp`](https://github.com/agourlay/hprof-slurp) is faster and lighter because it never builds the dominator tree. That also means it cannot report retained sizes, leak suspects, root paths, or Top Consumers.
 
+## Speeding up Eclipse MAT
+
+If you use Eclipse MAT for interactive heap exploration, hprof-analyzer can reduce the time and memory needed for MAT's first open of a large dump.
+
+MAT's first open of a 34 GB heap dump peaks at **~76 GB RSS** inside the JVM. hprof-analyzer generates the same cache files in a single pass at **~19 GB RSS**:
+
+```sh
+# Generate MAT cache files (low RSS, no JVM tuning needed)
+hprof-analyzer mat caches heap.hprof
+
+# Now open heap.hprof in MAT as usual — it detects the cache and skips parsing
+```
+
+MAT auto-detects the cache: if the index files are present and newer than the `.hprof`, it prints "Reopening parsed heap dump file" and skips its own parser.
+
+If you also want hprof-analyzer's own report, generate both in one pass (single hprof read, shared pipeline):
+
+```sh
+hprof-analyzer heap.hprof --mat /path/to/heap-dir/ report.html
+```
+
+See [`docs/mat-cache.md`](docs/mat-cache.md) for the full list of generated files, known divergences from MAT's output, and the RSS budget details.
+
 ## Performance
 
-Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [`57232f7`](https://github.com/parttimenerd/hprof-analyzer/commit/57232f7), 2026-11-02. "Basic" = default analysis; "Full" = `--full-analysis` (`--obj-graph --collections --find-duplicates`), cold page cache. MAT = Eclipse MAT 1.17.0 (`ParseHeapDump.sh -Xmx60g`). Wall-clock in `m:ss` or `s`. RSS is peak. The `heap report` / MCP `load_dump` cached path adds ~5–6 GiB peak RSS on large dumps (e.g. 19.5 GiB on the 34 GiB dump) due to cache management overhead; wall time is comparable.
+Measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores / 128 threads) with 123 GiB RAM, Linux, commit [`57232f7`](https://github.com/parttimenerd/hprof-analyzer/commit/57232f7), 2026-11-02. "Basic" = default analysis; "Full" = `--full-analysis` (`--obj-graph --collections --find-duplicates`), cold page cache. Wall-clock in `m:ss` or `s`. RSS is peak. The `heap report` / MCP `load_dump` cached path adds ~5–6 GiB peak RSS on large dumps (e.g. 19.5 GiB on the 34 GiB dump) due to cache management overhead; wall time is comparable.
 
-| Workload | Dump file | Wall basic | RSS basic | Wall full | RSS full | Wall (MAT) | RSS (MAT) |
-|----------|-----------|------------|-----------|-----------|----------|------------|-----------|
-| Renaissance scala-doku | 51 MiB | 1.3 s | 131 MiB | 2.2 s | 211 MiB | 4.8 s | 1.32 GiB |
-| gauss-mix | 70 MiB | 1.1 s | 115 MiB | 1.9 s | 183 MiB | 4.0 s | 1.31 GiB |
-| naive-bayes (1.3 GiB) | 1.3 GiB | 2.7 s | 186 MiB | 4.8 s | 333 MiB | 5.3 s | 1.44 GiB |
-| VS Code JVM (1.1 GiB) | 1.1 GiB | 19.2 s | 485 MiB | 32.9 s | 821 MiB | 27.5 s | 4.39 GiB |
-| HeapothesYs 16g | 11 GiB | 1:08 | 967 MiB | 1:42 | 2.19 GiB | 1:02 | 5.83 GiB |
-| HeapothesYs 28g | 20 GiB | 2:12 | 1.82 GiB | 3:27 | 3.67 GiB | 1:55 | 7.39 GiB |
-| Real-world 34g | 34 GiB | 13:55 | 14.12 GiB | 27:06 | 16.74 GiB | 19:18 | 79.73 GiB |
+| Workload | Dump size | Wall basic | RSS basic | Wall full | RSS full |
+|----------|-----------|------------|-----------|-----------|----------|
+| Renaissance scala-doku | 51 MiB | 1.3 s | 131 MiB | 2.2 s | 211 MiB |
+| gauss-mix | 70 MiB | 1.1 s | 115 MiB | 1.9 s | 183 MiB |
+| naive-bayes | 1.3 GiB | 2.7 s | 186 MiB | 4.8 s | 333 MiB |
+| VS Code JVM | 1.1 GiB | 19.2 s | 485 MiB | 32.9 s | 821 MiB |
+| HeapothesYs 16g | 11 GiB | 1:08 | 967 MiB | 1:42 | 2.19 GiB |
+| HeapothesYs 28g | 20 GiB | 2:12 | 1.82 GiB | 3:27 | 3.67 GiB |
+| Real-world 34g | 34 GiB | 13:55 | 14.12 GiB | 27:06 | 16.74 GiB |
 
-MAT was run with `ParseHeapDump.sh -Xmx60g` (default parse, no extra report IDs). For dumps ≥ 1 GiB, `hprof-analyzer` peak RSS is well below the dump size and needs no heap tuning. Correctness is validated against MAT 1.17.0: the `compare mat` subcommand diffs a MAT System Overview export against our JSON, and the parity fixtures gate on it.
+For dumps ≥ 1 GiB, peak RSS is well below the dump size and needs no heap-size tuning. The standard `hprof-analyzer <dump>` command writes no files to disk. The `heap` subcommands and MCP server write a `<dump>.hprof-cache/` directory alongside the dump on first use; subsequent calls reuse it for sub-second load times. Delete it to force re-analysis or free disk space.
 
-**Disk footprint.** MAT writes a persistent binary index alongside the dump on first open (typically ~15–20% of the dump size for large dumps, up to 1× for small dumps). Measured sizes: 51 MiB dump → ~50 MiB index; 11 GiB dump → ~1.6 GiB index; 20 GiB dump → ~3.2 GiB index; a 34 GiB dump is projected at 15–25 GiB (index files total). The standard `hprof-analyzer <dump>` command writes no files. The `heap` subcommands and MCP server write a `<dump>.hprof-cache/` directory alongside the dump on first use; subsequent calls reuse it for sub-second load times. Delete it to force re-analysis or free disk space.
+<details>
+<summary>Comparison with Eclipse MAT 1.17.0</summary>
+
+Eclipse MAT was run with `ParseHeapDump.sh -Xmx60g` (default parse, no extra report IDs).
+
+| Workload | Dump size | Wall (hprof-analyzer) | RSS (hprof-analyzer) | Wall (MAT) | RSS (MAT) |
+|----------|-----------|----------------------|---------------------|------------|-----------|
+| Renaissance scala-doku | 51 MiB | 1.3 s | 131 MiB | 4.8 s | 1.32 GiB |
+| gauss-mix | 70 MiB | 1.1 s | 115 MiB | 4.0 s | 1.31 GiB |
+| naive-bayes | 1.3 GiB | 2.7 s | 186 MiB | 5.3 s | 1.44 GiB |
+| VS Code JVM | 1.1 GiB | 19.2 s | 485 MiB | 27.5 s | 4.39 GiB |
+| HeapothesYs 16g | 11 GiB | 1:08 | 967 MiB | 1:02 | 5.83 GiB |
+| HeapothesYs 28g | 20 GiB | 2:12 | 1.82 GiB | 1:55 | 7.39 GiB |
+| Real-world 34g | 34 GiB | 13:55 | 14.12 GiB | 19:18 | 79.73 GiB |
+
+Correctness is validated against MAT 1.17.0: the `compare mat` subcommand diffs a MAT System Overview export against our JSON, and the parity fixtures gate on it.
+
+**Disk footprint.** MAT writes a persistent binary index alongside the dump on first open (typically ~15–20% of the dump size for large dumps, up to 1× for small dumps). Measured sizes: 51 MiB dump → ~50 MiB index; 11 GiB dump → ~1.6 GiB index; 20 GiB dump → ~3.2 GiB index; a 34 GiB dump is projected at 15–25 GiB (index files total).
+
+</details>
 
 ## How it works
 
