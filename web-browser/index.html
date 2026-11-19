@@ -393,8 +393,11 @@ async function _switchToWasm64() {
 window._switchToWasm64 = _switchToWasm64;
 
 // ── Shell logic (inlined from shell.js) ──────────────────────────────────────
+// Direct eval so shell.js closes over module-scoped variables (wasmReady,
+// namedQueries, HprofSession, etc.). Indirect eval (0,eval)() runs in global
+// scope and cannot see module-local lets/consts.
 // eslint-disable-next-line no-eval
-(0, eval)(document.getElementById('shell-js-src').textContent);
+eval(document.getElementById('shell-js-src').textContent);
 </script>
 <script type="text/plain" id="shell-js-src">%%SHELL_JS%%</script>
 </body>
