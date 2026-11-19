@@ -286,9 +286,11 @@ test('dominator flame graph tab renders without JS errors or crash', async ({ pa
 
   await openReport(page);
 
-  // Navigate to Dominator Analysis section.
+  // Navigate to Dominator Analysis section, leaving 120 px clearance so the
+  // sticky TOC doesn't cover the buttons we're about to click.
   await page.evaluate(() => {
-    document.getElementById('dominator-analysis')?.scrollIntoView();
+    const el = document.getElementById('dominator-analysis');
+    if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 120 });
   });
   await page.waitForTimeout(300);
 
@@ -299,6 +301,7 @@ test('dominator flame graph tab renders without JS errors or crash', async ({ pa
     return;
   }
 
+  await flameBtn.scrollIntoViewIfNeeded();
   await flameBtn.click();
   // Wait for React to re-render; a cycle bug would throw before this resolves.
   await page.waitForTimeout(500);
