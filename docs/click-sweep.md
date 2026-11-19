@@ -188,3 +188,18 @@ watch the sweep in real time and see which UI state preceded the error.
 The trigger fingerprint (`/dominator-analysis/button[]:Flame`) identifies the
 exact button whose click caused the crash. You can then reproduce it manually:
 navigate to `#dominator-analysis` and click the Flame button.
+
+## Complementary: gremlins.js bookmarklet
+
+[gremlins.js](https://github.com/marmelab/gremlins.js) is a complementary
+approach: it fires random mouse events at random pixel coordinates, finding
+hit-area and coordinate-specific bugs that semantic sweeps miss. Install the
+bookmarklet from the gremlins.js README and run it on any open report page for
+a quick random-coordinate soak.
+
+The two tools cover different failure modes and work well together:
+
+| Tool | Approach | Finds |
+|---|---|---|
+| click-sweep | Semantic — visits every distinct interactive element | Crashes in specific components, state-dependent sequences |
+| gremlins.js | Coordinate-based — random clicks anywhere on screen | Hit-area bugs, coordinate-sensitive handlers, layout overlaps |

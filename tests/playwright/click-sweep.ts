@@ -64,6 +64,15 @@
  *     env:
  *       HPROF_HTML: /tmp/smoke-report.html
  *     run: npx ts-node click-sweep.ts --budget 300
+ *
+ * COMPLEMENTARY TOOL
+ * ──────────────────
+ * gremlins.js (https://github.com/marmelab/gremlins.js) is a complementary
+ * approach: it fires random mouse events at random pixel coordinates, finding
+ * hit-area and coordinate-specific bugs that semantic sweeps miss.  Install it
+ * as a bookmarklet from the gremlins.js README and run it on any open report
+ * page for a quick random-coordinate soak.  click-sweep and gremlins cover
+ * different failure modes and work well together.
  */
 
 import { chromium } from '@playwright/test';
