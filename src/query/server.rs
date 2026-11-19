@@ -42,9 +42,16 @@ pub fn run_query_json(
         let q = match crate::query::parse::parse(&cleaned) {
             Ok(q) => q,
             Err(e) => {
-                let report = crate::query::parse::parse_or_report(&cleaned)
-                    .err()
-                    .unwrap_or_default();
+                let parse_ctx = match cache.as_ref() {
+                    Some(c) => crate::query::parse::ParseContext {
+                        class_names: &c.class_names,
+                    },
+                    None => crate::query::parse::ParseContext::empty(),
+                };
+                let report =
+                    crate::query::parse::parse_or_report_with_context(&cleaned, &parse_ctx)
+                        .err()
+                        .unwrap_or_default();
                 return serde_json::json!({
                     "ok": false,
                     "error": { "kind": "parse", "message": e.0, "report": report }
@@ -308,7 +315,7 @@ pub fn version_json() -> serde_json::Value {
 pub fn help_json(path: &str) -> serde_json::Value {
     use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, FUNCS, KEYWORDS, METHODS, RESERVED};
     const CAP: usize = 200;
-    let (classes, fields) = crate::query::repl::harvest_names(path);
+    let (classes, fields, _field_index) = crate::query::repl::harvest_names(path);
     let cap = |v: Vec<String>| -> Vec<String> { v.into_iter().take(CAP).collect() };
     serde_json::json!({
         "keywords": KEYWORDS,
@@ -574,7 +581,18 @@ impl ServerState {
                         );
                     }
                 };
-                match crate::query::parse::parse_or_report(&oql) {
+                // Clone class names so the mutex guard is not held during parsing.
+                let cached_names: Vec<String> = self
+                    .cache
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|c| c.class_names.clone())
+                    .unwrap_or_default();
+                let parse_ctx = crate::query::parse::ParseContext {
+                    class_names: &cached_names,
+                };
+                match crate::query::parse::parse_or_report_with_context(&oql, &parse_ctx) {
                     Ok(q) => match crate::query::plan::plan_query(&q, self.path_depth) {
                         Ok(plan) => {
                             let plan = crate::query::optimize::optimize(

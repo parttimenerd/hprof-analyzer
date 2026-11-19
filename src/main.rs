@@ -416,6 +416,23 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
         progress: ProgressWhen,
     },
+    /// Start an interactive OQL REPL (alias for `query <dump> --repl`).
+    ///
+    /// Opens a readline-style prompt where you can type OQL queries,
+    /// press Tab for grammar-aware completion, and use `!help` for
+    /// available meta-commands.
+    ///
+    /// EXAMPLES:
+    ///   hprof-analyzer repl dump.hprof
+    ///   hprof-analyzer repl dump.hprof --query-path-depth 10
+    Repl {
+        /// Path to the .hprof dump (.hprof, .hprof.gz, .hprof.zip, .hprof.tar.gz, .hprof.tgz).
+        #[arg(value_hint = ValueHint::FilePath)]
+        input: String,
+        /// Max hops for OQL `path(a, b)` bounded walks (must be > 0).
+        #[arg(long = "query-path-depth", value_name = "N", default_value_t = DEFAULT_QUERY_PATH_DEPTH, value_parser = parse_query_path_depth)]
+        query_path_depth: usize,
+    },
     /// Eclipse MAT cache generation
     Mat {
         #[command(subcommand)]
@@ -1650,6 +1667,19 @@ fn main() {
                 if let Err(e) = run_queries(&input, opts, json_out) {
                     fail(analyze_error_hint(&input, &e));
                 }
+            }
+        }
+        Some(Cmd::Repl {
+            input,
+            query_path_depth,
+        }) => {
+            if !input_is_hprof(&input) {
+                fail(format!(
+                    "'{input}' is not an HPROF dump; the `repl` subcommand needs a .hprof[.gz/.zip/.tar.gz] file"
+                ));
+            }
+            if let Err(e) = crate::query::repl::run_repl(&input, query_path_depth) {
+                fail(analyze_error_hint(&input, &e));
             }
         }
         Some(Cmd::Mat { cmd }) => match cmd {

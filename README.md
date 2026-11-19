@@ -12,6 +12,7 @@ Analyze Java heap dumps and find memory leaks. One binary, no JVM required — g
 |-----------|------------|
 | **[Analysis reports](#analysis-reports)** — leak suspects, retained-size breakdown, top consumers, threads ([sample](https://parttimenerd.github.io/hprof-analyzer/reports/)) | `hprof-analyzer heap.hprof report.html` |
 | **[OQL queries](#oql-queries)** — GROUP BY, aggregates, viz directives, Eclipse MAT-compatible | `hprof-analyzer query heap.hprof --query "..."` |
+| **[Interactive REPL](#interactive-repl)** — Tab completion, named views, result shaping, persistent history | `hprof-analyzer query heap.hprof --repl` |
 | **[Interactive analysis](#cached-interactive-analysis)** — histogram, dominator tree, inspect objects (cached, sub-second after first run) | `hprof-analyzer heap summary heap.hprof` |
 | **[MCP server](#mcp-server)** — AI-assisted triage in Claude, Cline, and other agents | `hprof-analyzer mcp` |
 | **[Browser UI](https://parttimenerd.github.io/hprof-analyzer/)** — WebAssembly, works offline, up to 3 GB | [Open in browser](https://parttimenerd.github.io/hprof-analyzer/) |
@@ -36,6 +37,7 @@ Also: [heap redaction](#heap-redaction), [HTTP API](#http-api-server-subcommand)
   - [Class categories](#class-categories)
   - [Tune the report size with `--detail`](#tune-the-report-size-with---detail)
 - [OQL queries](#oql-queries)
+  - [Interactive REPL](#interactive-repl)
 - [Cached interactive analysis](#cached-interactive-analysis)
 - [MCP server](#mcp-server)
 - [AI assistant integration](#ai-assistant-integration)
@@ -296,6 +298,22 @@ hprof-analyzer query heap.hprof \
 hprof-analyzer query heap.hprof --repl
 ```
 
+### Interactive REPL
+
+`--repl` opens a full-featured interactive shell for exploratory analysis:
+
+- **Tab completion** — class names, field names, OQL keywords, attributes, `!`-commands, and view names.
+- **Persistent history** — `↑`/`↓` to navigate, `Ctrl-R` to reverse-search, `~/.hprof_oql_history`.
+- **Named views** — 40+ built-in views (`/views` to list, `!run <name>` or just the bare name to run). Prefix matching works: type `thr` instead of `threads`.
+- **User-defined views** — `!define big-strings SELECT * FROM java.lang.String s WHERE s.value.length > 1000 LIMIT 50` saves a view that persists across sessions. Remove with `!undefine`.
+- **Result shaping** — after a query returns, reshape without re-querying: `!filter`, `!sort`, `!select`, `!drop`, `!distinct`, `!top`, `!unique`, `!pivot`, `!undo`.
+- **Inspection** — `!cols` (column types + fill rate), `!stats` (min/max/mean/p50/p90/p99), `!row N` (detail view).
+- **Export** — `!save results.csv` (CSV/TSV/JSON by extension).
+- **Heap exploration** — `!classes Map` (find classes), `!describe java.util.HashMap` (show fields), `!count Thread` (instance count).
+- **Help** — `!help` for an overview, `!help <topic>` for deep-dives (`oql`, `views`, `filter`, `sort`, `export`, `set`, `explore`, `inspect`, `shape`, `history`, `keys`, `tips`).
+
+See [docs/OQL.md § Interactive REPL](docs/OQL.md#interactive-repl) for the full command reference.
+
 Retained sizes (`@retainedHeapSize`), dominators, and reference-graph attributes require the full analysis pipeline. Pass `--query` / `--query-file` to the main command to embed queries in a full report, or use the `server` or `heap query` subcommands which unlock retained-size queries.
 
 ### Embed queries in reports
@@ -320,7 +338,7 @@ Use `--query=` (with `=`) to avoid `clap` misinterpreting the leading `--` in th
 
 ### Compatibility with Eclipse MAT OQL
 
-**Extensions (not in MAT):** `MEDIAN`/`PERCENTILE` aggregates, `GROUP BY` / `HAVING`, `path()` reachability, `-- @viz` directives, arithmetic in `SELECT` and `WHERE`, system-properties snapshot (`@systemProperties`), interactive REPL with tab-completion, named queries library (`!run <name>`), report embedding (`--query` / `--query-file`).
+**Extensions (not in MAT):** `MEDIAN`/`PERCENTILE` aggregates, `GROUP BY` / `HAVING`, `path()` reachability, `-- @viz` directives, arithmetic in `SELECT` and `WHERE`, system-properties snapshot (`@systemProperties`), interactive REPL with tab-completion and result shaping, named queries library (`!run <name>`), user-defined views (`!define`), report embedding (`--query` / `--query-file`).
 
 **Behavioural differences:** unreachable objects are *included* (MAT discards them); `s.count`/`s.offset` are absent (modern JDK layout; use `s.value`, `s.coder`); integer division by zero returns `NULL`; `toString()` on non-String returns `NULL` (no live JVM reflection).
 

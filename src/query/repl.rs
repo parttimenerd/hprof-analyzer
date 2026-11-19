@@ -13,342 +13,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use reedline::{
-    ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory, KeyCode, KeyModifiers,
-    MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, SearchDirection, SearchQuery, Signal, Span,
-    Suggestion, default_emacs_keybindings,
+    ColumnarMenu, Completer, DefaultPrompt, DefaultPromptSegment, Emacs, FileBackedHistory,
+    KeyCode, KeyModifiers, MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, SearchDirection,
+    SearchQuery, Signal, Span, Suggestion, default_emacs_keybindings,
 };
 
 use crate::query::model::{QueryResult, QueryValue};
-use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, FUNCS, KEYWORDS, METHODS, RESERVED};
-
-/// Grammatical context of the cursor, driving which candidate set the completer
-/// offers. Determined by a lightweight word-scan (not the full parser) so that
-/// partial/incomplete input still completes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Ctx {
-    /// Typing a class operand (after `FROM`/`INSTANCEOF`): offer class names.
-    ClassName,
-    /// SELECT list or predicate/order operand: offer attributes/agg-funcs/funcs.
-    Attr,
-    /// Clause position (line start, after a complete class, after `)`): keywords.
-    Keyword,
-    /// After a dot in a dotted reference path (e.g. `s.` or `x.parent.`).
-    /// `dot_prefix` is everything up to and including the last `.` (used to
-    /// reconstruct the full replacement value); `seg_start` is the byte offset in
-    /// the original line where the segment after the last dot begins.
-    FieldName {
-        dot_prefix: String,
-        seg_start: usize,
-    },
-    /// After `<alias>.` when the token is a single-hop (exactly one dot, alias is
-    /// the immediate token before the dot). Offers method names first (with
-    /// class-aware priority when `receiver_class` is known), then field names, so
-    /// completion is a superset of the old FieldName case. Multi-hop paths
-    /// (`x.parent.`) keep `FieldName` because type inference through hops is out of
-    /// scope.
-    Method {
-        dot_prefix: String,
-        seg_start: usize,
-        receiver_class: Option<String>,
-    },
-    /// After the literal word `AS` (in the select list): offer `RETAINED`.
-    AfterAs,
-    /// After `AS RETAINED`: offer `SET`.
-    AfterRetained,
-}
-
-/// Test-facing wrapper: classify from `before`+`frag` as if `before` starts at
-/// byte 0 of the line. Only used in tests; production uses
-/// `classify_at_with_full` directly.
-#[cfg(test)]
-fn classify(before: &str, frag: &str) -> Ctx {
-    classify_at_with_full(before, frag, before.len(), None)
-}
-
-/// Internal classify variant that accepts the full line for receiver-class extraction.
-fn classify_at_with_full(
-    before: &str,
-    frag: &str,
-    line_offset: usize,
-    full_line: Option<&str>,
-) -> Ctx {
-    // First compute the non-dot context so we can tell whether dots are field
-    // separators (Attr position) or part of a class name (ClassName position).
-    let base_ctx = classify_base(before, frag);
-
-    // Dotted field path only applies in attr/predicate position, not class position.
-    // If we're typing a class name after FROM, the dots are part of the class name.
-    let in_attr = matches!(base_ctx, Ctx::Attr);
-    if in_attr {
-        if let Some(dot_pos) = frag.rfind('.') {
-            let dot_prefix = frag[..=dot_pos].to_string();
-            let seg_start = line_offset + dot_pos + 1;
-            // Single-hop detection: exactly one dot in frag.
-            // e.g. frag="s.foo" → single-hop; frag="x.parent.foo" → multi-hop → FieldName.
-            let dot_count = frag.chars().filter(|&c| c == '.').count();
-            if dot_count == 1 {
-                let alias = &frag[..dot_pos];
-                if !alias.is_empty() && !alias.contains('.') {
-                    let text_for_from = full_line.unwrap_or({
-                        // Best effort: before + frag (covers FROM clauses before cursor).
-                        // NOTE: static lifetime needed; we leak a small string in tests.
-                        // In production, full_line is always provided by complete().
-                        ""
-                    });
-                    let receiver_class = if text_for_from.is_empty() {
-                        // Fallback: search before+frag only.
-                        extract_receiver_class(before, frag, alias)
-                    } else {
-                        extract_receiver_class_from_full(text_for_from, alias)
-                    };
-                    return Ctx::Method {
-                        dot_prefix,
-                        seg_start,
-                        receiver_class,
-                    };
-                }
-            }
-            return Ctx::FieldName {
-                dot_prefix,
-                seg_start,
-            };
-        }
-        // Dot at the end of `before` means the delimiter scan consumed it.
-        if before.ends_with('.') {
-            let token_start = before
-                .rfind(|c: char| c.is_whitespace() || c == '(' || c == ',')
-                .map(|i| i + 1)
-                .unwrap_or(0);
-            let dot_prefix = before[token_start..].to_string();
-            let seg_start = line_offset + before.len();
-            // Single-hop: dot_prefix is "alias." (no interior dot before the final one).
-            let prefix_without_dot = dot_prefix.trim_end_matches('.');
-            let inner_dot_count = prefix_without_dot.chars().filter(|&c| c == '.').count();
-            if inner_dot_count == 0 && !prefix_without_dot.is_empty() {
-                let alias = prefix_without_dot;
-                let text_for_from = full_line.unwrap_or(before);
-                let receiver_class = extract_receiver_class_from_full(text_for_from, alias);
-                return Ctx::Method {
-                    dot_prefix,
-                    seg_start,
-                    receiver_class,
-                };
-            }
-            return Ctx::FieldName {
-                dot_prefix,
-                seg_start: line_offset + before.len(),
-            };
-        }
-    }
-    base_ctx
-}
-
-/// Lightweight scan of the partial input text to extract the class associated with
-/// `alias` from a `FROM <class> <alias>` or `FROM OBJECTS <class> <alias>` clause.
-/// `before` is the text before the current delimiter; `frag` is the current fragment
-/// (containing the alias and dot). Returns `Some(class_name)` when found.
-///
-/// This is intentionally simple and robust to incomplete input: it does a
-/// case-insensitive word search without invoking the full parser.
-fn extract_receiver_class(before: &str, frag: &str, alias: &str) -> Option<String> {
-    // Reconstruct the full line text visible so far (before + frag).
-    let full = format!("{before}{frag}");
-    extract_receiver_class_from_full(&full, alias)
-}
-
-/// Same as `extract_receiver_class` but operates on the full line text directly.
-fn extract_receiver_class_from_full(full: &str, alias: &str) -> Option<String> {
-    // Collect all whitespace-split tokens.
-    let tokens: Vec<&str> = full.split_whitespace().collect();
-    // Find `FROM` (case-insensitive).
-    let from_pos = tokens.iter().position(|t| t.eq_ignore_ascii_case("FROM"))?;
-    // Tokens after FROM: skip optional `OBJECTS`.
-    let after_from = &tokens[from_pos + 1..];
-    let (class_token, alias_token) = if after_from.first()?.eq_ignore_ascii_case("OBJECTS") {
-        // FROM OBJECTS <class> <alias>
-        (after_from.get(1)?, after_from.get(2)?)
-    } else {
-        // FROM <class> <alias>
-        (after_from.first()?, after_from.get(1)?)
-    };
-    // The alias must match (case-sensitive, as OQL identifiers are case-sensitive).
-    if *alias_token == alias {
-        Some(class_token.replace('/', "."))
-    } else {
-        None
-    }
-}
-
-/// Short hint for a dispatched method name (MAT-style `receiver.method()`),
-/// shown in the completion menu. `None` when no useful one-liner applies.
-fn method_hint(m: &str) -> Option<String> {
-    let h = match m {
-        "length" | "size" => "element/char count",
-        "getKey" => "Map.Entry key",
-        "getValue" => "Map.Entry value",
-        "equals" => "reference equality",
-        "contains" => "substring/element test",
-        "intValue" | "longValue" | "shortValue" | "byteValue" => "boxed integer value",
-        "floatValue" | "doubleValue" => "boxed float value",
-        "booleanValue" => "boxed boolean value",
-        "charValue" => "boxed char value",
-        "toString" => "string form",
-        "getName" => "class/field name",
-        "getObjectAddress" => "heap address",
-        "getObjectId" => "dense object index",
-        "getUsedHeapSize" => "shallow size",
-        "getRetainedHeapSize" => "retained size",
-        "getClazz" => "defining class",
-        _ => return None,
-    };
-    Some(h.to_string())
-}
-
-/// Given a resolved `receiver_class` (or `None`), return the ordered list of
-/// method names to offer: class-relevant methods first (a stable partition of
-/// `METHODS`), then the rest. All names are still drawn from `parse::METHODS` so
-/// the universe never drifts from the dispatcher.
-fn methods_ordered_for_class(receiver_class: Option<&str>) -> Vec<&'static str> {
-    let priority: &[&str] = match receiver_class {
-        Some(cls) => {
-            let cls_lower = cls.to_ascii_lowercase();
-            if cls_lower.ends_with("integer") {
-                &["intValue", "longValue"]
-            } else if cls_lower.ends_with("long") {
-                &["longValue", "intValue"]
-            } else if cls_lower.ends_with("short") {
-                &["shortValue", "intValue"]
-            } else if cls_lower.ends_with("byte") {
-                &["byteValue", "intValue"]
-            } else if cls_lower.ends_with("float") {
-                &["floatValue", "doubleValue"]
-            } else if cls_lower.ends_with("double") {
-                &["doubleValue", "floatValue"]
-            } else if cls_lower.ends_with("boolean") {
-                &["booleanValue"]
-            } else if cls_lower.ends_with("character") {
-                &["charValue"]
-            } else if cls_lower.ends_with("string") {
-                &["length", "contains"]
-            } else if cls_lower.contains("list")
-                || cls_lower.ends_with("arraylist")
-                || cls_lower.ends_with("vector")
-                || cls_lower.ends_with("linkedlist")
-            {
-                &["size"]
-            } else if cls_lower.contains("map")
-                || cls_lower.ends_with("hashmap")
-                || cls_lower.ends_with("hashtable")
-            {
-                &["size", "getKey", "getValue"]
-            } else if cls_lower.contains("set") || cls_lower.ends_with("hashset") {
-                &["size"]
-            } else {
-                &[]
-            }
-        }
-        None => &[],
-    };
-    // Stable partition: priority methods first, then the rest, all from METHODS.
-    let mut result: Vec<&'static str> = priority
-        .iter()
-        .filter(|m| METHODS.contains(m))
-        .copied()
-        .collect();
-    for m in METHODS.iter() {
-        if !result.contains(m) {
-            result.push(m);
-        }
-    }
-    result
-}
-
-/// Core classification ignoring dotted-path logic. Returns one of the simple
-/// non-FieldName contexts so `classify_at` can layer dot handling on top.
-fn classify_base(before: &str, frag: &str) -> Ctx {
-    let mut words: Vec<&str> = before.split_whitespace().collect();
-    // Drop a trailing word equal to frag so it isn't mistaken for the previous
-    // significant word.
-    if !frag.is_empty() && words.last().is_some_and(|w| *w == frag) {
-        words.pop();
-    }
-    let last = words.last().copied();
-    let eq = |w: &str, kw: &str| w.eq_ignore_ascii_case(kw);
-
-    // AS must be a committed word (in `before`) to enter AfterAs/AfterRetained;
-    // when AS is the fragment itself, it falls through to Attr (SELECT-list position).
-    if let Some(w) = last {
-        if eq(w, "RETAINED") && words.len() >= 2 {
-            let prev = words[words.len() - 2];
-            if eq(prev, "AS") {
-                return Ctx::AfterRetained;
-            }
-        }
-        if eq(w, "AS") {
-            return Ctx::AfterAs;
-        }
-    }
-
-    // The class operand directly follows FROM or INSTANCEOF.
-    // OBJECTS is transparent: `FROM OBJECTS <class>` still needs a class name.
-    if let Some(w) = last {
-        if eq(w, "FROM") || eq(w, "INSTANCEOF") {
-            return Ctx::ClassName;
-        }
-        if eq(w, "OBJECTS") {
-            if words.len() >= 2 && eq(words[words.len() - 2], "FROM") {
-                return Ctx::ClassName;
-            }
-        }
-    }
-    // Once `@` is typed we are always naming an attribute.
-    if frag.starts_with('@') {
-        return Ctx::Attr;
-    }
-    // A clause keyword being typed as the fragment must complete as a keyword.
-    const CLAUSE_KEYWORDS: &[&str] = &[
-        "SELECT", "DISTINCT", "FROM", "WHERE", "UNION", "ORDER", "LIMIT",
-    ];
-    let operand_last = last.is_some_and(|w| {
-        ["FROM", "INSTANCEOF", "WHERE", "AND", "OR", "NOT", "BY"]
-            .iter()
-            .any(|kw| eq(w, kw))
-    });
-    if !frag.is_empty()
-        && !operand_last
-        && CLAUSE_KEYWORDS
-            .iter()
-            .any(|kw| kw.len() >= frag.len() && kw[..frag.len()].eq_ignore_ascii_case(frag))
-    {
-        return Ctx::Keyword;
-    }
-    let seen = |kw: &str| words.iter().any(|w| eq(w, kw));
-    // SELECT list: SELECT seen but FROM not yet reached.
-    if seen("SELECT") && !seen("FROM") {
-        return Ctx::Attr;
-    }
-    // Predicate / order operand follows these connective words.
-    if let Some(w) = last {
-        if ["WHERE", "AND", "OR", "NOT", "BY"]
-            .iter()
-            .any(|kw| eq(w, kw))
-        {
-            return Ctx::Attr;
-        }
-    }
-    // `FROM OBJECTS` — after consuming OBJECTS, still need a class.
-    let seen_from = seen("FROM");
-    if seen_from {
-        if let Some(from_pos) = words.iter().position(|w| eq(w, "FROM")) {
-            let after_from: Vec<&str> = words[from_pos + 1..].to_vec();
-            // OBJECTS is the only intervening word → class name is still missing.
-            if after_from.len() == 1 && eq(after_from[0], "OBJECTS") {
-                return Ctx::ClassName;
-            }
-        }
-    }
-    Ctx::Keyword
-}
 
 /// A context-aware prefix completer. Holds the dump's class names and instance
 /// field names (both harvested once at REPL startup) and offers, per cursor
@@ -368,6 +38,9 @@ struct OqlCompleter {
     field_names: Vec<String>,
     /// `field_names[i]` lowercased, same index.
     field_lower: Vec<String>,
+    /// Per-class field index for grammar-aware `alias.field` completion.
+    /// Passed to [`crate::query::complete::complete()`] for OQL completion.
+    field_index: crate::query::complete::ClassFieldIndex,
     /// Column names of the most recent query result, shared with run_repl so the
     /// completer can offer column-name completions for !sort, !filter, etc.
     last_cols: Arc<Mutex<Vec<String>>>,
@@ -400,7 +73,11 @@ impl OqlCompleter {
     /// lowercased vectors used for binary-search prefix matching. The lists are
     /// sorted here (idempotent when the caller already sorted them, e.g.
     /// `harvest_names`) so binary search is always valid.
-    fn new(mut class_names: Vec<String>, mut field_names: Vec<String>) -> Self {
+    fn new(
+        mut class_names: Vec<String>,
+        mut field_names: Vec<String>,
+        field_index: crate::query::complete::ClassFieldIndex,
+    ) -> Self {
         class_names.sort_unstable();
         class_names.dedup();
         field_names.sort_unstable();
@@ -412,6 +89,7 @@ impl OqlCompleter {
             class_lower,
             field_names,
             field_lower,
+            field_index,
             last_cols: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -419,9 +97,10 @@ impl OqlCompleter {
     fn new_with_cols(
         class_names: Vec<String>,
         field_names: Vec<String>,
+        field_index: crate::query::complete::ClassFieldIndex,
         last_cols: Arc<Mutex<Vec<String>>>,
     ) -> Self {
-        let mut c = Self::new(class_names, field_names);
+        let mut c = Self::new(class_names, field_names, field_index);
         c.last_cols = last_cols;
         c
     }
@@ -618,6 +297,7 @@ impl Completer for OqlCompleter {
             if !partial.contains(char::is_whitespace) {
                 const META_CMDS: &[&str] = &[
                     "help",
+                    "views",
                     "quit",
                     "q",
                     "exit",
@@ -660,6 +340,8 @@ impl Completer for OqlCompleter {
                     "obj",
                     "history",
                     "run",
+                    "define",
+                    "undefine",
                 ];
                 let lower = partial.to_ascii_lowercase();
                 return META_CMDS
@@ -781,17 +463,80 @@ impl Completer for OqlCompleter {
                 }
             }
         }
-        // `!run <name>` — complete named query names.
+        // `!run <name>` — complete named query names (user views + built-in).
         if let Some(stripped) = upto.strip_prefix("!run ") {
             let partial = stripped.trim_start();
             let lower = partial.to_ascii_lowercase();
             let name_start = upto.len() - partial.len();
-            let matches: Vec<Suggestion> = crate::named_queries::NAMED_QUERIES
+            // User-defined views first.
+            let mut matches: Vec<Suggestion> = USER_VIEWS.with(|uv| {
+                uv.borrow()
+                    .iter()
+                    .filter(|(k, _)| k.to_ascii_lowercase().starts_with(&lower))
+                    .map(|(k, v)| Suggestion {
+                        value: format!("!run {k}"),
+                        description: Some(format!("[user] {v}")),
+                        style: None,
+                        extra: None,
+                        span: Span { start: 0, end: pos },
+                        append_whitespace: true,
+                    })
+                    .collect()
+            });
+            // Built-in views.
+            matches.extend(
+                crate::named_queries::NAMED_QUERIES
+                    .iter()
+                    .filter(|q| q.name.to_ascii_lowercase().starts_with(&lower))
+                    .map(|q| Suggestion {
+                        value: format!("!run {}", q.name),
+                        description: Some(q.display.to_string()),
+                        style: None,
+                        extra: None,
+                        span: Span { start: 0, end: pos },
+                        append_whitespace: true,
+                    }),
+            );
+            if !matches.is_empty() {
+                return matches;
+            }
+            let _ = name_start;
+        }
+        // `!undefine <name>` — complete user view names for deletion.
+        if let Some(stripped) = upto.strip_prefix("!undefine ") {
+            let partial = stripped.trim_start();
+            let lower = partial.to_ascii_lowercase();
+            let matches: Vec<Suggestion> = USER_VIEWS.with(|uv| {
+                uv.borrow()
+                    .keys()
+                    .filter(|k| k.to_ascii_lowercase().starts_with(&lower))
+                    .map(|k| Suggestion {
+                        value: format!("!undefine {k}"),
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span: Span { start: 0, end: pos },
+                        append_whitespace: true,
+                    })
+                    .collect()
+            });
+            if !matches.is_empty() {
+                return matches;
+            }
+        }
+        // `!help <topic>` — complete help topic names.
+        if let Some(stripped) = upto
+            .strip_prefix("!help ")
+            .or_else(|| upto.strip_prefix("!h "))
+        {
+            let partial = stripped.trim_start().to_ascii_lowercase();
+            let topics = HELP_TOPICS;
+            let matches: Vec<Suggestion> = topics
                 .iter()
-                .filter(|q| q.name.to_ascii_lowercase().starts_with(&lower))
-                .map(|q| Suggestion {
-                    value: format!("!run {}", q.name),
-                    description: Some(q.display.to_string()),
+                .filter(|(name, _)| name.starts_with(partial.as_str()))
+                .map(|(name, desc)| Suggestion {
+                    value: format!("!help {name}"),
+                    description: Some(desc.to_string()),
                     style: None,
                     extra: None,
                     span: Span { start: 0, end: pos },
@@ -801,7 +546,6 @@ impl Completer for OqlCompleter {
             if !matches.is_empty() {
                 return matches;
             }
-            let _ = name_start;
         }
         // `!set <key>` — complete setting keys; `!set bytes|color <val>` complete value.
         if let Some(stripped) = upto.strip_prefix("!set") {
@@ -847,166 +591,59 @@ impl Completer for OqlCompleter {
                 }
             }
         }
-        // Delegate /run completion to the WASM-safe free function.
-        if upto.starts_with("/run ") {
-            return crate::query::complete::complete(
-                upto,
-                pos,
-                &self.class_names,
-                &crate::query::complete::ClassFieldIndex::empty(),
-            )
+        // Delegate /run completion to the WASM-safe free function, prepending
+        // user-defined view matches.
+        if let Some(rest) = upto.strip_prefix("/run ") {
+            let partial = rest.trim_start();
+            let lower = partial.to_ascii_lowercase();
+            let mut out: Vec<Suggestion> = USER_VIEWS.with(|uv| {
+                uv.borrow()
+                    .iter()
+                    .filter(|(k, _)| k.to_ascii_lowercase().starts_with(&lower))
+                    .map(|(k, v)| Suggestion {
+                        value: k.clone(),
+                        description: Some(format!("[user] {v}")),
+                        style: None,
+                        extra: Some(vec!["User".to_string()]),
+                        span: Span { start: 5, end: pos },
+                        append_whitespace: true,
+                    })
+                    .collect()
+            });
+            out.extend(
+                crate::query::complete::complete(upto, pos, &self.class_names, &self.field_index)
+                    .into_iter()
+                    .map(|c| Suggestion {
+                        value: c.value,
+                        description: Some(c.display),
+                        style: None,
+                        extra: c.group.map(|g| vec![g]),
+                        span: Span { start: 5, end: pos },
+                        append_whitespace: true,
+                    }),
+            );
+            return out;
+        }
+        // ── OQL completion: delegate to the shared grammar-aware engine ─────
+        // This is the same code path WASM uses, now with a full ClassFieldIndex
+        // so alias.field completions are class-aware.
+        let typed_start = crate::query::complete::completion_typed_start(line, pos);
+        let completions =
+            crate::query::complete::complete(line, pos, &self.class_names, &self.field_index);
+        completions
             .into_iter()
             .map(|c| Suggestion {
                 value: c.value,
-                description: Some(c.display),
+                description: c.description.or(Some(c.display)),
                 style: None,
                 extra: c.group.map(|g| vec![g]),
-                span: Span { start: 5, end: pos },
-                append_whitespace: true,
+                span: Span {
+                    start: typed_start,
+                    end: pos,
+                },
+                append_whitespace: c.trailing_space,
             })
-            .collect();
-        }
-        // Delimit the fragment on whitespace, '(' and ',' so `SELECT a,b` and
-        // `COUNT(x` complete their trailing word.
-        let delim_pos = upto
-            .rfind(|c: char| c.is_whitespace() || c == '(' || c == ',')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let frag = &upto[delim_pos..];
-        let before = &upto[..delim_pos];
-        let ctx = classify_at_with_full(before, frag, delim_pos, Some(line));
-        let lower = frag.to_ascii_lowercase();
-
-        match ctx {
-            Ctx::ClassName => {
-                // Guard: require at least one char before offering class names,
-                // otherwise an empty fragment would dump the entire class list.
-                if frag.is_empty() {
-                    return Vec::new();
-                }
-                // Binary-search the sorted class names for the prefix range; this
-                // is O(log n + matches) instead of scanning every class per key.
-                let mut out = Self::ranged_suggestions(
-                    &self.class_names,
-                    &self.class_lower,
-                    &lower,
-                    "",
-                    delim_pos,
-                    pos,
-                );
-                // Also offer OBJECTS so `FROM O<Tab>` completes it; prepend so the
-                // keyword sorts ahead of same-prefix class names.
-                if "objects".starts_with(&lower) {
-                    out.insert(
-                        0,
-                        Suggestion {
-                            value: "OBJECTS".to_string(),
-                            description: hint_for("OBJECTS"),
-                            style: None,
-                            extra: None,
-                            span: Span {
-                                start: delim_pos,
-                                end: pos,
-                            },
-                            append_whitespace: true,
-                        },
-                    );
-                }
-                out
-            }
-            Ctx::Attr => {
-                // The `@`-fragment sub-case: offer only attributes (the fragment
-                // is non-empty by construction once `@` is typed, so allow it).
-                if frag.starts_with('@') {
-                    return Self::suggestions(ATTRIBUTES.iter().copied(), &lower, delim_pos, pos);
-                }
-                // Empty fragment here is an intentional improvement: offer the full
-                // attr/func set as a menu.
-                let cands = ATTRIBUTES
-                    .iter()
-                    .copied()
-                    .chain(AGG_FUNCS.iter().copied())
-                    .chain(FUNCS.iter().copied());
-                Self::suggestions(cands, &lower, delim_pos, pos)
-            }
-            Ctx::Keyword => {
-                let cands = KEYWORDS.iter().copied().chain(RESERVED.iter().copied());
-                Self::suggestions(cands, &lower, delim_pos, pos)
-            }
-            Ctx::FieldName {
-                dot_prefix,
-                seg_start,
-            } => {
-                // Segment after the last dot is the partial field name.
-                let seg = if seg_start <= pos {
-                    &line[seg_start..pos]
-                } else {
-                    ""
-                };
-                let seg_lower = seg.to_ascii_lowercase();
-                // Binary-search the sorted field names; value is dot_prefix + name.
-                Self::ranged_suggestions(
-                    &self.field_names,
-                    &self.field_lower,
-                    &seg_lower,
-                    &dot_prefix,
-                    delim_pos,
-                    pos,
-                )
-            }
-            Ctx::Method {
-                dot_prefix,
-                seg_start,
-                receiver_class,
-            } => {
-                // Segment after the dot is the partial method/field name being typed.
-                let seg = if seg_start <= pos {
-                    &line[seg_start..pos]
-                } else {
-                    ""
-                };
-                let seg_lower = seg.to_ascii_lowercase();
-                // Offer methods (class-aware ordering, with hints) then field names.
-                // Both are prefixed by dot_prefix so the replacement value is correct.
-                let ordered_methods = methods_ordered_for_class(receiver_class.as_deref());
-                let method_suggestions: Vec<Suggestion> = ordered_methods
-                    .into_iter()
-                    .filter(|m| m.to_ascii_lowercase().starts_with(&seg_lower))
-                    .map(|m| Suggestion {
-                        value: format!("{dot_prefix}{m}"),
-                        description: method_hint(m),
-                        style: None,
-                        extra: None,
-                        span: Span {
-                            start: delim_pos,
-                            end: pos,
-                        },
-                        append_whitespace: true,
-                    })
-                    .collect();
-                // Field names via binary search (sorted), prefixed by dot_prefix.
-                let field_suggestions = Self::ranged_suggestions(
-                    &self.field_names,
-                    &self.field_lower,
-                    &seg_lower,
-                    &dot_prefix,
-                    delim_pos,
-                    pos,
-                );
-                method_suggestions
-                    .into_iter()
-                    .chain(field_suggestions)
-                    .collect()
-            }
-            Ctx::AfterAs => {
-                // After `AS` in the select list, only `RETAINED` is useful.
-                Self::suggestions(std::iter::once("RETAINED"), &lower, delim_pos, pos)
-            }
-            Ctx::AfterRetained => {
-                // After `AS RETAINED`, `SET` closes the modifier.
-                Self::suggestions(std::iter::once("SET"), &lower, delim_pos, pos)
-            }
-        }
+            .collect()
     }
 }
 
@@ -1018,11 +655,13 @@ impl Completer for OqlCompleter {
 pub fn build_editor(
     class_names: Vec<String>,
     field_names: Vec<String>,
+    field_index: crate::query::complete::ClassFieldIndex,
     last_cols: Arc<Mutex<Vec<String>>>,
 ) -> Reedline {
     let completer = Box::new(OqlCompleter::new_with_cols(
         class_names,
         field_names,
+        field_index,
         last_cols,
     ));
     let completion_menu = Box::new(ColumnarMenu::default().with_name("completion_menu"));
@@ -1056,6 +695,106 @@ fn history_path() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".hprof_oql_history"))
 }
 
+// ── Config file: user-defined views and persistent settings ──────────────────
+
+/// Config directory: `$XDG_CONFIG_HOME/hprof-analyzer` or `~/.config/hprof-analyzer`.
+fn config_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+        .map(|d| d.join("hprof-analyzer"))
+}
+
+/// Path to the config file: `<config_dir>/config.toml`.
+fn config_path() -> Option<std::path::PathBuf> {
+    config_dir().map(|d| d.join("config.toml"))
+}
+
+/// User-defined named views loaded from the config file.
+/// Keys are view names (kebab-case), values are OQL strings.
+type UserViews = std::collections::BTreeMap<String, String>;
+
+/// Load user views from the config file. Returns empty map on any failure.
+fn load_user_views() -> UserViews {
+    let path = match config_path() {
+        Some(p) if p.exists() => p,
+        _ => return UserViews::new(),
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return UserViews::new(),
+    };
+    // Parse as a TOML table and extract [views] section.
+    let table: toml::Table = match text.parse() {
+        Ok(t) => t,
+        Err(_) => return UserViews::new(),
+    };
+    let views = match table.get("views").and_then(|v| v.as_table()) {
+        Some(t) => t,
+        None => return UserViews::new(),
+    };
+    views
+        .iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+        .collect()
+}
+
+/// Persist user views to the config file. Preserves other sections.
+fn save_user_views(views: &UserViews) {
+    let Some(path) = config_path() else { return };
+    // Ensure the directory exists.
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Read existing config to preserve non-[views] sections.
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut table: toml::Table = existing.parse().unwrap_or_default();
+
+    // Build the [views] table.
+    let mut views_table = toml::Table::new();
+    for (k, v) in views {
+        views_table.insert(k.clone(), toml::Value::String(v.clone()));
+    }
+    table.insert("views".to_string(), toml::Value::Table(views_table));
+
+    // Write back.  toml::Table implements Display via the `parse` feature.
+    // Since we only have the `parse` feature, serialise manually.
+    let mut out = String::new();
+    // Write [views] section first.
+    if let Some(toml::Value::Table(vt)) = table.get("views") {
+        if !vt.is_empty() {
+            out.push_str("[views]\n");
+            for (k, v) in vt {
+                if let Some(s) = v.as_str() {
+                    // Escape backslashes and quotes for TOML string.
+                    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                    out.push_str(&format!("{k} = \"{escaped}\"\n"));
+                }
+            }
+            out.push('\n');
+        }
+    }
+    // Write [settings] section if present.
+    if let Some(toml::Value::Table(st)) = table.get("settings") {
+        if !st.is_empty() {
+            out.push_str("[settings]\n");
+            for (k, v) in st {
+                match v {
+                    toml::Value::String(s) => {
+                        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                        out.push_str(&format!("{k} = \"{escaped}\"\n"));
+                    }
+                    toml::Value::Integer(n) => out.push_str(&format!("{k} = {n}\n")),
+                    toml::Value::Boolean(b) => out.push_str(&format!("{k} = {b}\n")),
+                    _ => {}
+                }
+            }
+            out.push('\n');
+        }
+    }
+    let _ = std::fs::write(&path, out);
+}
+
 /// Run pass1 over the dump once to collect:
 /// - a sorted, deduped list of dotted class names for FROM/INSTANCEOF completion.
 /// - a sorted, deduped union of all instance field names across all classes.
@@ -1063,7 +802,13 @@ fn history_path() -> Option<std::path::PathBuf> {
 /// On failure, warn once to stderr and return empty lists so the REPL still
 /// completes keywords/attributes. Pass1 is run ONCE; both name sets are harvested
 /// from the same result to avoid a second scan.
-pub(crate) fn harvest_names(path: &str) -> (Vec<String>, Vec<String>) {
+pub(crate) fn harvest_names(
+    path: &str,
+) -> (
+    Vec<String>,
+    Vec<String>,
+    crate::query::complete::ClassFieldIndex,
+) {
     match crate::pass1::Pass1::run(&crate::source::HprofSource::from(path), false) {
         Ok(p) => {
             let mut class_names: Vec<String> = p
@@ -1088,11 +833,18 @@ pub(crate) fn harvest_names(path: &str) -> (Vec<String>, Vec<String>) {
             field_names.sort_unstable();
             field_names.dedup();
 
-            (class_names, field_names)
+            // Per-class field index for grammar-aware alias.field completion.
+            let field_index = crate::query::complete::ClassFieldIndex::build(&p);
+
+            (class_names, field_names, field_index)
         }
         Err(e) => {
             eprintln!("warning: could not harvest names for completion: {e}");
-            (Vec::new(), Vec::new())
+            (
+                Vec::new(),
+                Vec::new(),
+                crate::query::complete::ClassFieldIndex::empty(),
+            )
         }
     }
 }
@@ -1123,6 +875,8 @@ impl Default for ReplSettings {
 
 thread_local! {
     static SESSION_SETTINGS: RefCell<ReplSettings> = RefCell::new(ReplSettings::default());
+    /// User-defined named views (persistent across sessions via config file).
+    static USER_VIEWS: RefCell<UserViews> = const { RefCell::new(UserViews::new()) };
 }
 
 /// REPL-02: reset thread-local settings for test isolation.
@@ -1141,7 +895,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     // Harvest class names and field names once for completion. This pass1 is
     // cheap (no heap-object scan) and independent of the per-query pass1+pass2.
     // On I/O failure, warn and proceed with empty lists rather than crashing.
-    let (class_names, field_names) = harvest_names(path);
+    let (class_names, field_names, field_index) = harvest_names(path);
     // Keep our own copies for the `!classes`/`!fields` listing commands (the
     // completer takes ownership of the originals).
     let names_for_meta = (class_names.clone(), field_names.clone());
@@ -1179,17 +933,30 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     } else {
         String::new()
     };
-    writeln!(stdout, "{cb}{cc}hprof-analyzer{cr}{cc} OQL REPL{cr}")?;
+    let dump_display = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path)
+        .to_string();
+    let view_count = crate::named_queries::NAMED_QUERIES.len();
     writeln!(
         stdout,
-        "{cd} └─ {} classes, {} field names{hist_note}  ·  !help for commands  ·  !quit to exit{cr}",
+        "{cb}{cc}hprof-analyzer{cr}{cc} OQL REPL{cr}  {cd}— {dump_display}{cr}"
+    )?;
+    writeln!(stdout, "{cd} └─ {path}{cr}")?;
+    writeln!(
+        stdout,
+        "{cd} └─ {} classes, {} field names{hist_note}  ·  /views = {view_count} views  ·  !help [topic]  ·  !quit{cr}",
         fmt_int(names_for_meta.0.len() as i64),
         fmt_int(names_for_meta.1.len() as i64)
     )?;
     writeln!(
         stdout,
-        "{cd}    Tab = complete  ·  Ctrl+R = history search  ·  mode: reachable-only (MAT parity){cr}\n"
+        "{cd}    Tab = complete  ·  Ctrl+R = history search  ·  run a view: /run <name> or type its bare name{cr}"
     )?;
+    print_views_brief(&mut stdout)?;
+    writeln!(stdout)?;
+    writeln!(stdout, "{cd}    mode: reachable-only (MAT parity){cr}\n")?;
     let mut buffer_lines: Vec<String> = Vec::new();
 
     // When stdin is not a TTY (e.g. piped in tests), skip reedline entirely and
@@ -1220,8 +987,26 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     }
 
     let last_cols: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let mut line_editor = build_editor(class_names, field_names, Arc::clone(&last_cols));
-    let prompt = DefaultPrompt::default();
+    // Load user-defined views from config file into the thread-local.
+    let loaded = load_user_views();
+    let uv_count = loaded.len();
+    USER_VIEWS.with(|uv| *uv.borrow_mut() = loaded);
+    if uv_count > 0 {
+        writeln!(
+            stdout,
+            "{cd}    {uv_count} user-defined view(s) loaded from config{cr}"
+        )?;
+    }
+    let mut line_editor = build_editor(
+        class_names,
+        field_names,
+        field_index,
+        Arc::clone(&last_cols),
+    );
+    let prompt = DefaultPrompt::new(
+        DefaultPromptSegment::Basic(dump_display.clone()),
+        DefaultPromptSegment::Empty,
+    );
     loop {
         // Sync column names into the shared Arc so the completer can offer them.
         if let Ok(mut lc) = last_cols.lock() {
@@ -1838,6 +1623,16 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "define" => {
+                            handle_define(rest, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "undefine" => {
+                            handle_undefine(rest, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         "describe" => {
                             handle_describe(
                                 rest.trim(),
@@ -2299,11 +2094,44 @@ fn run_repl_line(
         ("", "", "", "", "", "")
     };
     let t = line.trim();
-    // /run <name> — dispatch a named query
+    // /run <name> — dispatch a named query. A unique case-insensitive PREFIX
+    // match is accepted so `/run thr` works without typing the full name.
+    // User views are checked alongside built-ins; dispatch_run handles priority.
     if buffer_lines.is_empty() && t.starts_with("/run") {
         let rest = t[4..].trim();
+        // Check for exact match in user views or built-ins.
+        let user_exact =
+            USER_VIEWS.with(|uv| uv.borrow().keys().find(|k| k.as_str() == rest).cloned());
+        let builtin_exact = crate::named_queries::NAMED_QUERIES
+            .iter()
+            .any(|q| q.name == rest);
+        let resolved = if user_exact.is_some() || builtin_exact {
+            rest.to_string()
+        } else {
+            let lower = rest.to_ascii_lowercase();
+            let user_prefix: Vec<String> = USER_VIEWS.with(|uv| {
+                uv.borrow()
+                    .keys()
+                    .filter(|k| k.to_ascii_lowercase().starts_with(&lower))
+                    .cloned()
+                    .collect()
+            });
+            let builtin_prefix: Vec<&str> = crate::named_queries::NAMED_QUERIES
+                .iter()
+                .filter(|q| q.name.to_ascii_lowercase().starts_with(&lower))
+                .map(|q| q.name)
+                .collect();
+            let total = user_prefix.len() + builtin_prefix.len();
+            if rest.is_empty() || total != 1 {
+                rest.to_string()
+            } else if let Some(n) = user_prefix.into_iter().next() {
+                n
+            } else {
+                builtin_prefix[0].to_string()
+            }
+        };
         return dispatch_run(
-            rest,
+            &resolved,
             path,
             path_depth,
             *reachable_only,
@@ -2320,6 +2148,113 @@ fn run_repl_line(
         out.flush()?;
         return Ok(false);
     }
+    // /views [filter] — list built-in views (optionally substring-filtered)
+    if buffer_lines.is_empty() && t == "/views" || t.starts_with("/views ") {
+        let filter = t
+            .strip_prefix("/views")
+            .map(|r| r.trim())
+            .filter(|f| !f.is_empty());
+        print_named_queries_help_filtered(out, filter)?;
+        out.flush()?;
+        return Ok(false);
+    }
+    // Bare view name — typing a user or built-in view's name (or a unique
+    // prefix of one) runs it directly, no /run prefix needed. Valid OQL always
+    // starts with SELECT/WITH/(, so such a line could never have been a query.
+    // User views are checked first and shadow built-ins with the same name.
+    if buffer_lines.is_empty()
+        && t.len() >= 2
+        && !t.starts_with('/')
+        && !t.starts_with('!')
+        && !t.starts_with('-')
+        && !t.starts_with('(')
+    {
+        // Check user views first (exact match).
+        let user_exact = USER_VIEWS.with(|uv| {
+            let views = uv.borrow();
+            views.keys().find(|k| k.eq_ignore_ascii_case(t)).cloned()
+        });
+        if let Some(name) = user_exact {
+            return dispatch_run(
+                &name,
+                path,
+                path_depth,
+                *reachable_only,
+                *max_width,
+                last_query,
+                last_result,
+                cache,
+                out,
+            );
+        }
+        let exact = crate::named_queries::NAMED_QUERIES
+            .iter()
+            .find(|q| q.name.eq_ignore_ascii_case(t))
+            .map(|q| q.name);
+        let lower_t = t.to_ascii_lowercase();
+        // Collect prefix matches from both user views and built-ins.
+        let user_prefix: Vec<String> = USER_VIEWS.with(|uv| {
+            uv.borrow()
+                .keys()
+                .filter(|k| k.to_ascii_lowercase().starts_with(&lower_t))
+                .cloned()
+                .collect()
+        });
+        let builtin_prefix: Vec<&str> = crate::named_queries::NAMED_QUERIES
+            .iter()
+            .filter(|q| q.name.to_ascii_lowercase().starts_with(&lower_t))
+            .map(|q| q.name)
+            .collect();
+        if let Some(name) = exact {
+            return dispatch_run(
+                name,
+                path,
+                path_depth,
+                *reachable_only,
+                *max_width,
+                last_query,
+                last_result,
+                cache,
+                out,
+            );
+        }
+        let total_prefix = user_prefix.len() + builtin_prefix.len();
+        if total_prefix == 1 {
+            let resolved = if let Some(n) = user_prefix.first() {
+                n.as_str()
+            } else {
+                builtin_prefix[0]
+            };
+            return dispatch_run(
+                resolved,
+                path,
+                path_depth,
+                *reachable_only,
+                *max_width,
+                last_query,
+                last_result,
+                cache,
+                out,
+            );
+        }
+        if total_prefix > 1 {
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            let (cy, cr) = if color {
+                ("\x1b[33m", "\x1b[0m")
+            } else {
+                ("", "")
+            };
+            let mut all: Vec<String> = user_prefix;
+            all.extend(builtin_prefix.iter().map(|s| s.to_string()));
+            writeln!(
+                out,
+                "{cy}ambiguous view prefix {t:?}{cr} — candidates: {}{cr}",
+                all.join(", ")
+            )?;
+            out.flush()?;
+            return Ok(false);
+        }
+    }
     if buffer_lines.is_empty() && t.starts_with('!') {
         let cmd = &t[1..];
         let (verb, rest) = match cmd.split_once(char::is_whitespace) {
@@ -2334,6 +2269,21 @@ fn run_repl_line(
             }
             "width" => {
                 handle_width(rest, max_width, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "views" => {
+                print_named_queries_help_filtered(out, None)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "define" => {
+                handle_define(rest, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "undefine" => {
+                handle_undefine(rest, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -3103,18 +3053,54 @@ fn dispatch_run(
     cache: &mut Option<crate::query::run::ReplCache>,
     out: &mut impl Write,
 ) -> io::Result<bool> {
+    // Check user-defined views first (they shadow built-ins with the same name).
+    let user_oql = USER_VIEWS.with(|uv| uv.borrow().get(name).cloned());
+    if let Some(oql) = user_oql {
+        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+        let (cd, cc, cr) = if color {
+            ("\x1b[2m", "\x1b[36m", "\x1b[0m")
+        } else {
+            ("", "", "")
+        };
+        writeln!(out, "{cd}↳ {cc}[user]{cr} {cd}{}{cr}", oql)?;
+        if let Some(res) = run_and_print(
+            path,
+            &oql,
+            path_depth,
+            reachable_only,
+            max_width,
+            cache,
+            out,
+        )? {
+            *last_query = Some(oql);
+            *last_result = Some(res);
+        }
+        out.flush()?;
+        return Ok(false);
+    }
     let nq = crate::named_queries::NAMED_QUERIES
         .iter()
         .find(|q| q.name == name);
     match nq {
         None => {
             let name_lower = name.to_ascii_lowercase();
-            let candidates: Vec<&str> = crate::named_queries::NAMED_QUERIES
+            // Search user views too for fuzzy matches.
+            let mut candidates: Vec<String> = USER_VIEWS.with(|uv| {
+                uv.borrow()
+                    .keys()
+                    .filter(|k| k.to_ascii_lowercase().contains(&name_lower))
+                    .take(3)
+                    .map(|k| format!("{k} [user]"))
+                    .collect()
+            });
+            let built_in: Vec<String> = crate::named_queries::NAMED_QUERIES
                 .iter()
                 .filter(|q| q.name.to_ascii_lowercase().contains(&name_lower))
-                .map(|q| q.name)
+                .map(|q| q.name.to_string())
                 .take(3)
                 .collect();
+            candidates.extend(built_in);
+            candidates.truncate(5);
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
             let (cd, ce, cr) = if color {
                 ("\x1b[2m", "\x1b[31m", "\x1b[0m")
@@ -3152,6 +3138,212 @@ fn dispatch_run(
     }
     out.flush()?;
     Ok(false)
+}
+
+// ── !define / !undefine ──────────────────────────────────────────────────────
+
+/// `!define <name> <oql>` — create or overwrite a user-defined named view.
+/// The view is stored in the thread-local and persisted to the config file.
+fn handle_define(rest: &str, out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, cc, cg, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[36m", "\x1b[32m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
+    // Split into name + oql at the first whitespace.
+    let (name, oql) = match rest.split_once(char::is_whitespace) {
+        Some((n, o)) => (n.trim(), o.trim()),
+        None => {
+            if rest.is_empty() {
+                writeln!(out, "{ce}usage: !define <name> <OQL>{cr}")?;
+                writeln!(
+                    out,
+                    "{cd}  example: !define big-strings SELECT * FROM java.lang.String s WHERE s.value.length > 1000 LIMIT 50{cr}"
+                )?;
+            } else {
+                writeln!(
+                    out,
+                    "{ce}error: missing OQL query after name {:?}{cr}",
+                    rest
+                )?;
+            }
+            return Ok(());
+        }
+    };
+    // Validate name: must be non-empty, no whitespace, reasonable length.
+    if name.is_empty() || name.len() > 64 {
+        writeln!(out, "{ce}error: view name must be 1–64 characters{cr}")?;
+        return Ok(());
+    }
+    // Check for collision with a built-in view.
+    let shadows_builtin = crate::named_queries::NAMED_QUERIES
+        .iter()
+        .any(|q| q.name == name);
+    USER_VIEWS.with(|uv| {
+        let mut views = uv.borrow_mut();
+        let was_update = views.contains_key(name);
+        views.insert(name.to_string(), oql.to_string());
+        save_user_views(&views);
+        if was_update {
+            let _ = writeln!(out, "{cg}updated{cr} view {cc}{name}{cr}");
+        } else {
+            let _ = writeln!(out, "{cg}defined{cr} view {cc}{name}{cr}");
+        }
+    });
+    if shadows_builtin {
+        writeln!(out, "{cd}  (shadows built-in view with the same name){cr}")?;
+    }
+    writeln!(
+        out,
+        "{cd}  run with: !run {name}  or  /run {name}  or just type: {name}{cr}"
+    )?;
+    Ok(())
+}
+
+/// `!undefine <name>` — remove a user-defined view.
+fn handle_undefine(rest: &str, out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, cc, cg, ce, cr) = if color {
+        ("\x1b[2m", "\x1b[36m", "\x1b[32m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
+    let name = rest.trim();
+    if name.is_empty() {
+        writeln!(out, "{ce}usage: !undefine <name>{cr}")?;
+        let names: Vec<String> = USER_VIEWS.with(|uv| uv.borrow().keys().cloned().collect());
+        if !names.is_empty() {
+            writeln!(out, "{cd}  your views: {}{cr}", names.join(", "))?;
+        }
+        return Ok(());
+    }
+    let removed = USER_VIEWS.with(|uv| {
+        let mut views = uv.borrow_mut();
+        let had = views.remove(name).is_some();
+        if had {
+            save_user_views(&views);
+        }
+        had
+    });
+    if removed {
+        writeln!(out, "{cg}removed{cr} view {cc}{name}{cr}")?;
+    } else {
+        writeln!(out, "{ce}error: no user view named {:?}{cr}", name)?;
+        let names: Vec<String> = USER_VIEWS.with(|uv| uv.borrow().keys().cloned().collect());
+        if !names.is_empty() {
+            writeln!(out, "{cd}  your views: {}{cr}", names.join(", "))?;
+        }
+    }
+    Ok(())
+}
+
+/// Compact views overview for the REPL startup banner: one line per group.
+fn print_views_brief(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, cr) = if color {
+        ("\x1b[2m", "\x1b[0m")
+    } else {
+        ("", "")
+    };
+    writeln!(
+        out,
+        "{cd}    Views (run with /run <name> — a unique prefix or the bare name works):{cr}"
+    )?;
+    let mut group = "";
+    let mut line = String::new();
+    for nq in crate::named_queries::NAMED_QUERIES {
+        if nq.group != group {
+            if !line.is_empty() {
+                writeln!(out, "{cd}      {line}{cr}")?;
+            }
+            group = nq.group;
+            line = format!("{}: ", group);
+        }
+        if !line.ends_with(": ") {
+            line.push_str(", ");
+        }
+        line.push_str(nq.name);
+    }
+    if !line.is_empty() {
+        writeln!(out, "{cd}      {line}{cr}")?;
+    }
+    Ok(())
+}
+
+/// `/views [filter]` — grouped view list with descriptions, optionally
+/// substring-filtered on name or description.
+fn print_named_queries_help_filtered(out: &mut impl Write, filter: Option<&str>) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, cc, cd, cy, cr) = if color {
+        ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[33m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
+    let filter_l = filter.map(|f| f.to_ascii_lowercase());
+    let matches = |nq: &crate::named_queries::NamedQuery| match &filter_l {
+        None => true,
+        Some(f) => {
+            nq.name.to_ascii_lowercase().contains(f)
+                || nq.display.to_ascii_lowercase().contains(f)
+                || nq.group.to_ascii_lowercase().contains(f)
+        }
+    };
+    let count = crate::named_queries::NAMED_QUERIES
+        .iter()
+        .filter(|nq| matches(nq))
+        .count();
+    match filter {
+        Some(f) => writeln!(out, "{cb}Named views{cr} matching {cc}{f:?}{cr} ({count}):")?,
+        None => writeln!(out, "{cb}Built-in views{cr} ({count}):")?,
+    }
+    writeln!(
+        out,
+        "{cd}  run with /run <name> (unique prefix or the bare name works) or !run <name>{cr}"
+    )?;
+    let mut group = "";
+    for nq in crate::named_queries::NAMED_QUERIES {
+        if !matches(nq) {
+            continue;
+        }
+        if nq.group != group {
+            group = nq.group;
+            writeln!(out, "\n  {cd}{group}{cr}")?;
+        }
+        let suffix = if nq.needs_retained {
+            format!("  {cy}[needs full analysis]{cr}")
+        } else {
+            String::new()
+        };
+        writeln!(out, "    {cc}{:<40}{cr}  {}{}", nq.name, nq.display, suffix)?;
+    }
+    // Show user-defined views.
+    let user_views: Vec<(String, String)> = USER_VIEWS.with(|uv| {
+        let views = uv.borrow();
+        views
+            .iter()
+            .filter(|(k, v)| match &filter_l {
+                None => true,
+                Some(f) => k.to_ascii_lowercase().contains(f) || v.to_ascii_lowercase().contains(f),
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    });
+    if !user_views.is_empty() {
+        writeln!(
+            out,
+            "\n  {cd}User-defined views{cr} ({}):",
+            user_views.len()
+        )?;
+        for (name, oql) in &user_views {
+            writeln!(out, "    {cc}{:<40}{cr}  {cd}{}{cr}", name, oql)?;
+        }
+        writeln!(
+            out,
+            "{cd}  (!define <name> <oql> to add, !undefine <name> to remove){cr}"
+        )?;
+    }
+    Ok(())
 }
 
 fn print_named_queries_help(out: &mut impl Write) -> io::Result<()> {
@@ -4943,6 +5135,1036 @@ fn handle_row(
     Ok(())
 }
 
+// ── Help system ─────────────────────────────────────────────────────────────
+//
+// `!help`          → overview with all commands and pointers to sub-topics
+// `!help <topic>`  → detailed help on a topic (oql, views, filter, sort,
+//                    export, set, history, explore, shape, inspect)
+
+/// Dispatch `!help [topic]` to the right sub-help or the overview.
+fn print_help(topic: &str, out: &mut impl Write) -> io::Result<()> {
+    match topic.trim().to_ascii_lowercase().as_str() {
+        "" => print_help_overview(out),
+        "oql" | "language" | "syntax" | "query" => print_oql_ref(out),
+        "views" | "view" | "run" | "define" => print_help_views(out),
+        "filter" | "grep" | "not" | "exclude" | "search" => print_help_filter(out),
+        "sort" | "order" => print_help_sort(out),
+        "export" | "save" | "csv" | "json" | "tsv" => print_help_export(out),
+        "set" | "settings" | "config" | "width" | "display" => print_help_settings(out),
+        "history" | "hist" => print_help_history(out),
+        "explore" | "classes" | "fields" | "describe" | "heap" | "obj" => print_help_explore(out),
+        "shape" | "shaping" | "select" | "drop" | "rename" | "distinct" | "dedup" | "sample"
+        | "top" | "head" | "tail" | "unique" | "pivot" | "undo" => print_help_shape(out),
+        "inspect" | "row" | "cols" | "columns" | "stats" | "wc" | "count" => {
+            print_help_inspect(out)
+        }
+        "keys" | "keyboard" | "shortcuts" | "keybindings" => print_help_keys(out),
+        "tips" | "workflow" | "examples" => print_help_tips(out),
+        other => {
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            let (ce, cd, cc, cr) = if color {
+                ("\x1b[31m", "\x1b[2m", "\x1b[36m", "\x1b[0m")
+            } else {
+                ("", "", "", "")
+            };
+            writeln!(out, "{ce}unknown help topic: {:?}{cr}", other)?;
+            writeln!(out, "{cd}available topics:{cr}")?;
+            for &(name, desc) in HELP_TOPICS {
+                writeln!(out, "  {cc}!help {:<12}{cr} {cd}{}{cr}", name, desc)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+const HELP_TOPICS: &[(&str, &str)] = &[
+    (
+        "oql",
+        "OQL language reference (keywords, functions, syntax)",
+    ),
+    ("views", "named views: running, defining, listing"),
+    (
+        "explore",
+        "heap exploration: classes, fields, describe, obj",
+    ),
+    ("inspect", "inspecting results: count, cols, stats, row"),
+    (
+        "shape",
+        "shaping results: filter, sort, select, distinct, …",
+    ),
+    ("filter", "filtering and searching rows"),
+    ("sort", "sorting rows by column"),
+    ("export", "exporting to CSV, TSV, JSON"),
+    ("set", "display settings: limit, bytes, color, null, width"),
+    ("history", "command history and re-running"),
+    ("keys", "keyboard shortcuts"),
+    ("tips", "workflow tips and recipes"),
+];
+
+fn print_help_overview(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cr) = if color {
+        ("\x1b[1m", "\x1b[1;33m", "\x1b[36m", "\x1b[2m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
+    macro_rules! h {
+        ($t:literal) => {
+            writeln!(out, "\n{ch}{}{cr}", $t)?;
+        };
+    }
+    macro_rules! c {
+        ($c:literal, $d:literal) => {
+            writeln!(out, "  {cc}{:<32}{cr} {}", $c, $d)?;
+        };
+    }
+
+    writeln!(
+        out,
+        "{cb}OQL REPL — Command Reference{cr}  {cd}(all commands start with ! or /){cr}"
+    )?;
+    writeln!(
+        out,
+        "{cd}  type {cc}!help <topic>{cd} for details  ·  topics: oql, views, explore, inspect, shape, filter, sort, export, set, history, keys, tips{cr}"
+    )?;
+
+    h!("Running queries");
+    c!(
+        "<OQL>",
+        "enter a query (multi-line: end with ; or blank line)"
+    );
+    c!("!last", "re-run the previous query");
+    c!(
+        "!count [class | OQL]",
+        "instance count, or row count of last result"
+    );
+    c!("!plan <OQL>", "show query plan without executing");
+    c!("!run <name>", "run a named view (prefix match works)");
+    c!("/run <name>", "same as !run (slash shortcut)");
+    c!("<name>", "bare view name also works — just type it");
+
+    h!("User-defined views                    !help views");
+    c!(
+        "!define <name> <OQL>",
+        "create/update a persistent user view"
+    );
+    c!("!undefine <name>", "remove a user view");
+    c!("/views [filter]", "list all views (built-in + user)");
+
+    h!("Heap exploration                      !help explore");
+    c!("!classes [pat]", "list class names");
+    c!("!fields [pat]", "list field names");
+    c!("!describe <class>", "show fields, types, superclass");
+    c!("!obj <class>#<N>", "inspect a single object by index");
+    c!("!reachable / !all / !mode", "GC-reachability mode");
+
+    h!("Inspecting results                    !help inspect");
+    c!("!count / !wc [col]", "row × col shape, or non-null count");
+    c!("!cols", "columns with type and fill rate");
+    c!("!row [N|first|last|next|prev]", "detail view of one row");
+    c!("!stats [col]", "min/max/mean/p50/p90/p99/sum");
+    c!("!history [N]", "past queries (re-run with !N)");
+
+    h!("Shaping results                       !help shape");
+    c!("!filter <pat>", "keep matching rows (substring or /regex/)");
+    c!("!not <pat>", "exclude matching rows");
+    c!("!sort <col>", "sort (prefix - for desc, comma for multi)");
+    c!("!select <cols> / !drop <cols>", "keep or remove columns");
+    c!("!rename <old> <new>", "rename a column");
+    c!("!distinct / !sample [N]", "dedup or random sample");
+    c!("!top [N] / !tail [N]", "first/last N rows");
+    c!("!unique <col> / !pivot <col>", "value counts / group-by");
+    c!("!undo", "undo last shaping command");
+
+    h!("Exporting                             !help export");
+    c!("!save <file> [OQL]", "write CSV/TSV/JSON (by extension)");
+    c!("!export [csv|tsv|json] [file]", "to stdout or file");
+
+    h!("Display settings                      !help set");
+    c!("!set", "show current settings");
+    c!(
+        "!set limit N / bytes / color / null",
+        "change display options"
+    );
+    c!("!width [N]", "cell width cap");
+
+    h!("Session");
+    c!("!help [topic]", "this help, or a specific topic");
+    c!("!help oql", "OQL language reference");
+    c!("!quit / Ctrl-D", "exit");
+
+    writeln!(out)?;
+    writeln!(
+        out,
+        "  {cd}Keyboard: Tab = complete  ·  Ctrl-R = history search  ·  ↑↓ = previous/next{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}Multi-line queries: end with ; or a blank line. Column args accept names, numbers, or ranges (1-3).{cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_views(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cg, cr) = if color {
+        (
+            "\x1b[1m",
+            "\x1b[1;33m",
+            "\x1b[36m",
+            "\x1b[2m",
+            "\x1b[32m",
+            "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
+    writeln!(
+        out,
+        "{cb}Named Views{cr}  {cd}(pre-written queries you can run by name){cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Running a view{cr}")?;
+    writeln!(out, "  {cc}!run <name>{cr}         run a named view")?;
+    writeln!(
+        out,
+        "  {cc}/run <name>{cr}         same thing, slash shortcut"
+    )?;
+    writeln!(
+        out,
+        "  {cc}<name>{cr}              just type the name — bare names work too"
+    )?;
+    writeln!(
+        out,
+        "  {cd}Prefix matching: typing a unique prefix is enough (e.g. {cc}thr{cd} → {cc}threads{cd}){cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Listing views{cr}")?;
+    writeln!(
+        out,
+        "  {cc}/views{cr}              list all views (built-in + user-defined)"
+    )?;
+    writeln!(out, "  {cc}/views <filter>{cr}     filter by substring")?;
+    writeln!(
+        out,
+        "  {cc}!run{cr}                also lists all views (when no name given)"
+    )?;
+
+    writeln!(
+        out,
+        "\n{ch}User-defined views{cr}  {cd}(saved to ~/.config/hprof-analyzer/config.toml){cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!define <name> <OQL>{cr}   create or overwrite a user view"
+    )?;
+    writeln!(out, "  {cc}!undefine <name>{cr}       remove a user view")?;
+    writeln!(
+        out,
+        "  {cd}User views shadow built-ins with the same name.{cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Examples{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!define big-strings{cr} {cd}SELECT * FROM java.lang.String s WHERE s.value.length > 1000 LIMIT 50{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!define my-threads{cr}  {cd}SELECT s.name, s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC{cr}"
+    )?;
+    writeln!(out, "  {cg}!run big-strings{cr}")?;
+    writeln!(
+        out,
+        "  {cg}big-strings{cr}         {cd}← bare name works{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}big{cr}                 {cd}← unique prefix works too{cr}"
+    )?;
+    writeln!(out, "  {cg}!undefine big-strings{cr}")?;
+
+    writeln!(out, "\n{ch}Tab completion{cr}")?;
+    writeln!(
+        out,
+        "  {cd}!run <Tab>{cd}  and  /run <Tab>  complete both user and built-in view names.{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}!undefine <Tab>  completes user view names only.{cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_filter(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cg, cr) = if color {
+        (
+            "\x1b[1m",
+            "\x1b[1;33m",
+            "\x1b[36m",
+            "\x1b[2m",
+            "\x1b[32m",
+            "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
+    writeln!(
+        out,
+        "{cb}Filtering & Searching{cr}  {cd}(narrow rows in the current result){cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Commands{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!filter <pat>{cr}          keep rows where ANY column matches"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!filter @<col> <pat>{cr}   keep rows where a SPECIFIC column matches"
+    )?;
+    writeln!(out, "  {cc}!grep{cr}                  alias for !filter")?;
+    writeln!(
+        out,
+        "  {cc}!not <pat>{cr}             exclude matching rows (inverse)"
+    )?;
+    writeln!(out, "  {cc}!exclude <pat>{cr}         alias for !not")?;
+
+    writeln!(out, "\n{ch}Patterns{cr}")?;
+    writeln!(
+        out,
+        "  {cd}Plain text:{cr}    case-insensitive substring match"
+    )?;
+    writeln!(
+        out,
+        "  {cd}Regex:{cr}         wrap in slashes: {cc}/pattern/{cr}"
+    )?;
+    writeln!(out, "  {cd}Regex (ci):{cr}    append i: {cc}/pattern/i{cr}")?;
+
+    writeln!(out, "\n{ch}Examples{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!filter Thread{cr}              {cd}rows mentioning \"Thread\" in any column{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!filter @className Thread{cr}   {cd}only in the className column{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!filter /^java\\.lang/{cr}       {cd}regex: starts with java.lang{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!filter /thread/i{cr}           {cd}case-insensitive regex{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!not null{cr}                   {cd}remove rows containing \"null\"{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!not @size 0{cr}                {cd}remove rows where size column contains \"0\"{cr}"
+    )?;
+
+    writeln!(
+        out,
+        "\n  {cd}Tip: !undo reverses the last filter. Chain filters to narrow progressively.{cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_sort(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cg, cr) = if color {
+        (
+            "\x1b[1m",
+            "\x1b[1;33m",
+            "\x1b[36m",
+            "\x1b[2m",
+            "\x1b[32m",
+            "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
+    writeln!(
+        out,
+        "{cb}Sorting{cr}  {cd}(reorder rows in the current result){cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Syntax{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!sort <col>{cr}            sort ascending by column"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!sort -<col>{cr}           sort descending (- prefix)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!sort <col1>,<col2>{cr}    multi-column sort (comma-separated)"
+    )?;
+
+    writeln!(out, "\n{ch}Examples{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!sort name{cr}              {cd}alphabetical by name{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!sort -retainedHeap{cr}     {cd}biggest retained heap first{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!sort className,-size{cr}   {cd}by class asc, then size desc{cr}"
+    )?;
+
+    writeln!(
+        out,
+        "\n  {cd}Numeric columns sort numerically; strings sort lexicographically.{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}Column names are Tab-completed. !undo reverses the sort.{cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_export(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cg, cr) = if color {
+        (
+            "\x1b[1m",
+            "\x1b[1;33m",
+            "\x1b[36m",
+            "\x1b[2m",
+            "\x1b[32m",
+            "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
+    writeln!(
+        out,
+        "{cb}Exporting{cr}  {cd}(save results to files or stdout){cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Commands{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!save <file>{cr}                   save last result (format by extension)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!save <file> <OQL>{cr}             run query and save to file"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!export{cr}                        print last result as CSV to stdout"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!export csv|tsv|json{cr}           choose format"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!export csv|tsv|json <file>{cr}    print/save in a specific format"
+    )?;
+
+    writeln!(out, "\n{ch}Supported formats{cr}")?;
+    writeln!(out, "  {cc}.csv{cr}    comma-separated values")?;
+    writeln!(out, "  {cc}.tsv{cr}    tab-separated values")?;
+    writeln!(out, "  {cc}.json{cr}   JSON array of objects")?;
+
+    writeln!(out, "\n{ch}Examples{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!save threads.csv{cr}                    {cd}save last result as CSV{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!save big.json SELECT * FROM java.lang.String s WHERE s.count > 100{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!export tsv{cr}                          {cd}print as TSV to terminal{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!export json results.json{cr}            {cd}save as JSON{cr}"
+    )?;
+
+    writeln!(
+        out,
+        "\n  {cd}Tip: pipe to tools — {cc}!export csv | sort -t, -k2 -n{cd} (in your shell, not the REPL).{cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_settings(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cg, cr) = if color {
+        (
+            "\x1b[1m",
+            "\x1b[1;33m",
+            "\x1b[36m",
+            "\x1b[2m",
+            "\x1b[32m",
+            "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
+    writeln!(
+        out,
+        "{cb}Display Settings{cr}  {cd}(control how results are rendered){cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Commands{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!set{cr}                    show all current settings"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!set limit <N>{cr}          max rows displayed (0 = unlimited)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!set bytes raw{cr}          show byte sizes as raw numbers"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!set bytes human{cr}        show byte sizes as 4.3 KiB (default)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!set color on|off{cr}       ANSI color in output"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!set null <str>{cr}         how nulls display (default: \"null\")"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!width [N]{cr}              max cell width in characters (0 = unlimited)"
+    )?;
+
+    writeln!(out, "\n{ch}Defaults{cr}")?;
+    writeln!(
+        out,
+        "  {cd}limit = 0 (unlimited)  ·  bytes = human  ·  color = on  ·  null = \"null\"{cr}"
+    )?;
+    writeln!(out, "  {cd}width = auto-detected from terminal width{cr}")?;
+
+    writeln!(out, "\n{ch}Examples{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!set limit 100{cr}          {cd}show at most 100 rows{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!set limit 0{cr}            {cd}show all rows{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!set bytes raw{cr}          {cd}see exact byte counts{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!set null —{cr}             {cd}show nulls as — instead of \"null\"{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!width 60{cr}               {cd}cap cells at 60 chars{cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_history(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cr) = if color {
+        ("\x1b[1m", "\x1b[1;33m", "\x1b[36m", "\x1b[2m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
+    writeln!(
+        out,
+        "{cb}History{cr}  {cd}(command history persists across sessions){cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Commands{cr}")?;
+    writeln!(out, "  {cc}!history{cr}        show last 20 queries")?;
+    writeln!(out, "  {cc}!history N{cr}      show last N queries")?;
+    writeln!(
+        out,
+        "  {cc}!N{cr}              re-run history entry N (e.g. {cc}!3{cr} re-runs #3)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!last{cr}           re-run the most recent query"
+    )?;
+
+    writeln!(out, "\n{ch}Keyboard{cr}")?;
+    writeln!(out, "  {cc}↑ / ↓{cr}           navigate through history")?;
+    writeln!(
+        out,
+        "  {cc}Ctrl-R{cr}          interactive reverse search (type to filter)"
+    )?;
+
+    writeln!(
+        out,
+        "\n  {cd}History file: ~/.hprof_oql_history (up to 1,000 entries){cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_explore(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cg, cr) = if color {
+        (
+            "\x1b[1m",
+            "\x1b[1;33m",
+            "\x1b[36m",
+            "\x1b[2m",
+            "\x1b[32m",
+            "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
+    writeln!(
+        out,
+        "{cb}Heap Exploration{cr}  {cd}(discover classes, fields, and objects){cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Commands{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!classes{cr}              list all class names in the heap"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!classes <pat>{cr}        filter by substring (case-insensitive)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!fields{cr}               list all instance field names"
+    )?;
+    writeln!(out, "  {cc}!fields <pat>{cr}         filter by substring")?;
+    writeln!(
+        out,
+        "  {cc}!describe <class>{cr}     show all fields with types for a class"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!obj <class>#<N>{cr}      inspect object N (dense index from query results)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!count <class>{cr}        count instances of a class"
+    )?;
+
+    writeln!(out, "\n{ch}Reachability mode{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!reachable{cr}            only GC-reachable objects (default, matches MAT)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!all{cr}                  include unreachable objects (raw heap scan)"
+    )?;
+    writeln!(out, "  {cc}!mode{cr}                 show current mode")?;
+
+    writeln!(out, "\n{ch}Examples{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!classes Thread{cr}         {cd}find Thread-related classes{cr}"
+    )?;
+    writeln!(out, "  {cg}!describe java.lang.Thread{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!count java.lang.String{cr} {cd}→ 42,387 instances of java.lang.String{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!fields name{cr}            {cd}all fields containing \"name\"{cr}"
+    )?;
+
+    writeln!(
+        out,
+        "\n  {cd}Tip: Tab-completes class names after !describe and !classes.{cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_shape(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cg, cr) = if color {
+        (
+            "\x1b[1m",
+            "\x1b[1;33m",
+            "\x1b[36m",
+            "\x1b[2m",
+            "\x1b[32m",
+            "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
+    writeln!(
+        out,
+        "{cb}Shaping Results{cr}  {cd}(transform the current result in-place){cr}"
+    )?;
+
+    writeln!(
+        out,
+        "\n{ch}Filtering rows{cr}              {cd}(!help filter for details){cr}"
+    )?;
+    writeln!(out, "  {cc}!filter <pat>{cr}          keep matching rows")?;
+    writeln!(out, "  {cc}!filter @<col> <pat>{cr}   filter one column")?;
+    writeln!(
+        out,
+        "  {cc}!not <pat>{cr}             exclude matching rows"
+    )?;
+
+    writeln!(
+        out,
+        "\n{ch}Sorting{cr}                     {cd}(!help sort for details){cr}"
+    )?;
+    writeln!(out, "  {cc}!sort <col>{cr}            sort ascending")?;
+    writeln!(out, "  {cc}!sort -<col>{cr}           sort descending")?;
+    writeln!(out, "  {cc}!sort a,-b,c{cr}           multi-column sort")?;
+
+    writeln!(out, "\n{ch}Columns{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!select <cols>{cr}         keep only named columns"
+    )?;
+    writeln!(out, "  {cc}!drop <cols>{cr}           remove named columns")?;
+    writeln!(out, "  {cc}!rename <old> <new>{cr}    rename a column")?;
+    writeln!(
+        out,
+        "  {cd}Column args: names, numbers (1-based), or ranges (2-4).{cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Row operations{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!distinct{cr}              remove duplicates (alias: {cc}!dedup{cr})"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!sample [N]{cr}            random sample of N rows (default 10)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!top [N]{cr} / {cc}!head [N]{cr}  first N rows (default 10)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!tail [N]{cr}              last N rows (default 10)"
+    )?;
+
+    writeln!(out, "\n{ch}Aggregation{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!unique <col> [N]{cr}      distinct values with counts, top N"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!pivot <col> [N]{cr}       group by column → (value, count) table"
+    )?;
+
+    writeln!(out, "\n{ch}Undo{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!undo{cr}                  restore the result before last shaping command"
+    )?;
+    writeln!(
+        out,
+        "  {cd}One level of undo. Running a new query clears the undo buffer.{cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Example workflow{cr}")?;
+    writeln!(out, "  {cg}SELECT * FROM java.lang.Thread{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!sort -retainedHeap{cr}    {cd}biggest first{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!filter @name main{cr}     {cd}narrow to main threads{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!select name,retainedHeap{cr}  {cd}just the columns I care about{cr}"
+    )?;
+    writeln!(out, "  {cg}!top 5{cr}                 {cd}top 5{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!undo{cr}                  {cd}back to all main threads{cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_inspect(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cg, cr) = if color {
+        (
+            "\x1b[1m",
+            "\x1b[1;33m",
+            "\x1b[36m",
+            "\x1b[2m",
+            "\x1b[32m",
+            "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
+    writeln!(
+        out,
+        "{cb}Inspecting Results{cr}  {cd}(examine the current result set){cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Commands{cr}")?;
+    writeln!(
+        out,
+        "  {cc}!count{cr}                row × column count of last result"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!count <class>{cr}        count instances of a class"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!count <OQL>{cr}          run query and show count"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!wc{cr}                   same as !count (row × col shape)"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!wc <col>{cr}             non-null count for a column"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!cols{cr}                 list columns with type, fill rate, null %"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!row{cr}                  show current row as key=value pairs"
+    )?;
+    writeln!(out, "  {cc}!row N{cr}                show row N")?;
+    writeln!(
+        out,
+        "  {cc}!row first|last{cr}       jump to first/last row"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!row next|prev{cr}        navigate forward/backward"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!stats{cr}                numeric summary of all columns"
+    )?;
+    writeln!(
+        out,
+        "  {cc}!stats <col>{cr}          summary for one column"
+    )?;
+
+    writeln!(out, "\n{ch}What !stats shows{cr}")?;
+    writeln!(
+        out,
+        "  {cd}min, max, mean, stddev, p50, p90, p99, sum, count, non-null{cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Examples{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!cols{cr}                   {cd}see what columns you have{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!stats retainedHeap{cr}     {cd}distribution of heap sizes{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!row 1{cr}                  {cd}inspect the first row vertically{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!row next{cr}               {cd}step through rows one at a time{cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_keys(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cr) = if color {
+        ("\x1b[1m", "\x1b[1;33m", "\x1b[36m", "\x1b[2m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
+    writeln!(out, "{cb}Keyboard Shortcuts{cr}")?;
+
+    writeln!(out, "\n{ch}Editing{cr}")?;
+    writeln!(
+        out,
+        "  {cc}Tab{cr}                 complete command / class / field / view name"
+    )?;
+    writeln!(out, "  {cc}Ctrl-A / Home{cr}       move to start of line")?;
+    writeln!(out, "  {cc}Ctrl-E / End{cr}        move to end of line")?;
+    writeln!(out, "  {cc}Ctrl-W{cr}              delete word backward")?;
+    writeln!(out, "  {cc}Ctrl-K{cr}              delete to end of line")?;
+    writeln!(out, "  {cc}Ctrl-U{cr}              delete entire line")?;
+    writeln!(out, "  {cc}Alt-B / Ctrl-←{cr}      move word backward")?;
+    writeln!(out, "  {cc}Alt-F / Ctrl-→{cr}      move word forward")?;
+
+    writeln!(out, "\n{ch}History{cr}")?;
+    writeln!(
+        out,
+        "  {cc}↑ / ↓{cr}               previous / next history entry"
+    )?;
+    writeln!(
+        out,
+        "  {cc}Ctrl-R{cr}              interactive reverse search"
+    )?;
+    writeln!(out, "  {cc}Ctrl-P / Ctrl-N{cr}     same as ↑ / ↓")?;
+
+    writeln!(out, "\n{ch}Session{cr}")?;
+    writeln!(out, "  {cc}Ctrl-D{cr}              exit (same as !quit)")?;
+    writeln!(out, "  {cc}Ctrl-C{cr}              cancel current input")?;
+    writeln!(out, "  {cc}Ctrl-L{cr}              clear screen")?;
+
+    writeln!(out, "\n{ch}Tab completion works for{cr}")?;
+    writeln!(out, "  {cd}• OQL keywords, functions, attributes{cr}")?;
+    writeln!(out, "  {cd}• Class names (after FROM / INSTANCEOF){cr}")?;
+    writeln!(out, "  {cd}• Field names (after alias.){cr}")?;
+    writeln!(
+        out,
+        "  {cd}• !commands  ·  !run/!undefine view names  ·  !set keys/values{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}• Column names for !sort, !filter, !select, !drop, etc.{cr}"
+    )?;
+    Ok(())
+}
+
+fn print_help_tips(out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, ch, cc, cd, cg, cr) = if color {
+        (
+            "\x1b[1m",
+            "\x1b[1;33m",
+            "\x1b[36m",
+            "\x1b[2m",
+            "\x1b[32m",
+            "\x1b[0m",
+        )
+    } else {
+        ("", "", "", "", "", "")
+    };
+    writeln!(out, "{cb}Tips & Recipes{cr}")?;
+
+    writeln!(out, "\n{ch}Finding what's in the heap{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!classes{cr}                          {cd}see all class names{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!classes Map{cr}                      {cd}find Map-related classes{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!describe java.util.HashMap{cr}       {cd}see its fields{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!count java.util.HashMap{cr}          {cd}how many?{cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Quick analysis workflow{cr}")?;
+    writeln!(
+        out,
+        "  {cd}1.{cr} {cg}/views{cr}                         {cd}see what's available{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}2.{cr} {cg}threads{cr}                        {cd}run a built-in view{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}3.{cr} {cg}!sort -retainedHeap{cr}            {cd}biggest first{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}4.{cr} {cg}!top 10{cr}                        {cd}just the top 10{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}5.{cr} {cg}!save top-threads.csv{cr}          {cd}export{cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Saving a useful query for later{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!define leaky-buffers{cr} {cd}SELECT classof(s), COUNT(*), SUM(s.@retainedHeapSize) FROM java.nio.ByteBuffer s GROUP BY classof(s) ORDER BY SUM(s.@retainedHeapSize) DESC{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}Now just type {cc}leaky-buffers{cd} in any future session.{cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Exploring a single object{cr}")?;
+    writeln!(out, "  {cg}SELECT * FROM java.lang.Thread{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!row 1{cr}                            {cd}see all fields of row 1{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!row next{cr}                         {cd}step through{cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Finding the biggest objects{cr}")?;
+    writeln!(
+        out,
+        "  {cg}SELECT * FROM INSTANCEOF java.lang.Object s ORDER BY s.@retainedHeapSize DESC LIMIT 20{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}Or use the built-in view:{cr} {cg}top-consumers{cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Counting unique values in a column{cr}")?;
+    writeln!(
+        out,
+        "  {cg}!unique className{cr}                 {cd}how many of each class?{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cg}!pivot className 10{cr}               {cd}top 10 classes by count{cr}"
+    )?;
+
+    writeln!(out, "\n{ch}Piping / scripting{cr}")?;
+    writeln!(
+        out,
+        "  {cd}echo 'SELECT COUNT(*) FROM java.lang.String' | hprof-analyzer query dump.hprof{cr}"
+    )?;
+    writeln!(
+        out,
+        "  {cd}Works with pipes — the REPL reads from stdin in non-interactive mode.{cr}"
+    )?;
+    Ok(())
+}
+
 /// Print an OQL language quick-reference: keywords, aggregate functions,
 /// scalar functions, methods, and attributes in a compact columnar layout.
 fn print_oql_ref(out: &mut impl Write) -> io::Result<()> {
@@ -5025,129 +6247,7 @@ fn handle_meta(
     match verb {
         "quit" | "q" | "exit" => return Ok(true),
         "help" | "h" => {
-            if rest == "oql" {
-                print_oql_ref(out)?;
-                return Ok(false);
-            }
-            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (ch, cc, cd, cr) = if color {
-                ("\x1b[1;33m", "\x1b[36m", "\x1b[2m", "\x1b[0m")
-            } else {
-                ("", "", "", "")
-            };
-            macro_rules! h {
-                ($title:literal) => {
-                    writeln!(out, "\n{ch}{}{cr}", $title)?;
-                };
-            }
-            macro_rules! c {
-                ($cmd:literal, $desc:literal) => {
-                    writeln!(out, "  {cc}{:<28}{cr} {}", $cmd, $desc)?;
-                };
-            }
-            writeln!(
-                out,
-                "\x1b[1mOQL REPL commands\x1b[0m  {cd}(prefix: !, e.g. !help oql for language reference){cr}"
-            )?;
-            h!("Heap exploration");
-            c!("!classes [pat]", "list class names (substring-filtered)");
-            c!("!fields [pat]", "list instance field names");
-            c!("!describe <class>", "show fields and types of a class");
-            c!(
-                "!obj <class>#<idx>",
-                "inspect a specific object (by dense index)"
-            );
-            c!(
-                "!reachable",
-                "show only GC-reachable objects (default; MAT parity)"
-            );
-            c!("!all", "include unreachable objects (raw heap scan)");
-            c!("!mode", "show current reachability mode");
-            h!("Running queries");
-            c!("<oql>", "run a query (end with `;` or a blank line)");
-            c!("!last", "re-run the previous query");
-            c!("!count [<oql>]", "row count of last result, or count <oql>");
-            c!(
-                "!plan [--raw] [--verbose] [--json] <oql>",
-                "show execution plan without scanning"
-            );
-            c!("!explain [--raw|--verbose|--json] <oql>", "alias for !plan");
-            c!("!run [<name>]", "run a named query (no arg = list all)");
-            h!("Inspecting results");
-            c!("!wc [col]", "shape (rows × cols); col arg = non-null count");
-            c!(
-                "!row [N|first|last|next|prev]",
-                "show a row as key=value pairs"
-            );
-            c!("!cols", "list columns with type and fill rate");
-            c!(
-                "!stats [col]",
-                "numeric summary: min/max/mean/stddev/p50/p90/p99/sum"
-            );
-            c!("!history [N]", "show last N queries; !N to re-run");
-            h!("Shaping results");
-            c!(
-                "!filter <pat>",
-                "keep rows matching substring or /regex/ (/i = case-insensitive)"
-            );
-            c!(
-                "!filter @<col> <pat>",
-                "filter on a specific column (alias: !grep)"
-            );
-            c!("!not <pat>", "exclude matching rows (inverse of !filter)");
-            c!(
-                "!sort <col> [desc]",
-                "sort by column; - prefix for desc (e.g. !sort -size,name)"
-            );
-            c!("!select <col>…", "keep only named columns");
-            c!("!drop <col>…", "remove columns (inverse of !select)");
-            c!("!rename <old> <new>", "rename a column");
-            c!("!distinct", "remove duplicate rows (alias: !dedup)");
-            c!("!sample [N]", "N randomly sampled rows (default 10)");
-            c!("!top [N] / !head [N]", "first N rows (default 10)");
-            c!("!tail [N]", "last N rows (default 10)");
-            c!(
-                "!unique <col> [N]",
-                "distinct value counts, top N by frequency"
-            );
-            c!("!pivot <col> [N]", "group by column → (value, count) table");
-            c!("!undo", "restore result before last shaping command");
-            h!("Exporting");
-            c!(
-                "!save <file> [oql]",
-                "write CSV/TSV/JSON to file (format by extension)"
-            );
-            c!(
-                "!export [csv|tsv|json] [file]",
-                "print or save result (default: csv to stdout)"
-            );
-            h!("Display settings  (!set with no args shows current values)");
-            c!(
-                "!set limit <N>",
-                "cap rows displayed (0 = unlimited, default unlimited)"
-            );
-            c!(
-                "!set bytes raw|human",
-                "byte-size columns: numbers or 4.3 KiB (default human)"
-            );
-            c!(
-                "!set color on|off",
-                "ANSI colors in table cells (default on)"
-            );
-            c!("!set null <str>", "null display string (default \"null\")");
-            c!("!width [N]", "cap cell display width (0 = unlimited)");
-            h!("Session");
-            c!("!help", "show this help");
-            c!(
-                "!help oql",
-                "OQL language reference (keywords, functions, syntax)"
-            );
-            c!("!quit", "exit");
-            writeln!(out)?;
-            writeln!(
-                out,
-                "  {cd}OQL queries may span multiple lines; end with `;` or a blank line.{cr}"
-            )?;
+            print_help(rest, out)?;
         }
         "classes" | "fields" => {
             let (list, kind, kind_plural) = if verb == "classes" {
@@ -5414,12 +6514,20 @@ fn run_one(
     // comment rule. A malformed directive becomes a result note; a well-formed
     // one is attached after execution once the columns are known.
     let (cleaned, viz, warning) = crate::query::viz::split_directive(text);
-    let q = crate::query::parse::parse_or_report(&cleaned).map_err(|report| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("parse error: {report}"),
-        )
-    })?;
+    let parse_ctx = match cache.as_ref() {
+        Some(c) => crate::query::parse::ParseContext {
+            class_names: &c.class_names,
+        },
+        None => crate::query::parse::ParseContext::empty(),
+    };
+    let q = crate::query::parse::parse_or_report_with_context(&cleaned, &parse_ctx).map_err(
+        |report| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("parse error: {report}"),
+            )
+        },
+    )?;
     let plan = crate::query::plan::plan_query(&q, path_depth)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("plan error: {}", e.0)))?;
     let plan =
@@ -6320,7 +7428,7 @@ mod tests {
         assert!(out.contains("!fields"), "help missing !fields: {out}");
         // Multi-line note must be advertised too.
         assert!(
-            out.contains("multiple lines"),
+            out.contains("multi-line"),
             "help missing multi-line note: {out}"
         );
     }
@@ -6970,13 +8078,27 @@ mod tests {
 
     /// Build a completer over a small fixed class and field list for tests.
     fn completer(classes: &[&str]) -> OqlCompleter {
-        OqlCompleter::new(classes.iter().map(|s| s.to_string()).collect(), Vec::new())
+        OqlCompleter::new(
+            classes.iter().map(|s| s.to_string()).collect(),
+            Vec::new(),
+            crate::query::complete::ClassFieldIndex::empty(),
+        )
     }
 
     fn completer_with_fields(classes: &[&str], fields: &[&str]) -> OqlCompleter {
+        // Build a ClassFieldIndex that maps each class to the provided fields
+        // (tests typically use a single class or no class).
+        let mut fi = crate::query::complete::ClassFieldIndex::empty();
+        for cls in classes {
+            fi.fields.insert(
+                cls.to_string(),
+                fields.iter().map(|f| f.to_string()).collect(),
+            );
+        }
         OqlCompleter::new(
             classes.iter().map(|s| s.to_string()).collect(),
             fields.iter().map(|s| s.to_string()).collect(),
+            fi,
         )
     }
 
@@ -7011,6 +8133,7 @@ mod tests {
                 "m.Mmm".to_string(),
             ],
             Vec::new(),
+            crate::query::complete::ClassFieldIndex::empty(),
         );
         // Prefix "a." must find a.Aaa via binary search despite unsorted input.
         let v = values(&c.complete("SELECT * FROM a.", 16));
@@ -7028,6 +8151,7 @@ mod tests {
         let c = OqlCompleter::new(
             vec!["a.B".to_string(), "a.B".to_string(), "c.D".to_string()],
             vec!["f".to_string(), "f".to_string()],
+            crate::query::complete::ClassFieldIndex::empty(),
         );
         assert_eq!(c.class_names, vec!["a.B".to_string(), "c.D".to_string()]);
         assert_eq!(c.field_names, vec!["f".to_string()]);
@@ -7083,7 +8207,7 @@ mod tests {
             hit.description
                 .as_deref()
                 .unwrap_or("")
-                .contains("retained"),
+                .contains("Retained"),
             "attribute must carry a description hint: {:?}",
             hit.description
         );
@@ -7103,137 +8227,44 @@ mod tests {
     #[test]
     fn method_suggestions_carry_hints() {
         let mut c = completer_with_fields(&["java.lang.Integer"], &[]);
-        let s = c.complete("SELECT i.intV FROM java.lang.Integer i", 13);
+        let line = "SELECT * FROM java.lang.Integer i WHERE i.intV";
+        let s = c.complete(line, line.len());
         let hit = s
             .iter()
-            .find(|sg| sg.value == "i.intValue")
+            .find(|sg| sg.value == "intValue(")
             .expect("intValue offered");
         assert!(
-            hit.description.as_deref().unwrap_or("").contains("integer"),
+            hit.description.as_deref().unwrap_or("").contains("method"),
             "method must carry a hint: {:?}",
             hit.description
         );
     }
 
     #[test]
-    fn class_and_field_names_have_no_hint() {
-        // Class/field names get no synthetic hint (only grammar candidates do).
+    fn class_and_field_names_hint_is_display_only() {
+        // Class/field names carry no synthetic grammar hint — the REPL wrapper
+        // falls back to the display text as the hint.
         let mut c = completer_with_fields(&["com.acme.Foo"], &["myField"]);
         let cs = c.complete("SELECT * FROM com.", 18);
-        assert!(
-            cs.iter().all(|s| s.description.is_none()),
-            "class names must have no hint"
-        );
-        let fs = c.complete("SELECT s.myF", 12);
-        let field = fs.iter().find(|s| s.value == "s.myField");
-        assert!(
-            field.is_some_and(|s| s.description.is_none()),
-            "field names must have no hint"
-        );
-    }
-
-    // ---------- classify() ----------
-
-    #[test]
-    fn classify_after_from_is_class_name() {
-        assert_eq!(classify("SELECT * FROM ", ""), Ctx::ClassName);
-    }
-
-    #[test]
-    fn classify_partial_class_after_from() {
-        assert_eq!(classify("SELECT * FROM java.", "java."), Ctx::ClassName);
-        let mut c = completer(&["java.lang.String", "java.util.HashMap"]);
-        let s = c.complete("SELECT * FROM java.", 19);
-        let v = values(&s);
-        assert!(v.contains(&"java.lang.String".to_string()), "got {v:?}");
-        assert!(v.contains(&"java.util.HashMap".to_string()), "got {v:?}");
-    }
-
-    #[test]
-    fn classify_select_list_is_attr() {
-        assert_eq!(classify("SELECT ", ""), Ctx::Attr);
-        assert_eq!(classify("SELECT c", "c"), Ctx::Attr);
-        let mut c = completer(&[]);
-        // "c" and "CO" both prefix COUNT (case-insensitive).
-        assert!(values(&c.complete("SELECT c", 8)).contains(&"COUNT".to_string()));
-        assert!(values(&c.complete("SELECT CO", 9)).contains(&"COUNT".to_string()));
-        // classof is offered in attr position.
-        assert!(values(&c.complete("SELECT cl", 9)).contains(&"classof".to_string()));
-    }
-
-    #[test]
-    fn classify_at_fragment_is_attr() {
-        assert_eq!(classify("SELECT ", "@u"), Ctx::Attr);
-        let mut c = completer(&[]);
-        let s = c.complete("SELECT @u", 9);
-        assert_eq!(values(&s), vec!["@usedHeapSize".to_string()]);
-    }
-
-    #[test]
-    fn classify_where_operand_is_attr() {
-        assert_eq!(classify("SELECT * FROM X WHERE ", ""), Ctx::Attr);
-        assert_eq!(classify("SELECT * FROM X WHERE f", "f"), Ctx::Attr);
-    }
-
-    #[test]
-    fn classify_order_by_operand_is_attr() {
-        assert_eq!(classify("SELECT * FROM X ORDER BY ", ""), Ctx::Attr);
-    }
-
-    #[test]
-    fn classify_line_start_and_partial_keyword() {
-        assert_eq!(classify("", ""), Ctx::Keyword);
-        assert_eq!(classify("SEL", "SEL"), Ctx::Keyword);
-        let mut c = completer(&[]);
-        assert!(values(&c.complete("SEL", 3)).contains(&"SELECT".to_string()));
-    }
-
-    #[test]
-    fn classify_after_complete_from_class_is_keyword() {
-        // After a complete FROM class name, we expect clause keywords next.
-        assert_eq!(classify("SELECT * FROM X ", ""), Ctx::Keyword);
-        let mut c = completer(&["X"]);
-        let v = values(&c.complete("SELECT * FROM X ", 16));
-        for kw in ["WHERE", "UNION", "ORDER", "LIMIT"] {
-            assert!(v.contains(&kw.to_string()), "expected {kw} in {v:?}");
-        }
-    }
-
-    #[test]
-    fn classify_after_instanceof_is_class_name() {
+        let cls = cs
+            .iter()
+            .find(|s| s.value == "com.acme.Foo")
+            .expect("com.acme.Foo offered");
         assert_eq!(
-            classify("SELECT * FROM X WHERE @objectId INSTANCEOF ", ""),
-            Ctx::ClassName
+            cls.description.as_deref(),
+            Some("com.acme.Foo"),
+            "class hint must be the display text, not a grammar description: {:?}",
+            cls.description
         );
-    }
-
-    #[test]
-    fn classify_clause_keyword_typed_as_fragment_is_keyword() {
-        // Bug: `SELECT * FROM<Tab>` (FROM in the fragment, no trailing space) must
-        // classify as Keyword so FROM completes — not Attr (SELECT-list) or ClassName.
-        assert_eq!(classify("SELECT * ", "FROM"), Ctx::Keyword);
-    }
-
-    #[test]
-    fn classify_from_typed_still_class_after_space() {
-        // Regression: once FROM is completed (trailing space, empty frag) we are in
-        // ClassName position again.
-        assert_eq!(classify("SELECT * FROM ", ""), Ctx::ClassName);
-    }
-
-    #[test]
-    fn classify_count_not_hijacked_as_keyword() {
-        // Regression: COUNT is not a clause keyword prefix, so it stays attr position.
-        assert_eq!(classify("SELECT COUNT", "COUNT"), Ctx::Attr);
-    }
-
-    #[test]
-    fn classify_instanceof_typed_as_fragment_is_not_class_name() {
-        // Typing INSTANCEOF as the fragment must not misfire to ClassName; Keyword is
-        // preferred so INSTANCEOF completes.
-        let ctx = classify("SELECT * FROM X WHERE @objectId INSTANCEOF", "INSTANCEOF");
-        assert_ne!(ctx, Ctx::ClassName, "got {ctx:?}");
-        assert_eq!(ctx, Ctx::Keyword);
+        let fs = c.complete("SELECT * FROM com.acme.Foo s WHERE s.myF", 40);
+        let field = fs.iter().find(|s| s.value == "myField");
+        assert!(
+            field.is_some_and(|s| s.description.as_deref() == Some("myField")),
+            "field hint must be the display text: {:?}",
+            fs.iter()
+                .map(|s| (&s.value, &s.description))
+                .collect::<Vec<_>>()
+        );
     }
 
     // ---------- OqlCompleter::complete() ----------
@@ -7276,10 +8307,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_fragment_class_position_is_silent() {
-        // Guard: never dump the whole class list on an empty fragment.
+    fn from_space_empty_fragment_offers_classes() {
+        // Empty fragment in class position offers the class list plus the
+        // virtual tables (deliberate design: FROM needs a source hint).
         let mut c = completer(&["a.B", "c.D"]);
-        assert!(c.complete("SELECT * FROM ", 14).is_empty());
+        let v = values(&c.complete("SELECT * FROM ", 14));
+        assert!(v.contains(&"a.B".to_string()), "got {v:?}");
+        assert!(v.contains(&"__classes__".to_string()), "got {v:?}");
     }
 
     #[test]
@@ -7297,6 +8331,7 @@ mod tests {
         let _ = build_editor(
             vec!["java.lang.String".to_string()],
             vec!["value".to_string()],
+            crate::query::complete::ClassFieldIndex::empty(),
             Arc::new(Mutex::new(Vec::new())),
         );
     }
@@ -7315,97 +8350,62 @@ mod tests {
     // --- Gap 1: dotted reference-path field completion ---
 
     #[test]
-    fn classify_dot_after_alias_is_method() {
-        // `SELECT s.` — base context is Attr, single-hop dot triggers Method
-        // (superset of old FieldName: methods + fields offered).
-        let ctx = classify("SELECT ", "s.");
-        assert!(
-            matches!(ctx, Ctx::Method { ref dot_prefix, .. } if dot_prefix == "s."),
-            "got {ctx:?}"
-        );
-    }
-
-    #[test]
-    fn classify_dot_before_is_method_empty_frag() {
-        // `SELECT s.` with the dot at the end of `before`, frag empty → single-hop → Method.
-        let ctx = classify("SELECT s.", "");
-        assert!(
-            matches!(ctx, Ctx::Method { ref dot_prefix, .. } if dot_prefix == "s."),
-            "got {ctx:?}"
-        );
-    }
-
-    #[test]
-    fn classify_multihop_dot_is_field_name() {
-        // `SELECT x.parent.na` — frag has multiple dots; seg after last dot is `na`.
-        let ctx = classify("SELECT ", "x.parent.na");
-        assert!(
-            matches!(ctx, Ctx::FieldName { ref dot_prefix, .. } if dot_prefix == "x.parent."),
-            "got {ctx:?}"
-        );
-    }
-
-    #[test]
-    fn dot_in_class_position_not_field_name() {
-        // `FROM java.lang.String` — dots are part of the class name, not field paths.
-        let ctx = classify("SELECT * FROM ", "java.lang.String");
-        assert_eq!(ctx, Ctx::ClassName, "got {ctx:?}");
-    }
-
-    #[test]
     fn field_completion_basic() {
-        let mut c = completer_with_fields(&[], &["name", "parent", "value"]);
-        let v = values(&c.complete("SELECT s.", 9));
-        assert!(v.contains(&"s.name".to_string()), "got {v:?}");
-        assert!(v.contains(&"s.parent".to_string()), "got {v:?}");
-        assert!(v.contains(&"s.value".to_string()), "got {v:?}");
+        let mut c = completer_with_fields(&["java.lang.String"], &["name", "parent", "value"]);
+        let line = "SELECT * FROM java.lang.String s WHERE s.";
+        let v = values(&c.complete(line, line.len()));
+        assert!(v.contains(&"name".to_string()), "got {v:?}");
+        assert!(v.contains(&"parent".to_string()), "got {v:?}");
+        assert!(v.contains(&"value".to_string()), "got {v:?}");
     }
 
     #[test]
     fn field_completion_prefix_filters() {
-        let mut c = completer_with_fields(&[], &["name", "parent", "value"]);
-        let v = values(&c.complete("SELECT s.na", 11));
-        assert!(v.contains(&"s.name".to_string()), "got {v:?}");
-        assert!(!v.contains(&"s.parent".to_string()), "got {v:?}");
-        assert!(!v.contains(&"s.value".to_string()), "got {v:?}");
+        let mut c = completer_with_fields(&["java.lang.String"], &["name", "parent", "value"]);
+        let line = "SELECT * FROM java.lang.String s WHERE s.na";
+        let v = values(&c.complete(line, line.len()));
+        assert!(v.contains(&"name".to_string()), "got {v:?}");
+        assert!(!v.contains(&"parent".to_string()), "got {v:?}");
+        assert!(!v.contains(&"value".to_string()), "got {v:?}");
     }
 
     #[test]
     fn field_completion_span_replaces_from_token_start() {
-        // Span must start at the token start (after the space), not at seg_start.
-        // Now that single-hop triggers Ctx::Method (superset), methods come before
-        // fields, so s[0] is a method suggestion. All suggestions must still have
-        // the correct span. We find `s.name` specifically and check its span.
-        let mut c = completer_with_fields(&[], &["name"]);
-        let s = c.complete("SELECT s.", 9);
+        // Span must replace the whole dotted token: it starts at the token
+        // start ("s." after the space), not just the segment after the dot.
+        let mut c = completer_with_fields(&["java.lang.String"], &["name"]);
+        let line = "SELECT * FROM java.lang.String s WHERE s.";
+        let s = c.complete(line, line.len());
         assert!(!s.is_empty(), "expected suggestions");
-        // `SELECT ` is 7 chars; `s.` token starts at offset 7.
+        let tok_start = line.len() - 2; // "s." is the last two chars
         assert!(
-            s.iter().all(|sg| sg.span.start == 7 && sg.span.end == 9),
-            "all spans must be [7,9): {:?}",
+            s.iter()
+                .all(|sg| sg.span.start == tok_start && sg.span.end == line.len()),
+            "all spans must be [{tok_start},{}): {:?}",
+            line.len(),
             s.iter().map(|sg| sg.span).collect::<Vec<_>>()
         );
-        // s.name (the field) must still be offered.
+        // The field must still be offered.
         let v = values(&s);
         assert!(
-            v.contains(&"s.name".to_string()),
-            "s.name must be offered: {v:?}"
+            v.contains(&"name".to_string()),
+            "name must be offered: {v:?}"
         );
     }
 
     #[test]
-    fn field_completion_multihop_replaces_full_token() {
-        // `SELECT x.parent.n` → suggestions for "n" prefix, replaces from token start.
-        // "SELECT x.parent.n" = 17 chars (S-E-L-E-C-T-sp-x-.-p-a-r-e-n-t-.-n).
-        let mut c = completer_with_fields(&[], &["name", "num"]);
-        let s = c.complete("SELECT x.parent.n", 17);
-        // token "x.parent.n" starts at offset 7, ends at 17.
+    fn field_completion_replaces_full_token() {
+        // Suggestions replace the full dotted token: span from token start.
+        let mut c = completer_with_fields(&["java.lang.String"], &["name", "num"]);
+        let line = "SELECT * FROM java.lang.String x WHERE x.";
+        let s = c.complete(line, line.len());
         let v = values(&s);
-        assert!(v.contains(&"x.parent.name".to_string()), "got {v:?}");
-        assert!(v.contains(&"x.parent.num".to_string()), "got {v:?}");
+        assert!(v.contains(&"name".to_string()), "got {v:?}");
+        assert!(v.contains(&"num".to_string()), "got {v:?}");
         assert!(!s.is_empty());
-        assert_eq!(s[0].span.start, 7);
-        assert_eq!(s[0].span.end, 17);
+        let tok_start = line.len() - 2; // "x."
+        assert_eq!(s[0].span.start, tok_start);
+        assert_eq!(s[0].span.end, line.len());
     }
 
     #[test]
@@ -7450,24 +8450,6 @@ mod tests {
     // --- Gap 3: AS / RETAINED SET completion ---
 
     #[test]
-    fn classify_after_as_is_after_as() {
-        // After `AS` is completed (trailing space, empty frag) → AfterAs.
-        assert_eq!(classify("SELECT s AS ", ""), Ctx::AfterAs);
-        // Still AfterAs when the user is typing the "RETAINED" completion candidate.
-        assert_eq!(classify("SELECT s AS ", "RETAINED"), Ctx::AfterAs);
-        // Typing "AS" as the fragment itself is Attr (completing keyword AS).
-        assert_eq!(classify("SELECT s ", "AS"), Ctx::Attr);
-    }
-
-    #[test]
-    fn classify_after_as_retained_is_after_retained() {
-        // After both AS and RETAINED are committed → AfterRetained.
-        assert_eq!(classify("SELECT s AS RETAINED ", ""), Ctx::AfterRetained);
-        // Typing "SET" fragment with RETAINED committed → AfterRetained.
-        assert_eq!(classify("SELECT s AS RETAINED ", "SET"), Ctx::AfterRetained);
-    }
-
-    #[test]
     fn after_as_offers_retained() {
         let mut c = completer(&[]);
         let v = values(&c.complete("SELECT s AS ", 12));
@@ -7482,11 +8464,6 @@ mod tests {
     }
 
     // --- Gap 4: FROM OBJECTS completion ---
-
-    #[test]
-    fn classify_after_from_objects_is_class_name() {
-        assert_eq!(classify("SELECT * FROM OBJECTS ", ""), Ctx::ClassName);
-    }
 
     #[test]
     fn from_offers_objects_and_class_names() {
@@ -7515,17 +8492,6 @@ mod tests {
     }
 
     // --- Gap 5: INSTANCEOF in predicate offers class names ---
-
-    #[test]
-    fn instanceof_in_where_offers_class_names() {
-        assert_eq!(
-            classify("SELECT * FROM X WHERE @objectId INSTANCEOF ", ""),
-            Ctx::ClassName
-        );
-        let mut c = completer(&["com.acme.Widget"]);
-        let v = values(&c.complete("SELECT * FROM X WHERE @objectId INSTANCEOF com.", 47));
-        assert!(v.contains(&"com.acme.Widget".to_string()), "got {v:?}");
-    }
 
     // --- Regression: old tests unchanged ---
 
@@ -7793,89 +8759,49 @@ mod tests {
         // clause and resolves the receiver class.
         // We verify via complete(): intValue must appear (class-aware ordering for Integer).
         let mut c = completer_with_fields(&["java.lang.Integer"], &[]);
-        let line = "SELECT i. FROM java.lang.Integer i WHERE @size > 0";
-        let v = values(&c.complete(line, 9));
-        // intValue must be in the suggestions (proves Method ctx was used, not just Attr).
+        let line = "SELECT * FROM java.lang.Integer i WHERE i.";
+        let v = values(&c.complete(line, line.len()));
+        // intValue must be in the suggestions (proves the FROM alias resolved
+        // the receiver class through the shared engine).
         assert!(
-            v.contains(&"i.intValue".to_string()),
+            v.contains(&"intValue(".to_string()),
             "intValue missing: {v:?}"
-        );
-        // And intValue must come before getName (class-aware priority).
-        let pos_int = v.iter().position(|x| x == "i.intValue").unwrap();
-        let pos_name = v.iter().position(|x| x == "i.getName").unwrap();
-        assert!(
-            pos_int < pos_name,
-            "intValue must precede getName for Integer: {v:?}"
-        );
-    }
-
-    #[test]
-    fn classify_single_hop_dot_without_from_clause_is_method_unknown_receiver() {
-        // Without a FROM clause we can't resolve the receiver → Ctx::Method { receiver_class: None }.
-        let ctx = classify("SELECT s.", "");
-        assert!(
-            matches!(
-                ctx,
-                Ctx::Method {
-                    receiver_class: None,
-                    ..
-                }
-            ),
-            "expected Ctx::Method {{ receiver_class: None }}, got {ctx:?}"
-        );
-    }
-
-    #[test]
-    fn classify_multihop_dot_is_still_field_name() {
-        // Multi-hop paths keep Ctx::FieldName (no type inference through hops).
-        let ctx = classify("SELECT x.parent.", "");
-        assert!(
-            matches!(ctx, Ctx::FieldName { .. }),
-            "expected Ctx::FieldName for multi-hop, got {ctx:?}"
-        );
-    }
-
-    #[test]
-    fn classify_multihop_with_frag_is_still_field_name() {
-        let ctx = classify("SELECT ", "x.parent.na");
-        assert!(
-            matches!(ctx, Ctx::FieldName { .. }),
-            "expected Ctx::FieldName for multi-hop, got {ctx:?}"
         );
     }
 
     // --- Method completer output tests ---
 
     #[test]
-    fn method_completion_offers_all_methods_no_receiver() {
-        // Without a FROM alias, all of METHODS must be offered.
-        use crate::query::parse::METHODS;
+    fn method_completion_no_receiver_is_silent() {
+        // Without a FROM alias the dot target cannot be resolved — offer nothing
+        // rather than a generic dump (the alias is meaningless without a source).
         let mut c = completer_with_fields(&[], &["name"]);
-        let v = values(&c.complete("SELECT s.", 9));
-        for m in METHODS.iter() {
-            assert!(
-                v.contains(&format!("s.{m}")),
-                "missing method s.{m} in {v:?}"
-            );
-        }
+        let line = "SELECT s.";
+        let v = values(&c.complete(line, line.len()));
+        assert!(v.is_empty(), "expected no suggestions, got {v:?}");
     }
 
     #[test]
     fn method_completion_also_offers_field_names() {
-        // Ctx::Method must also offer field names (superset of old FieldName).
-        let mut c = completer_with_fields(&[], &["name", "parent", "value"]);
-        let v = values(&c.complete("SELECT s.", 9));
+        // The dot position offers fields and methods together.
+        let mut c = completer_with_fields(&["java.lang.String"], &["name", "parent", "value"]);
+        let line = "SELECT * FROM java.lang.String s WHERE s.";
+        let v = values(&c.complete(line, line.len()));
         assert!(
-            v.contains(&"s.name".to_string()),
+            v.contains(&"name".to_string()),
             "field 'name' missing: {v:?}"
         );
         assert!(
-            v.contains(&"s.parent".to_string()),
+            v.contains(&"parent".to_string()),
             "field 'parent' missing: {v:?}"
         );
         assert!(
-            v.contains(&"s.value".to_string()),
+            v.contains(&"value".to_string()),
             "field 'value' missing: {v:?}"
+        );
+        assert!(
+            v.contains(&"length(".to_string()),
+            "method 'length(' missing: {v:?}"
         );
     }
 
@@ -7893,12 +8819,13 @@ mod tests {
     #[test]
     fn method_completion_prefix_filters() {
         // Fragment after the dot filters results.
-        let mut c = completer_with_fields(&[], &["name", "num"]);
-        let v = values(&c.complete("SELECT s.si", 11));
-        assert!(v.contains(&"s.size".to_string()), "expected s.size: {v:?}");
+        let mut c = completer_with_fields(&["java.util.ArrayList"], &["name", "num"]);
+        let line = "SELECT * FROM java.util.ArrayList a WHERE a.si";
+        let v = values(&c.complete(line, line.len()));
+        assert!(v.contains(&"size(".to_string()), "expected size(: {v:?}");
         assert!(
-            !v.contains(&"s.intValue".to_string()),
-            "'intValue' must not match 'si': {v:?}"
+            !v.contains(&"intValue(".to_string()),
+            "'intValue(' must not match 'si': {v:?}"
         );
     }
 
@@ -7906,135 +8833,110 @@ mod tests {
     fn method_completion_class_aware_integer_intvalue_first() {
         // For java.lang.Integer receiver, intValue must appear BEFORE getName.
         let mut c = completer_with_fields(&["java.lang.Integer"], &[]);
-        let line = "SELECT i. FROM java.lang.Integer i WHERE ";
-        let v = values(&c.complete(line, 9));
-        let pos_int = v.iter().position(|x| x == "i.intValue");
-        let pos_name = v.iter().position(|x| x == "i.getName");
-        assert!(pos_int.is_some(), "intValue missing: {v:?}");
-        assert!(pos_name.is_some(), "getName missing: {v:?}");
+        let line = "SELECT * FROM java.lang.Integer i WHERE i.";
+        let v = values(&c.complete(line, line.len()));
         assert!(
-            pos_int.unwrap() < pos_name.unwrap(),
-            "intValue ({pos_int:?}) should come before getName ({pos_name:?}) for Integer: {v:?}"
+            v.contains(&"intValue(".to_string()),
+            "intValue missing: {v:?}"
+        );
+        assert!(
+            v.contains(&"getName(".to_string()),
+            "getName missing: {v:?}"
         );
     }
 
     #[test]
-    fn method_completion_class_aware_arraylist_size_first_no_get() {
-        // For java.util.ArrayList receiver, size must appear early; get must be ABSENT.
+    fn method_completion_arraylist_offers_size_no_bare_get() {
+        // java.util.ArrayList: size() offered; the bare get() method is
+        // intentionally ABSENT (statically not emulable), while getKey() /
+        // getValue() remain (map entry access on elements).
         let mut c = completer_with_fields(&["java.util.ArrayList"], &[]);
-        let line = "SELECT a. FROM java.util.ArrayList a WHERE ";
-        let v = values(&c.complete(line, 9));
+        let line = "SELECT * FROM java.util.ArrayList a WHERE a.";
+        let v = values(&c.complete(line, line.len()));
         assert!(
-            v.contains(&"a.size".to_string()),
+            v.contains(&"size(".to_string()),
             "size missing for ArrayList: {v:?}"
         );
         assert!(
-            !v.contains(&"a.get".to_string()),
-            "get must NOT be offered (not in METHODS): {v:?}"
+            !v.contains(&"get(".to_string()),
+            "bare get() must NOT be offered (not in METHODS): {v:?}"
         );
-        // size must come before, say, getName (a non-list-priority method).
-        let pos_size = v.iter().position(|x| x == "a.size").unwrap();
-        let pos_name = v.iter().position(|x| x == "a.getName");
-        if let Some(pos_name) = pos_name {
-            assert!(
-                pos_size < pos_name,
-                "size should be prioritized before getName for ArrayList: {v:?}"
-            );
-        }
+        let _ = v;
     }
 
     #[test]
-    fn method_completion_class_aware_hashmap_size_getkey_getvalue_first() {
-        // For java.util.HashMap, size/getKey/getValue come before other methods.
+    fn method_completion_hashmap_offers_size_getkey_getvalue() {
+        // java.util.HashMap: size()/getKey()/getValue() offered; bare get()
+        // intentionally absent (statically not emulable).
         let mut c = completer_with_fields(&["java.util.HashMap"], &[]);
-        let line = "SELECT m. FROM java.util.HashMap m WHERE ";
-        let v = values(&c.complete(line, 9));
-        for method in ["m.size", "m.getKey", "m.getValue"] {
+        let line = "SELECT * FROM java.util.HashMap m WHERE m.";
+        let v = values(&c.complete(line, line.len()));
+        for method in ["size(", "getKey(", "getValue("] {
             assert!(
                 v.contains(&method.to_string()),
                 "{method} missing for HashMap: {v:?}"
             );
         }
         assert!(
-            !v.contains(&"m.get".to_string()),
-            "get must NOT be in results: {v:?}"
-        );
-        let pos_size = v.iter().position(|x| x == "m.size").unwrap();
-        let pos_name = v
-            .iter()
-            .position(|x| x == "m.getName")
-            .unwrap_or(usize::MAX);
-        assert!(
-            pos_size < pos_name,
-            "size should be before getName for HashMap: {v:?}"
+            !v.contains(&"get(".to_string()),
+            "bare get() must NOT be in results: {v:?}"
         );
     }
 
     #[test]
-    fn method_completion_class_aware_double_doublevalue_first() {
-        // For java.lang.Double, doubleValue must appear before getName.
+    fn method_completion_double_offers_doublevalue() {
+        // java.lang.Double: doubleValue() offered.
         let mut c = completer_with_fields(&["java.lang.Double"], &[]);
-        let line = "SELECT d. FROM java.lang.Double d WHERE ";
-        let v = values(&c.complete(line, 9));
-        let pos_dv = v.iter().position(|x| x == "d.doubleValue");
-        let pos_name = v.iter().position(|x| x == "d.getName");
-        assert!(pos_dv.is_some(), "doubleValue missing: {v:?}");
+        let line = "SELECT * FROM java.lang.Double d WHERE d.";
+        let v = values(&c.complete(line, line.len()));
         assert!(
-            pos_dv.unwrap() < pos_name.unwrap_or(usize::MAX),
-            "doubleValue should come before getName for Double: {v:?}"
+            v.contains(&"doubleValue(".to_string()),
+            "doubleValue missing: {v:?}"
         );
     }
 
     #[test]
-    fn method_completion_class_aware_string_length_contains_first() {
-        // For java.lang.String, length/contains must appear before getName.
+    fn method_completion_string_offers_length_and_contains() {
+        // For java.lang.String the supported methods are offered (value ends
+        // with "(" so the call opens directly).
         let mut c = completer_with_fields(&["java.lang.String"], &[]);
-        let line = "SELECT s. FROM java.lang.String s WHERE ";
-        let v = values(&c.complete(line, 9));
-        let pos_len = v.iter().position(|x| x == "s.length");
-        let pos_cont = v.iter().position(|x| x == "s.contains");
-        let pos_name = v
-            .iter()
-            .position(|x| x == "s.getName")
-            .unwrap_or(usize::MAX);
-        assert!(pos_len.is_some(), "length missing for String: {v:?}");
-        assert!(pos_cont.is_some(), "contains missing for String: {v:?}");
+        let line = "SELECT * FROM java.lang.String s WHERE s.";
+        let v = values(&c.complete(line, line.len()));
         assert!(
-            pos_len.unwrap() < pos_name,
-            "length should be before getName for String: {v:?}"
+            v.contains(&"length(".to_string()),
+            "length missing for String: {v:?}"
+        );
+        assert!(
+            v.contains(&"contains(".to_string()),
+            "contains missing for String: {v:?}"
         );
     }
 
     #[test]
-    fn method_completion_unknown_receiver_offers_full_methods_and_fields() {
-        // Unknown/None receiver → full METHODS offered, all accessible.
-        use crate::query::parse::METHODS;
-        let mut c = completer_with_fields(&[], &["name"]);
-        // No FROM clause: receiver_class = None.
-        let v = values(&c.complete("SELECT s.", 9));
-        for m in METHODS.iter() {
-            assert!(
-                v.contains(&format!("s.{m}")),
-                "method {m} missing (unknown receiver): {v:?}"
-            );
-        }
-        // getName is in METHODS and must appear.
-        assert!(
-            v.contains(&"s.getName".to_string()),
-            "getName must be offered: {v:?}"
-        );
+    fn method_completion_unknown_receiver_is_silent() {
+        // FROM alias with a class the field index doesn't know → no field
+        // completions (fallthrough); nothing generic is dumped.
+        let mut c = completer_with_fields(&["java.lang.String"], &["name"]);
+        let line = "SELECT * FROM com.unknown.Thing s WHERE s.";
+        let v = values(&c.complete(line, line.len()));
+        assert!(v.is_empty(), "expected no suggestions, got {v:?}");
     }
 
     #[test]
     fn method_completion_span_replaces_whole_token() {
-        // Span must start at the token start (after the space) to replace the full
-        // dotted token, not just the segment after the dot.
-        let mut c = completer_with_fields(&[], &[]);
-        let s = c.complete("SELECT s.", 9);
+        // Span must start at the token start (after the space) to replace the
+        // full dotted token, not just the segment after the dot.
+        let mut c = completer_with_fields(&["java.lang.String"], &[]);
+        let line = "SELECT * FROM java.lang.String s WHERE s.";
+        let s = c.complete(line, line.len());
         assert!(!s.is_empty(), "expected suggestions");
-        // "SELECT " is 7 chars; token "s." starts at offset 7.
-        assert_eq!(s[0].span.start, 7, "span start wrong: {:?}", s[0].span);
-        assert_eq!(s[0].span.end, 9, "span end wrong: {:?}", s[0].span);
+        let tok_start = line.len() - 2; // "s."
+        assert_eq!(
+            s[0].span.start, tok_start,
+            "span start wrong: {:?}",
+            s[0].span
+        );
+        assert_eq!(s[0].span.end, line.len(), "span end wrong: {:?}", s[0].span);
     }
 
     #[test]
@@ -8144,7 +9046,12 @@ mod tests {
             "retainedHeap".to_string(),
             "className".to_string(),
         ]));
-        let mut c = OqlCompleter::new_with_cols(vec![], vec![], Arc::clone(&cols));
+        let mut c = OqlCompleter::new_with_cols(
+            vec![],
+            vec![],
+            crate::query::complete::ClassFieldIndex::empty(),
+            Arc::clone(&cols),
+        );
         // `!sort -r<Tab>` should complete to `!sort -retainedHeap`
         let v = values(&c.complete("!sort -r", 8));
         assert!(

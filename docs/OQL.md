@@ -41,6 +41,124 @@ $ hprof-analyzer query heap.hprof \
 
 ---
 
+## Interactive REPL
+
+Start the REPL with `hprof-analyzer query heap.hprof --repl`.  It provides a
+full line-editing environment for exploratory heap analysis.
+
+### Basics
+
+- **Tab completion** — keywords, class names, field names, attributes, `!`-commands, view names, and column names from the last result.
+- **Persistent history** — `~/.hprof_oql_history` (up to 1,000 entries).  `↑`/`↓` navigate history; `Ctrl-R` reverse-searches.
+- **Multi-line queries** — end with `;` or a blank line.
+
+### Named views
+
+Pre-written queries you can run by name instead of typing OQL:
+
+```
+/views                                # list all views (built-in + user)
+/views thread                         # filter by substring
+!run top-classes-by-count             # run a built-in view
+top-classes-by-count                  # bare name works too
+top-cl                                # unique prefix works
+```
+
+#### User-defined views
+
+Save your own queries so they persist across sessions:
+
+```
+!define big-strings SELECT * FROM java.lang.String s WHERE s.value.length > 1000 LIMIT 50
+big-strings                           # run it
+!undefine big-strings                 # remove it
+```
+
+User views are saved to `~/.config/hprof-analyzer/config.toml` (or
+`$XDG_CONFIG_HOME/hprof-analyzer/config.toml`).  They shadow built-in views
+with the same name.
+
+### Result shaping (`!` commands)
+
+After a query returns, you can reshape the result without re-running:
+
+| Command | Effect |
+|---------|--------|
+| `!filter <pat>` | keep rows matching substring or `/regex/` (`/i` = case-insensitive) |
+| `!filter @<col> <pat>` | filter on a specific column (alias: `!grep`) |
+| `!not <pat>` | exclude matching rows (alias: `!exclude`) |
+| `!sort <col>` | sort ascending; `-col` for descending; comma-separate for multi-column |
+| `!select <cols>` | keep only named columns (names, numbers, or ranges like `1-3`) |
+| `!drop <cols>` | remove columns |
+| `!rename <old> <new>` | rename a column |
+| `!distinct` | remove duplicate rows (alias: `!dedup`) |
+| `!sample [N]` | N random rows (default 10) |
+| `!top [N]` / `!head [N]` | first N rows (default 10) |
+| `!tail [N]` | last N rows (default 10) |
+| `!unique <col> [N]` | distinct value counts, top N by frequency |
+| `!pivot <col> [N]` | group by column → (value, count) table |
+| `!undo` | undo the last shaping command |
+
+### Inspecting results
+
+| Command | Effect |
+|---------|--------|
+| `!count` / `!wc` | row × column shape |
+| `!wc <col>` | non-null count for a column |
+| `!cols` | list columns with inferred type and fill rate |
+| `!row [N\|first\|last\|next\|prev]` | detail view of a single row (key=value pairs) |
+| `!stats [col]` | numeric summary: min, max, mean, stddev, p50, p90, p99, sum |
+
+### Exporting
+
+| Command | Effect |
+|---------|--------|
+| `!save <file> [OQL]` | write CSV/TSV/JSON (format detected from extension); optional inline query |
+| `!export [csv\|tsv\|json] [file]` | export to stdout or file (default: CSV to stdout) |
+
+### Display settings
+
+| Command | Effect |
+|---------|--------|
+| `!set` | show current settings |
+| `!set limit <N>` | cap displayed rows (0 = unlimited) |
+| `!set bytes raw\|human` | byte columns as integers or `4.3 KiB` |
+| `!set color on\|off` | ANSI color in output |
+| `!set null <str>` | null display string (default: `null`) |
+| `!width [N]` | cell display width cap (0 = unlimited) |
+
+### Heap exploration
+
+| Command | Effect |
+|---------|--------|
+| `!classes [pat]` | list class names (substring filter) |
+| `!fields [pat]` | list field names |
+| `!describe <class>` | show fields, types, superclass |
+| `!obj <class>#<N>` | inspect a single object by dense index |
+| `!count <class>` | instance count shortcut |
+| `!reachable` / `!all` / `!mode` | toggle/show GC-reachability mode |
+
+### Help
+
+Type `!help` for a compact overview, or `!help <topic>` for a deep-dive:
+
+```
+!help oql        OQL language reference
+!help views      named views: running, defining, listing
+!help filter     filtering and searching rows
+!help sort       sorting
+!help export     CSV / TSV / JSON export
+!help set        display settings
+!help explore    heap exploration
+!help inspect    inspecting results
+!help shape      all result-shaping commands
+!help history    command history
+!help keys       keyboard shortcuts
+!help tips       workflow recipes
+```
+
+---
+
 ## Grammar surface
 
 ```
@@ -926,6 +1044,9 @@ These features are available in `hprof-analyzer` but not in Eclipse MAT's OQL:
 | Interactive REPL with Tab completion and history | `hprof-analyzer query heap.hprof --repl` |
 | Report embedding (`--query` / `--query-file`) | fold OQL results into HTML/MD/JSON report |
 | Named queries library (`/run <name>`) | `/run top-classes-by-count` |
+| User-defined views (`!define`/`!undefine`) — persistent across sessions | `!define big-strings SELECT * FROM java.lang.String s WHERE s.value.length > 1000` |
+| REPL result shaping (`!filter`, `!sort`, `!select`, `!pivot`, …) | `!sort -retainedHeap` then `!top 10` then `!save top.csv` |
+| Topic-based help system (`!help <topic>`) | `!help views`, `!help filter`, `!help tips` |
 | `@index` / `@class` attribute aliases | `@index` = `@objectId`; `@class` = `@displayName` |
 | `jsonify(x [, depth])` — expand object to JSON tree | `SELECT jsonify(x) FROM INSTANCEOF java.util.HashMap x LIMIT 3` |
 | `s[n]` / `s[a:b]` array subscript / slice | `SELECT s[0] FROM int[] s LIMIT 10` |

@@ -2537,7 +2537,12 @@ function startTerminal() {
     + (namedQueries.length ? `  ·  ${namedQueries.length.toLocaleString('en-US')} named queries` : '')
     + (histCount ? `  ·  ${histCount.toLocaleString('en-US')} history entries` : '')
     + '\x1b[0m');
-  term.writeln('\x1b[2m    Tab = complete  ·  Ctrl+R = history  ·  /help = commands  ·  /examples = OQL tour\x1b[0m');
+  term.writeln('\x1b[2m    Tab = complete  ·  Ctrl+R = history  ·  /help = commands  ·  /views = named queries  ·  /examples = OQL tour\x1b[0m');
+  let dumpName = (wasmSession && wasmSession._fileName) || '';
+  if (!dumpName && serverUrl) {
+    fetch(serverUrl + '/status').then(r => r.json()).then(d => { if (d.dump) term.writeln(`\x1b[2m    dump: ${d.dump}\x1b[0m`); }).catch(() => {});
+  }
+  if (dumpName) term.writeln(`\x1b[2m    dump: ${dumpName}\x1b[0m`);
   term.writeln('');
 
   // Wrapper: write prompt and refresh the floating action strip state.
@@ -2917,7 +2922,7 @@ function startTerminal() {
     // Complete / commands
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
-      const cmds = ['help','clear','status','analyze','history','export','set','classes','fields','plan','explain','filter','grep',
+      const cmds = ['help','views','clear','status','analyze','history','export','set','classes','fields','plan','explain','filter','grep',
                     'sort','unique','pivot','stats','top','head','tail','row','undo','sample','cols','columns','select','drop','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect',
                     'store','remove','star','unstar','viz','dashboard'];
       const matches = cmds.filter(c => c.startsWith(partial));
@@ -3193,6 +3198,25 @@ function startTerminal() {
     if (cmd === '/examples' || cmd.startsWith('/examples ')) {
       const cat = cmd.replace('/examples', '').trim() || null;
       printExamples(cat);
+      writePrompt();
+      return;
+    }
+    if (cmd === '/views' || cmd.startsWith('/views ')) {
+      const filter = cmd === '/views' ? null : cmd.slice(7).trim().toLowerCase();
+      const matches = namedQueries.filter(q => !filter
+        || q.name.toLowerCase().includes(filter)
+        || (q.display || '').toLowerCase().includes(filter)
+        || (q.group || '').toLowerCase().includes(filter));
+      term.writeln('');
+      term.writeln(`\x1b[1;33mBuilt-in views\x1b[0m${filter ? ` matching \x1b[36m${filter}\x1b[0m` : ''} (${matches.length}):`);
+      term.writeln('\x1b[2m  run with /run <name> (a unique prefix works)\x1b[0m');
+      let group = null;
+      for (const q of matches) {
+        if (q.group !== group) { group = q.group; term.writeln(''); term.writeln(`  \x1b[2m${group}\x1b[0m`); }
+        const needs = q.needs_retained ? '  \x1b[33m[needs full analysis]\x1b[0m' : '';
+        term.writeln(`    \x1b[36m${q.name.padEnd(40)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${needs}`);
+      }
+      term.writeln('');
       writePrompt();
       return;
     }

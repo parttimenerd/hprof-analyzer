@@ -312,6 +312,19 @@ where
         })
 }
 
+/// Returns true if `tok` is an identifier matching one of the clause-opening
+/// keywords that follow WHERE/HAVING in a SELECT statement.
+/// Used as the synchronisation point for predicate-level recovery.
+fn is_clause_keyword(tok: &Token) -> bool {
+    match tok {
+        Token::Ident(s) => matches!(
+            s.to_ascii_uppercase().as_str(),
+            "GROUP" | "HAVING" | "ORDER" | "LIMIT" | "OFFSET" | "UNION" | "INTERSECT" | "EXCEPT"
+        ),
+        _ => false,
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub(crate) fn parser<'a, I>() -> impl Parser<'a, I, Query, extra::Err<Rich<'a, Token>>>
 where
@@ -641,7 +654,13 @@ where
             .or(lit)
             .or(just(Token::LParen)
                 .ignore_then(expr.clone())
-                .then_ignore(just(Token::RParen)))
+                .then_ignore(just(Token::RParen))
+                .recover_with(via_parser(nested_delimiters(
+                    Token::LParen,
+                    Token::RParen,
+                    [(Token::LBracket, Token::RBracket)],
+                    |_span| Expr::Lit(Value::Null),
+                ))))
             .or(
                 // `attr[expr]` (index) or `attr[start:end]` (slice), or bare `attr`.
                 attr.clone()
@@ -959,7 +978,13 @@ where
         let predicate = recursive(|pred| {
             let paren = just(Token::LParen)
                 .ignore_then(pred.clone())
-                .then_ignore(just(Token::RParen));
+                .then_ignore(just(Token::RParen))
+                .recover_with(via_parser(nested_delimiters(
+                    Token::LParen,
+                    Token::RParen,
+                    [(Token::LBracket, Token::RBracket)],
+                    |_span| Predicate::Bool(true),
+                )));
             let instanceof = attr
                 .clone()
                 .then_ignore(ident_ci("INSTANCEOF"))
@@ -1192,23 +1217,41 @@ where
         // Defined here (inside base_query) so it can reuse `predicate`.
         // Wrapped in `recursive` so that THEN/ELSE can themselves be nested CASE exprs.
         let case_expr = recursive(|case_expr| {
-            let then_expr = case_expr.clone().map(|e| e).or(expr.clone());
-            ident_ci("CASE")
-                .ignore_then(
-                    ident_ci("WHEN")
-                        .ignore_then(predicate.clone())
-                        .then_ignore(ident_ci("THEN"))
-                        .then(then_expr.clone())
-                        .repeated()
-                        .at_least(1)
-                        .collect::<Vec<_>>(),
-                )
-                .then(ident_ci("ELSE").ignore_then(then_expr).or_not())
-                .then_ignore(ident_ci("END"))
-                .map(|(branches, else_)| Expr::Case {
-                    branches,
-                    else_: else_.map(Box::new),
-                })
+            let then_expr = case_expr.clone().or(expr.clone());
+
+            // Recovery: on any failure inside CASE…END, skip tokens until END
+            // (or end of input) and produce a null literal as the fallback.
+            let case_recovery = via_parser(
+                any()
+                    .filter(
+                        |t: &Token| !matches!(t, Token::Ident(s) if s.eq_ignore_ascii_case("END")),
+                    )
+                    .ignored()
+                    .repeated()
+                    .then_ignore(ident_ci("END").or_not())
+                    .to(Expr::Lit(Value::Null)),
+            );
+
+            ident_ci("CASE").ignore_then(
+                ident_ci("WHEN")
+                    .ignore_then(predicate.clone().labelled("CASE predicate"))
+                    .then_ignore(ident_ci("THEN"))
+                    .then(then_expr.clone().labelled("CASE result"))
+                    .repeated()
+                    .at_least(1)
+                    .collect::<Vec<_>>()
+                    .then(
+                        ident_ci("ELSE")
+                            .ignore_then(then_expr.labelled("CASE default"))
+                            .or_not(),
+                    )
+                    .then_ignore(ident_ci("END"))
+                    .map(|(branches, else_)| Expr::Case {
+                        branches,
+                        else_: else_.map(Box::new),
+                    })
+                    .recover_with(case_recovery),
+            )
         });
 
         // select item: AGG(item) | path(a, b) | toString(s) | * | case_expr | expr
@@ -1642,7 +1685,13 @@ where
         });
 
         // Collect aliased items, then unzip into parallel vecs.
+        // Recovery: if a single item fails, skip until the next comma (or end of
+        // input) and retry — so `SELECT broken, col2 FROM …` still parses col2.
         let select_list = select_item
+            .recover_with(skip_then_retry_until(
+                any().ignored(),
+                just(Token::Comma).ignored().or(end()),
+            ))
             .separated_by(just(Token::Comma))
             .at_least(1)
             .collect::<Vec<_>>()
@@ -1763,9 +1812,9 @@ where
                     );
                 // ON condition: expr = expr (equality only for now)
                 let join_on = ident_ci("ON")
-                    .ignore_then(expr.clone())
+                    .ignore_then(expr.clone().labelled("JOIN condition"))
                     .then_ignore(just(Token::Eq))
-                    .then(expr.clone())
+                    .then(expr.clone().labelled("JOIN condition"))
                     .map(|(lhs, rhs)| JoinOn { lhs, rhs });
                 // A single JOIN clause: (INNER | LEFT OUTER? | <bare>) JOIN ... ON ...
                 // The kind is: LEFT -> Left, everything else -> Inner.
@@ -1782,7 +1831,25 @@ where
                     .map(|((kind, source), on)| JoinClause { kind, source, on });
                 one_join.repeated().collect::<Vec<_>>()
             })
-            .then(ident_ci("WHERE").ignore_then(predicate.clone()).or_not())
+            .then({
+                // Recovery: on WHERE predicate failure, skip tokens until the
+                // next clause keyword (GROUP, HAVING, ORDER, …) or end of input.
+                let where_recovery = via_parser(
+                    any()
+                        .filter(|t: &Token| !is_clause_keyword(t))
+                        .ignored()
+                        .repeated()
+                        .to(Predicate::Bool(true)),
+                );
+                ident_ci("WHERE")
+                    .ignore_then(
+                        predicate
+                            .clone()
+                            .labelled("WHERE predicate")
+                            .recover_with(where_recovery),
+                    )
+                    .or_not()
+            })
             // GROUP BY <expr> [, <expr>]*
             .then(
                 ident_ci("GROUP")
@@ -1791,6 +1858,11 @@ where
                         case_expr
                             .clone()
                             .or(expr.clone())
+                            .labelled("GROUP BY expression")
+                            .recover_with(skip_then_retry_until(
+                                any().ignored(),
+                                just(Token::Comma).ignored().or(end()),
+                            ))
                             .separated_by(just(Token::Comma))
                             .at_least(1)
                             .collect::<Vec<_>>(),
@@ -1799,12 +1871,29 @@ where
                     .map(|v| v.unwrap_or_default()),
             )
             // HAVING <predicate>
-            .then(ident_ci("HAVING").ignore_then(predicate.clone()).or_not())
+            .then({
+                let having_recovery = via_parser(
+                    any()
+                        .filter(|t: &Token| !is_clause_keyword(t))
+                        .ignored()
+                        .repeated()
+                        .to(Predicate::Bool(true)),
+                );
+                ident_ci("HAVING")
+                    .ignore_then(
+                        predicate
+                            .clone()
+                            .labelled("HAVING predicate")
+                            .recover_with(having_recovery),
+                    )
+                    .or_not()
+            })
             .then(
                 ident_ci("ORDER")
                     .ignore_then(ident_ci("BY"))
                     .ignore_then(
                         attr.clone()
+                            .labelled("ORDER BY column")
                             .then(
                                 ident_ci("ASC")
                                     .to(SortDir::Asc)
@@ -1812,6 +1901,10 @@ where
                                     .or_not()
                                     .map(|d| d.unwrap_or(SortDir::Asc)),
                             )
+                            .recover_with(skip_then_retry_until(
+                                any().ignored(),
+                                just(Token::Comma).ignored().or(end()),
+                            ))
                             .separated_by(just(Token::Comma))
                             .at_least(1)
                             .collect::<Vec<_>>(),
@@ -2706,59 +2799,260 @@ fn missing_by_hint(src: &str) -> Option<&'static str> {
     None
 }
 
-/// Compact single-line message for one chumsky error. Custom (`Rich::custom`)
-/// reasons — e.g. `dominators(x) requires ...` — are surfaced verbatim with a
-/// trailing `at <line>:<col>`; positional errors keep the `unexpected <found>`
-/// form. Shared by [`parse_internal`] and [`parse_or_report`] so custom
-/// diagnostics never get flattened into a generic "unexpected" message.
-fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
+// ── Error detail infrastructure ──────────────────────────────────────────────
+
+/// Full structured error information for one chumsky `Rich` error.
+/// Produced by [`build_error_detail`] and consumed by both
+/// [`compact_error`] (inline, single-line) and [`parse_or_report_with_context`]
+/// (ariadne caret with note/help blocks).
+struct ErrorDetail {
+    /// Main error message (e.g. "unexpected ',' — expected an expression").
+    message: String,
+    /// Additional context rendered as ariadne `with_note` or inline `(note: …)`.
+    note: Option<String>,
+    /// Suggested fix rendered as ariadne `with_help` or inline `(help: …)`.
+    help: Option<String>,
+}
+
+/// Build a human-readable "expected …" fragment from a chumsky error's expected
+/// patterns.  Prefers labels (e.g. "a WHERE predicate", "an expression") over
+/// raw token names.  Returns `None` when the expected set is empty.
+fn describe_expected(e: &Rich<'_, Token>) -> Option<String> {
+    let mut labels: Vec<&str> = Vec::new();
+    let mut tok_names: Vec<String> = Vec::new();
+    for pat in e.expected() {
+        match pat {
+            chumsky::error::RichPattern::Label(s) => {
+                if !labels.contains(&s.as_ref()) {
+                    labels.push(s);
+                }
+            }
+            chumsky::error::RichPattern::Token(t) => {
+                let name = token_display(t);
+                if !tok_names.contains(&name) {
+                    tok_names.push(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    if !labels.is_empty() {
+        let best = labels.first().unwrap();
+        let article = if best.starts_with(|c: char| "aeiouAEIOU".contains(c)) {
+            "an"
+        } else {
+            "a"
+        };
+        return Some(format!("expected {article} {best}"));
+    }
+    if !tok_names.is_empty() && tok_names.len() <= 4 {
+        return Some(format!("expected {}", tok_names.join(", ")));
+    }
+    None
+}
+
+/// Produce a context-aware `note` when the expected-description mentions a
+/// grammar position for which we can offer concrete guidance.
+fn context_note_for_expected(exp: &str, ctx: &ParseContext<'_>) -> Option<String> {
+    if exp.contains("class name") {
+        if !ctx.class_names.is_empty() {
+            let preview: Vec<&str> = ctx.class_names.iter().take(5).map(String::as_str).collect();
+            let more = if ctx.class_names.len() > 5 {
+                format!(", … ({} total)", ctx.class_names.len())
+            } else {
+                String::new()
+            };
+            return Some(format!(
+                "available classes include: {}{}",
+                preview.join(", "),
+                more
+            ));
+        }
+        return Some(
+            "class names have the form `com.example.MyClass` (use dots, not slashes)".into(),
+        );
+    }
+    if exp.contains("attribute") {
+        let preview = &ATTRIBUTES[..ATTRIBUTES.len().min(6)];
+        return Some(format!("available attributes: {}", preview.join(", ")));
+    }
+    if exp.contains("WHERE predicate")
+        || exp.contains("HAVING predicate")
+        || exp.contains("CASE predicate")
+    {
+        return Some(
+            "a predicate is a boolean condition, e.g. `@usedHeapSize > 1024` or `s.value LIKE \"hello.*\"`".into(),
+        );
+    }
+    if exp.contains("GROUP BY expression") || exp.contains("ORDER BY column") {
+        return Some(
+            "valid column references: an @attribute, a field name, or a SELECT alias".into(),
+        );
+    }
+    None
+}
+
+/// Produce a context-aware `help` (suggested fix) for a given expected fragment.
+fn context_help_for_expected(exp: &str, ctx: &ParseContext<'_>) -> Option<String> {
+    if exp.contains("expression") {
+        let agg_sample = AGG_FUNCS[..AGG_FUNCS.len().min(4)].join(", ");
+        let fn_sample: Vec<&str> = FUNCS.iter().copied().take(4).collect();
+        return Some(format!(
+            "valid expressions include: @attributes, field names, functions ({}, …), aggregates ({}, …)",
+            fn_sample.join(", "),
+            agg_sample
+        ));
+    }
+    if exp.contains("class name") && !ctx.class_names.is_empty() {
+        let example = &ctx.class_names[0];
+        return Some(format!("try: `SELECT * FROM {example}`"));
+    }
+    None
+}
+
+/// Build structured error detail for one chumsky error, incorporating
+/// context-aware notes/help when `ctx` carries database information.
+///
+/// Single source of truth for all OQL parse-error messages; both
+/// [`compact_error`] and [`parse_or_report_with_context`] delegate here.
+fn build_error_detail(src: &str, e: &Rich<'_, Token>, ctx: &ParseContext<'_>) -> ErrorDetail {
+    // 1. Custom errors — surface verbatim.
+    if let chumsky::error::RichReason::Custom(msg) = e.reason() {
+        return ErrorDetail {
+            message: msg.clone(),
+            note: None,
+            help: None,
+        };
+    }
+
+    // 2. Build the "unexpected <found>" base.
+    let found = e
+        .found()
+        .map(token_display)
+        .unwrap_or_else(|| "end of input".to_string());
     let span = *e.span();
-    let (line, col) = line_col(src, span.start);
-    match e.reason() {
-        chumsky::error::RichReason::Custom(msg) => format!("{msg} at {line}:{col}"),
-        _ => {
-            let found = e
-                .found()
-                .map(token_display)
-                .unwrap_or_else(|| "end of input".to_string());
-            // On end-of-input, a `SELECT` with no `FROM` is the likely cause;
-            // otherwise fall back to the nearest-keyword hint.
-            if e.found().is_none() {
-                if let Some(hint) = missing_from_hint(src) {
-                    return format!("unexpected {found} at {line}:{col} — {hint}");
-                }
+    let message: String;
+    let mut note: Option<String> = None;
+    let mut help: Option<String> = None;
+
+    // 3. End-of-input path.
+    if e.found().is_none() {
+        if let Some(hint) = missing_from_hint(src) {
+            if !ctx.class_names.is_empty() {
+                let example = &ctx.class_names[0];
+                message = format!("unexpected {found} — a query needs a `FROM <class>` clause");
+                help = Some(format!(
+                    "try: `SELECT * FROM {example}` (or another class from your heap dump)"
+                ));
+            } else {
+                message = format!("unexpected {found} — {hint}");
             }
-            // `ORDER <key>` with no `BY` surfaces as an unexpected token right
-            // after ORDER; hint the missing BY before the generic suggestion.
-            if let Some(hint) = missing_by_hint(src) {
-                return format!("unexpected {found} at {line}:{col} — {hint}");
+        } else if let Some(exp) = describe_expected(e) {
+            note = context_note_for_expected(&exp, ctx);
+            message = format!("unexpected {found} — {exp}");
+        } else {
+            message = format!("unexpected {found}");
+        }
+        return ErrorDetail {
+            message,
+            note,
+            help,
+        };
+    }
+
+    // 4. ORDER <key> with no BY.
+    if let Some(hint) = missing_by_hint(src) {
+        return ErrorDetail {
+            message: format!("unexpected {found} — {hint}"),
+            note: None,
+            help: None,
+        };
+    }
+
+    // 5. `==` (double-equals).
+    if matches!(e.found(), Some(Token::Eq)) {
+        if let Some(hint) = double_eq_hint(src, span.start) {
+            return ErrorDetail {
+                message: format!("unexpected {found} — {hint}"),
+                note: None,
+                help: None,
+            };
+        }
+    }
+
+    // 6. Unexpected `(` — unknown function call or ORDER BY aggregate.
+    if matches!(e.found(), Some(Token::LParen)) {
+        if let Some(hint) = order_by_aggregate_hint(src, span.start) {
+            return ErrorDetail {
+                message: format!("unexpected {found} — {hint}"),
+                note: None,
+                help: None,
+            };
+        }
+        match (unknown_call_hint(src, span.start), describe_expected(e)) {
+            (Some(callee), _) => {
+                return ErrorDetail {
+                    message: format!("unexpected {found} — did you mean `{callee}`?"),
+                    note: None,
+                    help: None,
+                };
             }
-            // `==` lexes as two `Eq`; the second is unexpected. Hint the single `=`.
-            if matches!(e.found(), Some(Token::Eq)) {
-                if let Some(hint) = double_eq_hint(src, span.start) {
-                    return format!("unexpected {found} at {line}:{col} — {hint}");
-                }
+            (None, Some(exp)) => {
+                note = context_note_for_expected(&exp, ctx);
+                return ErrorDetail {
+                    message: format!("unexpected {found} — {exp}"),
+                    note,
+                    help,
+                };
             }
-            // An `unexpected LParen` usually means the preceding word was meant to
-            // be a function call but names an unknown function; suggest the nearest.
-            // Special case: `ORDER BY COUNT(*)` etc — suggest using an alias.
-            if matches!(e.found(), Some(Token::LParen)) {
-                if let Some(hint) = order_by_aggregate_hint(src, span.start) {
-                    return format!("unexpected {found} at {line}:{col} — {hint}");
-                }
-                if let Some(callee) = unknown_call_hint(src, span.start) {
-                    return format!(
-                        "unexpected {found} at {line}:{col} — did you mean `{callee}`?"
-                    );
-                }
-            }
-            let suggestion = suggest_for_found(e.found());
-            match suggestion {
-                Some(s) => format!("unexpected {found} at {line}:{col} — did you mean `{s}`?"),
-                None => format!("unexpected {found} at {line}:{col}"),
+            (None, None) => {
+                return ErrorDetail {
+                    message: format!("unexpected {found}"),
+                    note: None,
+                    help: None,
+                };
             }
         }
     }
+
+    // 7. Generic: suggest-for-found / describe-expected fall-through.
+    match (suggest_for_found(e.found()), describe_expected(e)) {
+        (Some(s), _) => {
+            message = format!("unexpected {found} — did you mean `{s}`?");
+        }
+        (None, Some(exp)) => {
+            note = context_note_for_expected(&exp, ctx);
+            help = context_help_for_expected(&exp, ctx);
+            message = format!("unexpected {found} — {exp}");
+        }
+        (None, None) => {
+            message = format!("unexpected {found}");
+        }
+    }
+    ErrorDetail {
+        message,
+        note,
+        help,
+    }
+}
+
+/// Compact single-line message for one chumsky error.  Uses [`build_error_detail`]
+/// for the hint chain and appends note/help inline when present.
+fn compact_error(src: &str, e: &Rich<'_, Token>, ctx: &ParseContext<'_>) -> String {
+    let span = *e.span();
+    let (line, col) = line_col(src, span.start);
+    let detail = build_error_detail(src, e, ctx);
+    if matches!(e.reason(), chumsky::error::RichReason::Custom(_)) {
+        return format!("{} at {line}:{col}", detail.message);
+    }
+    let mut out = format!("{} at {line}:{col}", detail.message);
+    if let Some(n) = &detail.note {
+        out.push_str(&format!(" (note: {n})"));
+    }
+    if let Some(h) = &detail.help {
+        out.push_str(&format!(" (help: {h})"));
+    }
+    out
 }
 
 /// Rewrite `"<string>".<method>(` → `method("<string",(` so that method calls on
@@ -3004,13 +3298,17 @@ fn from_references_name(q: &Query, name: &str) -> bool {
 
 /// Parse a token slice, recursively handling a leading WITH clause.
 /// CTE bodies may themselves start with WITH (nested WITH inside parens).
-fn parse_tokens(toks: &[(Token, SimpleSpan)], src: &str) -> Result<Query, String> {
+fn parse_tokens(
+    toks: &[(Token, SimpleSpan)],
+    src: &str,
+    ctx: &ParseContext<'_>,
+) -> Result<Query, String> {
     let Some((cte_parts, main_toks)) = split_with_clause(toks)? else {
         let eoi: SimpleSpan = (src.len()..src.len()).into();
         let stream = Stream::from_iter(toks.to_vec()).map(eoi, |(t, s)| (t, s));
         return parser().parse(stream).into_result().map_err(|errs| {
             errs.iter()
-                .map(|e| compact_error(src, e))
+                .map(|e| compact_error(src, e, ctx))
                 .collect::<Vec<_>>()
                 .join("; ")
         });
@@ -3022,7 +3320,7 @@ fn parse_tokens(toks: &[(Token, SimpleSpan)], src: &str) -> Result<Query, String
                 "duplicate CTE name '{name}' in the WITH clause (names must be unique)"
             ));
         }
-        let mut body = parse_tokens(inner, src)?;
+        let mut body = parse_tokens(inner, src, ctx)?;
         // Chained CTEs (a CTE referencing an earlier CTE) would desugar into a
         // subquery nested inside a subquery, which the planner rejects
         // (single-level FROM-subquery support). Fail here with a CTE-specific
@@ -3044,7 +3342,7 @@ fn parse_tokens(toks: &[(Token, SimpleSpan)], src: &str) -> Result<Query, String
         }
         ctes.push(Cte { name, query: body });
     }
-    let mut main = parse_tokens(main_toks, src)?;
+    let mut main = parse_tokens(main_toks, src, ctx)?;
     substitute_ctes(&mut main, &ctes);
     main.ctes = ctes;
     Ok(main)
@@ -3060,7 +3358,7 @@ fn parse_internal(src: &str) -> Result<Query, String> {
     let src = rewrite_string_dot_method(src);
     let src = src.as_ref();
     let toks = tokenize_spanned(src)?;
-    parse_tokens(&toks, src)
+    parse_tokens(&toks, src, &ParseContext::empty())
 }
 
 /// Production parse: chumsky over logos tokens. Returns a [`QueryError`] whose
@@ -3072,12 +3370,60 @@ pub fn parse(src: &str) -> Result<Query, QueryError> {
     parse_internal(src).map_err(QueryError)
 }
 
-/// Parse, returning either the [`Query`] or a rendered ariadne diagnostic string
-/// (caret + red underline) for CLI/REPL display.
+// ── ParseContext ──────────────────────────────────────────────────────────────
+
+/// Optional database context supplied to the parser entry points that produce
+/// user-facing diagnostics.  When present, error messages and hints can be
+/// personalised with actual class names from the loaded heap dump.
+///
+/// Pass [`ParseContext::empty()`] when no database is available (tests, the
+/// compact `parse()` path, pre-heap-load validation).
+pub struct ParseContext<'a> {
+    /// All class names known to the loaded heap dump, e.g.
+    /// `["java.lang.String", "java.lang.Object", …]`.
+    /// Used to generate concrete `FROM` examples in error messages.
+    /// Empty slice = no database context available.
+    pub class_names: &'a [String],
+}
+
+impl<'a> ParseContext<'a> {
+    /// A context with no database information — produces generic messages
+    /// identical to the pre-context behaviour.
+    pub const fn empty() -> Self {
+        ParseContext { class_names: &[] }
+    }
+}
+
+impl Default for ParseContext<'_> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+/// Parse with ariadne diagnostics, using no database context.
+/// Callers that have a loaded heap dump should use
+/// [`parse_or_report_with_context`] instead.
 pub fn parse_or_report(src: &str) -> Result<Query, String> {
-    if let Some(msg) = blank_query_message(src) {
+    parse_or_report_with_context(src, &ParseContext::empty())
+}
+
+/// Parse and return either the [`Query`] or a rendered ariadne diagnostic
+/// (caret + red underline, optional note/help blocks) for CLI/REPL display.
+///
+/// `ctx` provides optional database context used to personalise error messages
+/// with actual class names.  Pass [`ParseContext::empty()`] when unavailable.
+pub fn parse_or_report_with_context(src: &str, ctx: &ParseContext<'_>) -> Result<Query, String> {
+    // Blank-query fast-path, with context-aware example class if available.
+    if src.trim().is_empty() {
+        let msg = if !ctx.class_names.is_empty() {
+            let example = &ctx.class_names[0];
+            format!("empty query — supply OQL, e.g. `SELECT * FROM {example}`")
+        } else {
+            "empty query — supply OQL, e.g. `SELECT * FROM java.lang.String`".to_string()
+        };
         return Err(msg);
     }
+
     let rewritten = rewrite_string_dot_method(src);
     let src = rewritten.as_ref();
     // Tokenizer errors have no chumsky span to underline; surface the message.
@@ -3088,72 +3434,39 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
     // WITH (CTE) queries: structural WITH errors and CTE-body errors come
     // back as plain messages from parse_tokens — skip the caret renderer.
     if starts_with_with(&toks) {
-        return parse_tokens(&toks, src);
+        return parse_tokens(&toks, src, ctx);
     }
     let eoi: SimpleSpan = (src.len()..src.len()).into();
     let stream = Stream::from_iter(toks).map(eoi, |(t, s): (Token, SimpleSpan)| (t, s));
     match parser().parse(stream).into_result() {
         Ok(q) => Ok(q),
         Err(errs) => {
-            let mut buf = Vec::new();
+            let mut buf: Vec<String> = Vec::new();
             for e in &errs {
                 let span = *e.span();
-                let msg = match e.reason() {
-                    chumsky::error::RichReason::Custom(m) => m.clone(),
-                    _ => {
-                        let found = e
-                            .found()
-                            .map(token_display)
-                            .unwrap_or_else(|| "end of input".to_string());
-                        // Append the nearest-keyword hint (same as the plain
-                        // message path) so the CLI/REPL caret diagnostic also
-                        // suggests the intended keyword on a typo. On end of
-                        // input, prefer the missing-FROM hint.
-                        if e.found().is_none() {
-                            if let Some(hint) = missing_from_hint(src) {
-                                format!("unexpected {found} — {hint}")
-                            } else {
-                                format!("unexpected {found}")
-                            }
-                        } else if let Some(hint) = missing_by_hint(src) {
-                            format!("unexpected {found} — {hint}")
-                        } else if matches!(e.found(), Some(Token::Eq))
-                            && double_eq_hint(src, span.start).is_some()
-                        {
-                            format!(
-                                "unexpected {found} — {}",
-                                double_eq_hint(src, span.start).unwrap()
-                            )
-                        } else if matches!(e.found(), Some(Token::LParen)) {
-                            if let Some(hint) = order_by_aggregate_hint(src, span.start) {
-                                format!("unexpected {found} — {hint}")
-                            } else {
-                                match unknown_call_hint(src, span.start) {
-                                    Some(callee) => {
-                                        format!("unexpected {found} — did you mean `{callee}`?")
-                                    }
-                                    None => format!("unexpected {found}"),
-                                }
-                            }
-                        } else {
-                            match suggest_for_found(e.found()) {
-                                Some(s) => format!("unexpected {found} — did you mean `{s}`?"),
-                                None => format!("unexpected {found}"),
-                            }
-                        }
-                    }
-                };
+                let detail = build_error_detail(src, e, ctx);
+
                 let mut out = Vec::new();
                 // Guard against inverted spans (start > end) which ariadne panics on.
                 let label_range = span.start.min(span.end)
                     ..span.start.max(span.end).max(span.start + 1).min(src.len());
-                Report::build(ReportKind::Error, ("query", span.into_range()))
-                    .with_message(&msg)
+
+                let mut report = Report::build(ReportKind::Error, ("query", span.into_range()))
+                    .with_message(&detail.message)
                     .with_label(
                         Label::new(("query", label_range))
-                            .with_message(&msg)
+                            .with_message(&detail.message)
                             .with_color(Color::Red),
-                    )
+                    );
+
+                if let Some(n) = &detail.note {
+                    report = report.with_note(n);
+                }
+                if let Some(h) = &detail.help {
+                    report = report.with_help(h);
+                }
+
+                report
                     .finish()
                     .write(("query", Source::from(src)), &mut out)
                     .ok();

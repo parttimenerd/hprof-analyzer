@@ -344,6 +344,20 @@ fn upper_tokens(prefix: &str) -> Vec<String> {
 
 // ── public API ────────────────────────────────────────────────────────────────
 
+/// Byte offset in `line` where the "typed fragment" begins — the partial word
+/// the user is currently typing, which a chosen completion replaces.  Matches
+/// the same delimiter logic that [`complete`] uses internally.
+///
+/// Useful for callers that need to compute an editor replacement span:
+/// `Span { start: completion_typed_start(line, pos), end: pos }`.
+pub fn completion_typed_start(line: &str, cursor_pos: usize) -> usize {
+    let prefix = &line[..cursor_pos.min(line.len())];
+    prefix
+        .rfind(|c: char| c.is_whitespace() || c == '(' || c == ',')
+        .map(|i| i + 1)
+        .unwrap_or(0)
+}
+
 /// Completions for `line[..cursor_pos]`.
 /// `class_names` and `field_index` come from a loaded session; pass empty values when none.
 pub fn complete(
@@ -462,8 +476,9 @@ pub fn complete(
     let info = extract_query_info(prefix_before_typed);
     let toks = upper_tokens(prefix_before_typed);
 
-    // Inside an unclosed CASE the top-level clause starters chumsky reports
-    // are misleading — offer CASE-context content instead.
+    // Inside an unclosed CASE the chumsky expectations are misleading (they
+    // describe the enclosing clause, not the CASE branch) — the token
+    // state-machine knows better and takes precedence.
     if typed.is_empty() {
         if let Some(state) = case_state(&toks) {
             return dedup(case_suggestions(state, &info.select_aliases));
@@ -483,28 +498,6 @@ pub fn complete(
             // literals and operators here but not attributes/functions.
             candidates.extend(FUNCS.iter().map(|f| func(f)));
             candidates.extend(ATTRIBUTES.iter().map(|a| attr(a)));
-        }
-        if toks.last().map(|t| t == "HAVING").unwrap_or(false) {
-            // HAVING predicates are almost always about aggregates — offer them
-            // even when the chumsky expectation is a plain expression.
-            candidates.extend(AGG_FUNCS.iter().map(|f| agg(f)));
-        }
-        if toks.len() >= 2 && toks[toks.len() - 1] == "BY" && toks[toks.len() - 2] == "ORDER" {
-            // ORDER BY an aggregate must reference the declared column alias
-            // (bare COUNT(*) is rejected) — offer the SELECT-list aliases.
-            let lower = typed.to_ascii_lowercase();
-            candidates.extend(
-                info.select_aliases
-                    .iter()
-                    .filter(|a| lower.is_empty() || a.to_ascii_lowercase().starts_with(&lower))
-                    .map(|a| Completion {
-                        value: a.clone(),
-                        display: a.clone(),
-                        group: Some("alias".to_string()),
-                        description: Some("SELECT-list alias".to_string()),
-                        trailing_space: true,
-                    }),
-            );
         }
         return dedup(candidates);
     }
@@ -642,7 +635,10 @@ fn completions_from_context(
                         .map(|f| func(f)),
                 );
             }
-            "expression" => {
+            // SELECT-item expression — broadest: *, aggregates, functions,
+            // attributes, fields, expression keywords.
+            // CASE result/default are expression positions too.
+            "expression" | "CASE result" | "CASE default" => {
                 if "*".starts_with(&lower) {
                     res.push(Completion {
                         value: "*".into(),
@@ -663,12 +659,6 @@ fn completions_from_context(
                         .iter()
                         .filter(|f| f.to_ascii_lowercase().starts_with(&lower))
                         .map(|f| func(f)),
-                );
-                res.extend(
-                    ATTRIBUTES
-                        .iter()
-                        .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
-                        .map(|a| attr(a)),
                 );
                 res.extend(
                     ATTRIBUTES
@@ -698,8 +688,24 @@ fn completions_from_context(
                             }),
                     );
                 }
+                // In CASE result/default, aliases are valid expression starters.
+                if matches!(label.as_str(), "CASE result" | "CASE default") {
+                    res.extend(
+                        info.select_aliases
+                            .iter()
+                            .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
+                            .map(|a| Completion {
+                                value: a.clone(),
+                                display: a.clone(),
+                                group: Some("alias".to_string()),
+                                description: Some("SELECT-list alias".to_string()),
+                                trailing_space: true,
+                            }),
+                    );
+                }
             }
-            "predicate expression" => {
+            // Predicate positions: WHERE, JOIN ON, generic predicate, CASE WHEN.
+            "predicate expression" | "WHERE predicate" | "JOIN condition" | "CASE predicate" => {
                 res.extend(
                     FUNCS
                         .iter()
@@ -732,6 +738,98 @@ fn completions_from_context(
                 if "exists".starts_with(&lower) {
                     res.push(kw("EXISTS"));
                 }
+            }
+            // HAVING predicate: like a normal predicate plus aggregate functions
+            // (HAVING is almost always about aggregate results).
+            "HAVING predicate" => {
+                res.extend(
+                    AGG_FUNCS
+                        .iter()
+                        .filter(|f| f.to_ascii_lowercase().starts_with(&lower))
+                        .map(|f| agg(f)),
+                );
+                res.extend(
+                    FUNCS
+                        .iter()
+                        .filter(|f| f.to_ascii_lowercase().starts_with(&lower))
+                        .map(|f| func(f)),
+                );
+                res.extend(
+                    ATTRIBUTES
+                        .iter()
+                        .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
+                        .map(|a| attr(a)),
+                );
+                if let Some(fields) = from_fields {
+                    res.extend(
+                        fields
+                            .iter()
+                            .filter(|f| f.to_ascii_lowercase().starts_with(&lower))
+                            .map(|f| Completion {
+                                value: f.clone(),
+                                display: f.clone(),
+                                group: Some("field".to_string()),
+                                description: None,
+                                trailing_space: true,
+                            }),
+                    );
+                }
+                if "not".starts_with(&lower) {
+                    res.push(kw("NOT"));
+                }
+                if "exists".starts_with(&lower) {
+                    res.push(kw("EXISTS"));
+                }
+            }
+            // GROUP BY expression: attrs, functions, fields — no aggregates or *.
+            "GROUP BY expression" => {
+                res.extend(
+                    FUNCS
+                        .iter()
+                        .filter(|f| f.to_ascii_lowercase().starts_with(&lower))
+                        .map(|f| func(f)),
+                );
+                res.extend(
+                    ATTRIBUTES
+                        .iter()
+                        .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
+                        .map(|a| attr(a)),
+                );
+                if let Some(fields) = from_fields {
+                    res.extend(
+                        fields
+                            .iter()
+                            .filter(|f| f.to_ascii_lowercase().starts_with(&lower))
+                            .map(|f| Completion {
+                                value: f.clone(),
+                                display: f.clone(),
+                                group: Some("field".to_string()),
+                                description: None,
+                                trailing_space: true,
+                            }),
+                    );
+                }
+            }
+            // ORDER BY column: aliases and attributes.
+            "ORDER BY column" => {
+                res.extend(
+                    info.select_aliases
+                        .iter()
+                        .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
+                        .map(|a| Completion {
+                            value: a.clone(),
+                            display: a.clone(),
+                            group: Some("alias".to_string()),
+                            description: Some("SELECT-list alias".to_string()),
+                            trailing_space: true,
+                        }),
+                );
+                res.extend(
+                    ATTRIBUTES
+                        .iter()
+                        .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
+                        .map(|a| attr(a)),
+                );
             }
             "column ref" => {
                 res.extend(
@@ -766,6 +864,15 @@ fn completions_from_context(
             | "expression"
             | "predicate expression"
             | "column ref"
+            // Clause-specific labels handled in second pass.
+            | "WHERE predicate"
+            | "HAVING predicate"
+            | "GROUP BY expression"
+            | "ORDER BY column"
+            | "JOIN condition"
+            | "CASE predicate"
+            | "CASE result"
+            | "CASE default"
             // Chumsky's label for the symbolic-comparison operator position —
             // the operators themselves come via the Token arms below.
             | "comparison operator" => {}

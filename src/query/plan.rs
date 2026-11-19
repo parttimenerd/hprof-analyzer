@@ -2779,12 +2779,20 @@ fn reject_in_subqueries_if_correlated(pred: &Predicate) -> Result<(), QueryError
 /// planner before this check is reached).
 fn agg_histogram_answerable(item: &SelectItem) -> bool {
     match item {
-        SelectItem::Aggregate { func, arg, .. } => matches!(
-            (func, arg.as_ref()),
-            (AggFunc::Count, SelectItem::Star)
-                | (AggFunc::Sum, SelectItem::Attr(Attr::UsedHeapSize))
-                | (AggFunc::Avg, SelectItem::Attr(Attr::UsedHeapSize))
-        ),
+        SelectItem::Aggregate { func, arg, filter } => {
+            // A FILTER (WHERE ...) predicate needs per-object evaluation; the
+            // HistogramOnly path only has class-level counts/sizes so it cannot
+            // honour such a filter. Fall through to SingleScan instead.
+            if filter.is_some() {
+                return false;
+            }
+            matches!(
+                (func, arg.as_ref()),
+                (AggFunc::Count, SelectItem::Star)
+                    | (AggFunc::Sum, SelectItem::Attr(Attr::UsedHeapSize))
+                    | (AggFunc::Avg, SelectItem::Attr(Attr::UsedHeapSize))
+            )
+        }
         // Non-aggregate items: treat as not histogram-answerable so any stray
         // mix falls through to SingleScan.
         _ => false,

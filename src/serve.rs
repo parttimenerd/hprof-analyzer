@@ -109,12 +109,20 @@ impl ServeState {
 
     fn status_json(&self) -> serde_json::Value {
         let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        match *guard {
+        let mut json = match *guard {
             AnalysisState::NotStarted => serde_json::json!({"status": "not_started"}),
             AnalysisState::Running => serde_json::json!({"status": "analyzing"}),
             AnalysisState::Done(_) => serde_json::json!({"status": "ready"}),
             AnalysisState::Failed(ref e) => serde_json::json!({"status": "failed", "error": e}),
+        };
+        // The analyzed dump path, so shells can show which file is loaded.
+        if let Some(obj) = json.as_object_mut() {
+            obj.insert(
+                "dump".to_string(),
+                serde_json::Value::String(self.path.clone()),
+            );
         }
+        json
     }
 
     /// Build the offline HTML download response for `GET /download/offline`.

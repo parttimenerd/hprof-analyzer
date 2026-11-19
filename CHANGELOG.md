@@ -4,6 +4,26 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **REPL: user-defined views (`!define` / `!undefine`)** — save an OQL query as a
+  named view with `!define big-strings SELECT * FROM java.lang.String s WHERE
+  s.value.length > 1000 LIMIT 50`, then run it by name (`big-strings`, `!run
+  big-strings`, `/run big-strings`) in any future session.  Views are persisted
+  to `~/.config/hprof-analyzer/config.toml` (respects `$XDG_CONFIG_HOME`).  User
+  views shadow built-ins with the same name; `!undefine <name>` removes them.
+  Tab-completion covers view names in `!run`, `/run`, and `!undefine`.
+- **REPL: comprehensive topic-based help (`!help <topic>`)** — `!help` shows a
+  compact command overview; `!help <topic>` deep-dives into a specific area with
+  syntax, examples, and workflow tips.  Twelve topics: `oql`, `views`, `explore`,
+  `inspect`, `shape`, `filter`, `sort`, `export`, `set`, `history`, `keys`,
+  `tips`.  Aliases are generous (`!help grep` → filter, `!help cols` → inspect).
+  `!help <Tab>` completes topic names with descriptions.  Unknown topics print the
+  full topic list.
+- **REPL: custom prompt** — the prompt now shows the dump filename (e.g.
+  `heap.hprof〉`) instead of the default reedline prompt, so you always know which
+  dump you're querying.
+
 ### Fixed
 
 - **HTML report: flame graph no longer crashes on cyclic class-level dominator
