@@ -6901,10 +6901,14 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
             // Find roots: classes that appear as dominator but not as dominated child of another class
             const allDominated = new Set(filteredPairs.map(p => p.dominated_class));
             const roots: FNode[] = [];
-            const buildNode = (label: string, retainedOverride?: number): FNode => {
+            // Class-level pairs can be cyclic (A dominates an instance of B, B dominates an instance of A
+            // in a different chain) so visited guards against infinite recursion.
+            const buildNode = (label: string, retainedOverride?: number, visited = new Set<string>()): FNode => {
+              if (visited.has(label)) return { label, retained: retainedOverride ?? retainedByClass.get(label) ?? 0, children: [] };
+              visited.add(label);
               const kids = childrenOf.get(label);
               const children: FNode[] = kids
-                ? [...kids.entries()].map(([lbl, ret]) => buildNode(lbl, ret)).sort((a, b) => b.retained - a.retained)
+                ? [...kids.entries()].map(([lbl, ret]) => buildNode(lbl, ret, new Set(visited))).sort((a, b) => b.retained - a.retained)
                 : [];
               return { label, retained: retainedOverride ?? retainedByClass.get(label) ?? 0, children,
                 pairCount: pairCountByClass.get(label),

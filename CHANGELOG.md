@@ -4,6 +4,14 @@ All notable changes to hprof-analyzer are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **HTML report: flame graph no longer crashes on cyclic class-level dominator
+  pairs** — class-level aggregation can produce A→B and B→A pairs simultaneously
+  (different object instances), causing `buildNode` to recurse infinitely and
+  trigger a JavaScript stack overflow. The dominator tree builder now tracks
+  visited classes per path and breaks cycles by emitting a leaf stub.
+
 ## [0.3.5] — 2026-11-18
 
 ### Added

@@ -268,3 +268,44 @@ test('copy button appears on hover over a data cell', async ({ page }) => {
     await expect(copyBtn).toBeVisible();
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// 6. DOMINATOR FLAME GRAPH — regression for cycle-induced stack overflow
+// ═══════════════════════════════════════════════════════════════════════
+test('dominator flame graph tab renders without JS errors or crash', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', err => errors.push(`pageerror: ${err.message}`));
+  page.on('console', msg => {
+    if (msg.type() === 'error') {
+      const text = msg.text();
+      if (!text.includes('favicon') && !text.includes('net::ERR_')) {
+        errors.push(`console.error: ${text}`);
+      }
+    }
+  });
+
+  await openReport(page);
+
+  // Navigate to Dominator Analysis section.
+  await page.evaluate(() => {
+    document.getElementById('dominator-analysis')?.scrollIntoView();
+  });
+  await page.waitForTimeout(300);
+
+  // Look for the Flame button (🔥 Flame) in the dominator view switcher.
+  const flameBtn = page.locator('#dominator-analysis button', { hasText: /Flame/ }).first();
+  if (await flameBtn.count() === 0) {
+    // Report was generated without dominator pairs — skip gracefully.
+    return;
+  }
+
+  await flameBtn.click();
+  // Wait for React to re-render; a cycle bug would throw before this resolves.
+  await page.waitForTimeout(500);
+
+  // Check there's no "Report failed to render" error boundary.
+  const renderError = page.locator('.render-error');
+  expect(await renderError.count(), 'render-error boundary triggered after Flame click').toBe(0);
+
+  expect(errors, `JS errors after clicking Flame:\n${errors.join('\n')}`).toHaveLength(0);
+});
