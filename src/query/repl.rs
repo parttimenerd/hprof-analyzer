@@ -535,7 +535,7 @@ fn hint_for(cand: &str) -> Option<String> {
 /// Chart kinds accepted by the `-- @viz` directive (mirrors `viz::VizKind`).
 const VIZ_KINDS: &[&str] = &["table", "histogram", "piechart", "treemap"];
 /// Argument keys accepted after the kind in a `-- @viz` directive.
-const VIZ_ARG_KEYS: &[&str] = &["label=", "value=", "cap="];
+const VIZ_ARG_KEYS: &[&str] = &["label=", "value=", "cap=", "title=", "name="];
 
 /// When `upto` (the line up to the cursor) is a `-- @viz` directive line, return
 /// Tab suggestions for it: the chart kind right after `@viz`, then the arg keys

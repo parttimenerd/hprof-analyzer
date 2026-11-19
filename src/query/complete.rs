@@ -354,6 +354,12 @@ pub fn complete(
 ) -> Vec<Completion> {
     let prefix = &line[..cursor_pos.min(line.len())];
 
+    // -- @viz directive-line completion (chart kind, then arg keys) — only
+    // when the cursor is on a line that is itself a `-- @viz` directive.
+    if let Some(cs) = viz_directive_completions(prefix) {
+        return cs;
+    }
+
     // /run <name> completion — unchanged
     if let Some(typed) = prefix.strip_prefix("/run ") {
         return crate::named_queries::NAMED_QUERIES
@@ -398,7 +404,7 @@ pub fn complete(
         let info_for_dot = extract_query_info(prefix_before_typed);
         if let Some((ref class_name, _)) = info_for_dot.from_class {
             if let Some(fields) = field_index.fields.get(class_name.as_str()) {
-                let res: Vec<Completion> = fields
+                let mut res: Vec<Completion> = fields
                     .iter()
                     .filter(|f| f.to_ascii_lowercase().starts_with(&field_prefix))
                     .map(|f| Completion {
@@ -409,6 +415,20 @@ pub fn complete(
                         trailing_space: true,
                     })
                     .collect();
+                // Method-call syntax is also valid on the alias — offer the
+                // supported methods (value ends with "(" so the call opens
+                // directly) after the fields.
+                for m in crate::query::parse::METHODS.iter() {
+                    if m.to_ascii_lowercase().starts_with(&field_prefix) {
+                        res.push(Completion {
+                            value: format!("{m}("),
+                            display: format!("{m}()"),
+                            group: Some("method".to_string()),
+                            description: Some("method call".to_string()),
+                            trailing_space: false,
+                        });
+                    }
+                }
                 if !res.is_empty() {
                     return dedup(res);
                 }
@@ -425,6 +445,9 @@ pub fn complete(
         if "select".starts_with(&lower) {
             res.push(kw("SELECT"));
         }
+        if "with".starts_with(&lower) {
+            res.push(kw("WITH"));
+        }
         if lower.len() >= 2 || lower.contains('.') {
             for c in class_names {
                 if c.to_ascii_lowercase().starts_with(&lower) {
@@ -437,21 +460,58 @@ pub fn complete(
 
     // Static analysis: extract FROM class/alias, AS aliases, alias.field accesses.
     let info = extract_query_info(prefix_before_typed);
+    let toks = upper_tokens(prefix_before_typed);
+
+    // Inside an unclosed CASE the top-level clause starters chumsky reports
+    // are misleading — offer CASE-context content instead.
+    if typed.is_empty() {
+        if let Some(state) = case_state(&toks) {
+            return dedup(case_suggestions(state, &info.select_aliases));
+        }
+    }
 
     // Parse prefix_before_typed (i.e., everything up to and including the last delimiter)
     // to get what the grammar expects next.
     let ctx = parse_for_complete(prefix_before_typed, prefix_before_typed.len());
-    let candidates = completions_from_context(&ctx, &info, typed, class_names, field_index);
+    let mut candidates = completions_from_context(&ctx, &info, typed, class_names, field_index);
 
     if !candidates.is_empty() {
         // Chumsky told us what's valid — trust it, skip fallback heuristic.
+        // Contextual extensions on top:
+        if prefix_before_typed.trim_end().ends_with(',') {
+            // Argument/IN-list commas: expression content. Chumsky reports
+            // literals and operators here but not attributes/functions.
+            candidates.extend(FUNCS.iter().map(|f| func(f)));
+            candidates.extend(ATTRIBUTES.iter().map(|a| attr(a)));
+        }
+        if toks.last().map(|t| t == "HAVING").unwrap_or(false) {
+            // HAVING predicates are almost always about aggregates — offer them
+            // even when the chumsky expectation is a plain expression.
+            candidates.extend(AGG_FUNCS.iter().map(|f| agg(f)));
+        }
+        if toks.len() >= 2 && toks[toks.len() - 1] == "BY" && toks[toks.len() - 2] == "ORDER" {
+            // ORDER BY an aggregate must reference the declared column alias
+            // (bare COUNT(*) is rejected) — offer the SELECT-list aliases.
+            let lower = typed.to_ascii_lowercase();
+            candidates.extend(
+                info.select_aliases
+                    .iter()
+                    .filter(|a| lower.is_empty() || a.to_ascii_lowercase().starts_with(&lower))
+                    .map(|a| Completion {
+                        value: a.clone(),
+                        display: a.clone(),
+                        group: Some("alias".to_string()),
+                        description: Some("SELECT-list alias".to_string()),
+                        trailing_space: true,
+                    }),
+            );
+        }
         return dedup(candidates);
     }
 
     let lower = typed.to_ascii_lowercase();
 
     // Fallback: chumsky returned nothing, use old heuristic
-    let toks = upper_tokens(prefix_before_typed);
 
     // When typed is non-empty, scan all keyword/function/attribute slices
     // (original behaviour: a partial keyword anywhere mid-query filters globally).
@@ -484,12 +544,37 @@ pub fn complete(
                     res.push(class(c));
                 }
             }
+            // Virtual tables are FROM targets too.
+            for vt in virtual_table_completions() {
+                if vt.value.to_ascii_lowercase().starts_with(&lower) {
+                    res.push(vt);
+                }
+            }
+        }
+        // ORDER BY context: declared SELECT-list aliases (the way to sort by
+        // an aggregate).
+        if toks.len() >= 2 && toks[toks.len() - 1] == "BY" && toks[toks.len() - 2] == "ORDER" {
+            for a in &info.select_aliases {
+                if a.to_ascii_lowercase().starts_with(&lower) {
+                    res.push(Completion {
+                        value: a.clone(),
+                        display: a.clone(),
+                        group: Some("alias".to_string()),
+                        description: Some("SELECT-list alias".to_string()),
+                        trailing_space: true,
+                    });
+                }
+            }
         }
         return dedup(res);
     }
 
     // typed is empty — context-driven suggestions from token history
-    dedup(empty_context_completions(&toks, class_names))
+    dedup(empty_context_completions(
+        &toks,
+        class_names,
+        &info.select_aliases,
+    ))
 }
 
 fn completions_from_context(
@@ -529,6 +614,11 @@ fn completions_from_context(
                         .filter(|c| lower.is_empty() || c.to_ascii_lowercase().starts_with(&lower))
                         .map(|c| class(c)),
                 );
+                // Virtual tables are valid FROM sources in every class-name
+                // context; offer them (prefix-filtered) after the heap classes.
+                res.extend(virtual_table_completions().into_iter().filter(|vt| {
+                    lower.is_empty() || vt.value.to_ascii_lowercase().starts_with(&lower)
+                }));
             }
         }
     }
@@ -580,6 +670,20 @@ fn completions_from_context(
                         .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
                         .map(|a| attr(a)),
                 );
+                res.extend(
+                    ATTRIBUTES
+                        .iter()
+                        .filter(|a| a.to_ascii_lowercase().starts_with(&lower))
+                        .map(|a| attr(a)),
+                );
+                // Expression-grammar keywords: CASE expressions, boolean/NULL
+                // literals, and predicate negation — otherwise a typed prefix
+                // matching a FUNCS entry (e.g. "CAS") would shadow CASE.
+                for kw_str in ["CASE", "NOT", "EXISTS", "TRUE", "FALSE", "NULL"] {
+                    if kw_str.to_ascii_lowercase().starts_with(&lower) {
+                        res.push(kw(kw_str));
+                    }
+                }
                 if let Some(fields) = from_fields {
                     res.extend(
                         fields
@@ -661,7 +765,10 @@ fn completions_from_context(
             | "attribute"
             | "expression"
             | "predicate expression"
-            | "column ref" => {}
+            | "column ref"
+            // Chumsky's label for the symbolic-comparison operator position —
+            // the operators themselves come via the Token arms below.
+            | "comparison operator" => {}
             s => {
                 let up = s.to_ascii_uppercase();
                 if up.to_ascii_lowercase().starts_with(&lower) {
@@ -698,6 +805,28 @@ fn completions_from_context(
                     trailing_space: true,
                 });
             }
+            // Arithmetic / string-concat operators — the grammar expects them
+            // right after an operand (binary-op position).
+            Token::Plus if "+".starts_with(&lower) => res.push(op_completion("+", "add")),
+            Token::Minus if "-".starts_with(&lower) => res.push(op_completion("-", "subtract")),
+            Token::Divide if "/".starts_with(&lower) => res.push(op_completion("/", "divide")),
+            Token::Percent if "%".starts_with(&lower) => {
+                res.push(op_completion("%", "modulo"));
+            }
+            Token::Concat if "||".starts_with(&lower) => {
+                res.push(op_completion("||", "concatenate strings"));
+            }
+            // Symbolic comparison operators (predicate positions).
+            Token::Eq if "=".starts_with(&lower) => res.push(op_completion("=", "equals")),
+            Token::Ne if "!=".starts_with(&lower) => res.push(op_completion("!=", "not equals")),
+            Token::Lt if "<".starts_with(&lower) => res.push(op_completion("<", "less than")),
+            Token::Le if "<=".starts_with(&lower) => {
+                res.push(op_completion("<=", "less or equal"));
+            }
+            Token::Gt if ">".starts_with(&lower) => res.push(op_completion(">", "greater than")),
+            Token::Ge if ">=".starts_with(&lower) => {
+                res.push(op_completion(">=", "greater or equal"));
+            }
             _ => {}
         }
     }
@@ -705,12 +834,148 @@ fn completions_from_context(
     res
 }
 
+/// Operator-style completion (group "operator", trailing space so the right
+/// operand starts fresh).
+fn op_completion(value: &str, description: &str) -> Completion {
+    Completion {
+        value: value.to_string(),
+        display: value.to_string(),
+        group: Some("operator".to_string()),
+        description: Some(description.to_string()),
+        trailing_space: true,
+    }
+}
+
+/// Completion for a `-- @viz` directive line: the chart kind first, then the
+/// argument keys (`label=`, `value=`, `cap=`, `title=`, `name=`). Only fires
+/// when the cursor's line itself starts with `--` and names `@viz`; returns
+/// `None` otherwise (the OQL completion machinery takes over).
+fn viz_directive_completions(prefix: &str) -> Option<Vec<Completion>> {
+    // Only the current line matters — directives are single-line comments.
+    let line_start = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let cur = &prefix[line_start..];
+    let trimmed = cur.trim_start();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let rest = trimmed.strip_prefix("--")?.trim_start();
+    let after_viz = rest
+        .strip_prefix("@viz")
+        .or_else(|| rest.strip_prefix("viz"))?;
+    if !after_viz.is_empty() && !after_viz.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let delim_pos = cur.rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+    let frag = &cur[delim_pos..];
+    let lower = frag.to_ascii_lowercase();
+    // Words already committed after `@viz` (excluding the trailing fragment).
+    let after_kw_start = cur.len() - trimmed.len() + (trimmed.len() - after_viz.len());
+    let committed = if delim_pos > after_kw_start {
+        cur[after_kw_start..delim_pos].split_whitespace().count()
+    } else {
+        0
+    };
+    if committed == 0 {
+        // The fragment is the chart kind.
+        return Some(
+            VIZ_KINDS
+                .iter()
+                .filter(|k| k.starts_with(&lower))
+                .map(|k| kw(k))
+                .collect(),
+        );
+    }
+    if frag.contains('=') {
+        // Typing a column name / number — nothing to suggest.
+        return Some(Vec::new());
+    }
+    Some(
+        VIZ_ARG_KEYS
+            .iter()
+            .filter(|k| k.starts_with(&lower))
+            .map(|k| kw(k))
+            .collect(),
+    )
+}
+
+/// Chart kinds accepted by `-- @viz` directives.
+const VIZ_KINDS: &[&str] = &["table", "histogram", "piechart", "treemap"];
+/// Argument keys accepted after the kind in a `-- @viz` directive.
+const VIZ_ARG_KEYS: &[&str] = &["label=", "value=", "cap=", "title=", "name="];
+
+/// If `toks` sits inside an unclosed `CASE` expression, describe the state:
+/// which CASE construct the completer should suggest next. `None` when not
+/// inside a CASE (or the CASE was closed with `END`).
+fn case_state(toks: &[String]) -> Option<&'static str> {
+    let case_idx = toks.iter().rposition(|t| t == "CASE")?;
+    let after = &toks[case_idx + 1..];
+    if after.iter().any(|t| t == "END") {
+        return None;
+    }
+    Some(match after.last().map(|t| t.as_str()) {
+        None | Some("CASE") => "when",         // CASE → WHEN
+        Some("WHEN") => "predicate",           // WHEN → predicate starters
+        Some("THEN") | Some("ELSE") => "expr", // THEN/ELSE → expression starters
+        _ => "operand-done",                   // a predicate/value is in progress → THEN
+    })
+}
+
+/// Suggestions for the CASE-context `state` returned by [`case_state`].
+fn case_suggestions(state: &str, select_aliases: &[String]) -> Vec<Completion> {
+    let mut res = Vec::new();
+    match state {
+        "when" => res.push(kw("WHEN")),
+        "predicate" => {
+            res.extend(FUNCS.iter().map(|f| func(f)));
+            res.extend(ATTRIBUTES.iter().map(|a| attr(a)));
+            res.push(kw("NOT"));
+            res.push(kw("EXISTS"));
+            res.push(kw("TRUE"));
+            res.push(kw("FALSE"));
+            res.push(kw("NULL"));
+        }
+        "expr" => {
+            res.extend(FUNCS.iter().map(|f| func(f)));
+            res.extend(ATTRIBUTES.iter().map(|a| attr(a)));
+            for a in select_aliases {
+                res.push(Completion {
+                    value: a.clone(),
+                    display: a.clone(),
+                    group: Some("alias".to_string()),
+                    description: Some("SELECT-list alias".to_string()),
+                    trailing_space: true,
+                });
+            }
+            res.push(kw("CASE"));
+            res.push(kw("TRUE"));
+            res.push(kw("FALSE"));
+            res.push(kw("NULL"));
+        }
+        _ => {
+            // A predicate/value is in progress: the milestones are THEN plus
+            // the predicate continuations.
+            res.push(kw("THEN"));
+            for op in ["=", "!=", "<", "<=", ">", ">="] {
+                res.push(op_completion(op, "comparison"));
+            }
+            for kw_str in ["AND", "OR", "IS", "IN", "BETWEEN", "LIKE", "NOT"] {
+                res.push(kw(kw_str));
+            }
+        }
+    }
+    res
+}
+
 /// Suggestions when the cursor is right after a space (typed token is empty).
-fn empty_context_completions(toks: &[String], class_names: &[String]) -> Vec<Completion> {
+fn empty_context_completions(
+    toks: &[String],
+    class_names: &[String],
+    select_aliases: &[String],
+) -> Vec<Completion> {
     let n = toks.len();
     if n == 0 {
-        // Very beginning — offer SELECT
-        return vec![kw("SELECT")];
+        // Very beginning — offer SELECT and WITH (CTE)
+        return vec![kw("SELECT"), kw("WITH")];
     }
 
     let last = toks[n - 1].as_str();
@@ -731,18 +996,39 @@ fn empty_context_completions(toks: &[String], class_names: &[String]) -> Vec<Com
             res
         }
 
-        // After FROM or INSTANCEOF — class names first, INSTANCEOF at end
+        // After FROM or INSTANCEOF — class names first, then virtual tables and
+        // other FROM sources, INSTANCEOF at end
         "FROM" | "INSTANCEOF" => {
             let mut res: Vec<Completion> = class_names.iter().map(|c| class(c)).collect();
+            res.extend(virtual_table_completions());
             if last == "FROM" {
                 res.push(kw("INSTANCEOF"));
             }
             res
         }
 
-        // After WHERE / AND / OR / NOT / HAVING — expression starters
-        "WHERE" | "AND" | "OR" | "NOT" | "HAVING" => {
+        // After JOIN a joined source is expected; after its modifiers, JOIN.
+        "JOIN" => {
+            let mut res: Vec<Completion> = class_names.iter().map(|c| class(c)).collect();
+            res.extend(virtual_table_completions());
+            res
+        }
+        "INNER" | "LEFT" | "OUTER" => vec![kw("JOIN")],
+
+        // After WHERE / AND / OR / NOT — expression starters
+        "WHERE" | "AND" | "OR" | "NOT" => {
             let mut res = Vec::new();
+            res.extend(FUNCS.iter().map(|f| func(f)));
+            res.extend(ATTRIBUTES.iter().map(|a| attr(a)));
+            res.push(kw("NOT"));
+            res.push(kw("EXISTS"));
+            res
+        }
+
+        // After HAVING — aggregates are the primary use
+        "HAVING" => {
+            let mut res = Vec::new();
+            res.extend(AGG_FUNCS.iter().map(|f| agg(f)));
             res.extend(FUNCS.iter().map(|f| func(f)));
             res.extend(ATTRIBUTES.iter().map(|a| attr(a)));
             res.push(kw("NOT"));
@@ -754,6 +1040,17 @@ fn empty_context_completions(toks: &[String], class_names: &[String]) -> Vec<Com
         "BY" if n >= 2 && (toks[n - 2] == "ORDER" || toks[n - 2] == "GROUP") => {
             if toks[n - 2] == "ORDER" {
                 let mut res = vec![];
+                // Declared SELECT-list aliases first — the way to ORDER BY an
+                // aggregate (bare COUNT(*) is rejected; use the alias).
+                for a in select_aliases {
+                    res.push(Completion {
+                        value: a.clone(),
+                        display: a.clone(),
+                        group: Some("alias".to_string()),
+                        description: Some("SELECT-list alias".to_string()),
+                        trailing_space: true,
+                    });
+                }
                 res.extend(ATTRIBUTES.iter().map(|a| attr(a)));
                 res.extend(FUNCS.iter().map(|f| func(f)));
                 res
@@ -801,8 +1098,30 @@ fn clause_starters() -> Vec<Completion> {
         kw("GROUP BY"),
         kw("LIMIT"),
         kw("UNION"),
+        kw("INTERSECT"),
+        kw("EXCEPT"),
         kw("AS"),
     ]
+}
+
+/// Class-style completion with a description (for virtual tables).
+fn class_desc(name: &str, desc: &str) -> Completion {
+    Completion {
+        value: name.to_string(),
+        display: name.to_string(),
+        group: Some("class".to_string()),
+        description: Some(desc.to_string()),
+        trailing_space: true,
+    }
+}
+
+/// Virtual-table FROM targets, derived from the engine's registry so
+/// completions never drift from `__classes__`/`__gc_roots__`/`__threads__`.
+fn virtual_table_completions() -> Vec<Completion> {
+    crate::query::vtable::VIRTUAL_TABLE_NAMES
+        .iter()
+        .map(|n| class_desc(&format!("__{n}__"), "virtual table"))
+        .collect()
 }
 
 fn dedup(mut v: Vec<Completion>) -> Vec<Completion> {
@@ -1548,12 +1867,77 @@ mod tests {
         let line = "SELECT * FROM java.lang.String s WHERE s.";
         let cs = complete(line, line.len(), &classes(), &string_field_index());
         for c in &cs {
-            assert!(
-                c.trailing_space,
-                "field {} should have trailing_space=true",
-                c.value
-            );
+            if c.group.as_deref() == Some("method") {
+                // Method completions end with "(" and must NOT append a space.
+                assert!(
+                    !c.trailing_space && c.value.ends_with('('),
+                    "method {} should end with '(' and trailing_space=false",
+                    c.value
+                );
+            } else {
+                assert!(
+                    c.trailing_space,
+                    "field {} should have trailing_space=true",
+                    c.value
+                );
+            }
         }
+    }
+
+    #[test]
+    fn method_completions_after_dot() {
+        // Classes WITH a field-index entry get fields + methods.
+        let line = "SELECT * FROM java.lang.String s WHERE s.su";
+        let cs = complete(line, line.len(), &classes(), &string_field_index());
+        assert!(
+            vals(&cs).contains(&"substr("),
+            "s.su → substr(; got: {:?}",
+            vals(&cs)
+        );
+        // "s." offers both fields and methods (distinct groups).
+        let line = "SELECT * FROM java.lang.String s WHERE s.";
+        let cs = complete(line, line.len(), &classes(), &string_field_index());
+        let v = vals(&cs);
+        assert!(v.contains(&"value"), "fields offered; got: {v:?}");
+        assert!(v.contains(&"length("), "methods offered; got: {v:?}");
+        let line = "SELECT * FROM java.lang.String s WHERE s.";
+        let cs = complete(line, line.len(), &classes(), &string_field_index());
+        let v = vals(&cs);
+        assert!(v.contains(&"length("), "s. must offer length(; got: {v:?}");
+        // Fields and methods coexist with distinct groups.
+        assert!(
+            cs.iter().any(|c| c.group.as_deref() == Some("field")),
+            "fields still offered"
+        );
+    }
+
+    #[test]
+    fn having_offers_aggregates_and_order_by_aliases() {
+        let line = "SELECT @displayName, COUNT(*) AS n FROM java.lang.String GROUP BY @displayName HAVING ";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"COUNT"), "HAVING → COUNT; got: {v:?}");
+        assert!(v.contains(&"MEDIAN"), "HAVING → MEDIAN");
+        // ORDER BY: declared aliases offered (with group "alias").
+        let line = "SELECT @displayName, COUNT(*) AS n FROM java.lang.String GROUP BY @displayName ORDER BY ";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        let n = cs
+            .iter()
+            .find(|c| c.value == "n" && c.group.as_deref() == Some("alias"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "ORDER BY must offer the declared alias n; got: {:?}",
+                    vals(&cs)
+                )
+            });
+        assert!(n.trailing_space);
+        // And they are prefix-filtered.
+        let line = "SELECT @displayName, COUNT(*) AS n FROM java.lang.String GROUP BY @displayName ORDER BY n";
+        let cs = complete(line, line.len(), &classes(), &ClassFieldIndex::empty());
+        assert!(
+            vals(&cs).contains(&"n"),
+            "ORDER BY n → alias n still offered"
+        );
     }
 
     #[test]
@@ -2068,5 +2452,362 @@ mod tests {
                 c.value
             );
         }
+    }
+
+    // ── New-grammar completion coverage (WITH, virtual tables, set ops) ──────
+
+    #[test]
+    fn with_cte_keyword_completes_at_query_start() {
+        let cs = complete("WIT", 3, &classes(), &ClassFieldIndex::empty());
+        assert!(vals(&cs).contains(&"WITH"), "WIT → WITH");
+        let cs = complete("", 0, &classes(), &ClassFieldIndex::empty());
+        assert!(
+            vals(&cs).contains(&"SELECT") && vals(&cs).contains(&"WITH"),
+            "empty input → SELECT and WITH"
+        );
+    }
+
+    #[test]
+    fn virtual_tables_complete_after_from() {
+        // Empty typed: virtual tables appear after the heap classes.
+        let cs = complete("SELECT * FROM ", 14, &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        for t in ["__classes__", "__gc_roots__", "__threads__"] {
+            assert!(v.contains(&t), "FROM space must offer {t}");
+        }
+        // Partial typed: "__cl" → __classes__ only.
+        let cs = complete(
+            "SELECT * FROM __cl",
+            18,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        assert!(v.contains(&"__classes__"), "__cl → __classes__");
+        assert!(
+            !v.contains(&"__gc_roots__"),
+            "__cl must not offer __gc_roots__"
+        );
+    }
+
+    #[test]
+    fn set_operations_complete_after_query() {
+        let cs = complete(
+            "SELECT * FROM java.lang.String ",
+            31,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        assert!(v.contains(&"UNION"), "UNION offered");
+        assert!(v.contains(&"INTERSECT"), "INTERSECT offered");
+        assert!(v.contains(&"EXCEPT"), "EXCEPT offered");
+    }
+
+    #[test]
+    fn values_and_join_complete_via_partial() {
+        let cs = complete(
+            "SELECT * FROM VAL",
+            17,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        assert!(vals(&cs).contains(&"VALUES"), "VAL → VALUES");
+        let cs = complete(
+            "SELECT * FROM java.lang.String J",
+            32,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        assert!(vals(&cs).contains(&"JOIN"), "J → JOIN");
+    }
+
+    #[test]
+    fn new_expression_keywords_complete() {
+        // Typed-partial grammar keywords reachable via parser expectations.
+        for (partial, expect) in [
+            ("SELECT COAL", "COALESCE"),
+            ("SELECT CAS", "CASE"),
+            ("SELECT * FROM java.lang.String s WHERE s IN BET", "BETWEEN"),
+            (
+                "SELECT @displayName FROM java.lang.Thread LIMIT 2 INTER",
+                "INTERSECT",
+            ),
+            ("SELECT * FROM ENT", "ENTRIES"),
+        ] {
+            let cs = complete(
+                partial,
+                partial.len(),
+                &classes(),
+                &ClassFieldIndex::empty(),
+            );
+            assert!(
+                vals(&cs).contains(&expect),
+                "{partial:?} must offer {expect}; got: {:?}",
+                vals(&cs)
+            );
+        }
+    }
+
+    // ── Arithmetic / operator-position coverage ───────────────────────────────
+
+    #[test]
+    fn arithmetic_operators_after_operand() {
+        // Binary-op position in the SELECT list: arithmetic operators offered.
+        let cs = complete(
+            "SELECT @usedHeapSize ",
+            21,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        for op in ["+", "-", "*", "/", "%"] {
+            assert!(
+                v.contains(&op),
+                "binary-op position must offer {op}; got: {v:?}"
+            );
+        }
+        // Inside parentheses after an operand: operators plus string concat.
+        let cs = complete(
+            "SELECT (@usedHeapSize ",
+            22,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        for op in ["+", "-", "/", "%", "||"] {
+            assert!(
+                v.contains(&op),
+                "paren operand position must offer {op}; got: {v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn after_operator_offers_operands() {
+        // Right-operand position: attributes, scalar functions, aggregates.
+        let cs = complete(
+            "SELECT @usedHeapSize + ",
+            23,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        assert!(v.contains(&"@usedHeapSize"), "operand offered after +");
+        assert!(v.contains(&"COUNT"), "aggregate offered after +");
+        assert!(v.contains(&"LOWER"), "scalar fn offered after +");
+    }
+
+    #[test]
+    fn cast_completion_and_targets() {
+        // CAST offered alongside CASE for the shared "CAS" prefix.
+        let cs = complete("SELECT CAS", 10, &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        assert!(v.contains(&"CAST"), "CAS → CAST; got: {v:?}");
+        assert!(v.contains(&"CASE"), "CAS → CASE; got: {v:?}");
+        // CAST target types complete after AS.
+        let cs = complete(
+            "SELECT CAST(@usedHeapSize AS ",
+            29,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        for t in ["INT", "FLOAT", "STRING", "BOOL"] {
+            assert!(v.contains(&t), "CAST target must offer {t}; got: {v:?}");
+        }
+    }
+
+    #[test]
+    fn boolean_literals_complete() {
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE TRU",
+            42,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        assert!(vals(&cs).contains(&"TRUE"), "TRU → TRUE");
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE @displayName IS NUL",
+            58,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        assert!(vals(&cs).contains(&"NULL"), "NUL → NULL");
+    }
+
+    // ── Predicate / CASE / JOIN / viz coverage ────────────────────────────────
+
+    #[test]
+    fn where_operand_offers_predicates_not_phantom_labels() {
+        // After an attribute operand in WHERE: comparison semantics + operators.
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE @usedHeapSize ",
+            53,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        for expect in ["NOT", "IN", "BETWEEN", "IS", "+", "-", "*", "/", "%", "||"] {
+            assert!(
+                v.contains(&expect),
+                "WHERE operand position must offer {expect}; got: {v:?}"
+            );
+        }
+        // The chumsky label "comparison operator" must never leak as a value.
+        assert!(
+            !v.iter().any(|x| x.contains(' ')),
+            "no phantom multi-word label values; got: {v:?}"
+        );
+    }
+
+    #[test]
+    fn not_like_operator_completes() {
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE @displayName NOT ",
+            56,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        assert!(vals(&cs).contains(&"LIKE"), "NOT → LIKE");
+    }
+
+    #[test]
+    fn between_separator_offers_and() {
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE @usedHeapSize BETWEEN 1 ",
+            63,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        assert!(vals(&cs).contains(&"AND"), "BETWEEN separator → AND");
+    }
+
+    #[test]
+    fn in_list_comma_offers_expressions() {
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE @objectId IN (1, ",
+            56,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        for expect in ["@objectId", "classof", "NULL", "TRUE"] {
+            assert!(
+                v.contains(&expect),
+                "IN-list comma must offer {expect}; got: {v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn case_contexts() {
+        // After CASE → WHEN.
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE CASE ",
+            44,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        assert!(vals(&cs).contains(&"WHEN"), "CASE → WHEN");
+        // After WHEN → predicate starters.
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE CASE WHEN ",
+            49,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        assert!(v.contains(&"@usedHeapSize"), "CASE WHEN → attributes");
+        assert!(v.contains(&"NOT"), "CASE WHEN → NOT");
+        // Operand inside WHEN → THEN + predicate continuations.
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE CASE WHEN @usedHeapSize ",
+            63,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        assert!(v.contains(&"THEN"), "CASE operand → THEN; got: {v:?}");
+        assert!(
+            v.contains(&"=") && v.contains(&">="),
+            "CASE operand → comparisons"
+        );
+        assert!(v.contains(&"BETWEEN"), "CASE operand → BETWEEN");
+        // After THEN → expression starters.
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE CASE WHEN 1 THEN ",
+            56,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        assert!(v.contains(&"@usedHeapSize"), "THEN → attributes");
+        assert!(v.contains(&"TRUE"), "THEN → literals");
+        // After END → back to top-level clause starters.
+        let cs = complete(
+            "SELECT * FROM java.lang.String s WHERE CASE WHEN 1 THEN 1 END ",
+            62,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        assert!(
+            vals(&cs).contains(&"ORDER BY"),
+            "after END → clause starters"
+        );
+    }
+
+    #[test]
+    fn join_positions() {
+        // After JOIN a joined source is expected.
+        let cs = complete(
+            "SELECT * FROM java.lang.String s JOIN ",
+            38,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        assert!(v.contains(&"java.lang.Thread"), "JOIN → classes");
+        assert!(v.contains(&"__classes__"), "JOIN → virtual tables");
+        // INNER → JOIN.
+        let cs = complete(
+            "SELECT * FROM java.lang.String s INN",
+            36,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        assert!(vals(&cs).contains(&"INNER"), "INN → INNER");
+    }
+
+    #[test]
+    fn viz_directive_completion() {
+        // Chart kinds on a bare directive line.
+        let cs = complete("-- @viz ", 8, &classes(), &ClassFieldIndex::empty());
+        let v = vals(&cs);
+        for k in ["table", "histogram", "piechart", "treemap"] {
+            assert!(v.contains(&k), "-- @viz → {k}; got: {v:?}");
+        }
+        // Arg keys after the kind — including title=/name=.
+        let cs = complete(
+            "-- @viz histogram ",
+            18,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        let v = vals(&cs);
+        for k in ["label=", "value=", "cap=", "title=", "name="] {
+            assert!(v.contains(&k), "-- @viz histogram → {k}; got: {v:?}");
+        }
+        // Kind prefix filter.
+        let cs = complete("-- @viz hist", 12, &classes(), &ClassFieldIndex::empty());
+        assert!(vals(&cs).contains(&"histogram"), "hist → histogram");
+        // Non-directive lines are untouched.
+        let cs = complete(
+            "SELECT * FROM java.lang.String ",
+            31,
+            &classes(),
+            &ClassFieldIndex::empty(),
+        );
+        assert!(!vals(&cs).contains(&"histogram"), "no viz leakage into OQL");
     }
 }

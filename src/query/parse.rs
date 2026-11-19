@@ -2371,6 +2371,13 @@ pub const RESERVED: &[&str] = &[
     "LEFT",
     "OUTER",
     "ON",
+    // Common-table-expression keyword (query start).
+    "WITH",
+    // Inline-literal-row source keyword (`FROM (VALUES …) AS t(cols)`).
+    "VALUES",
+    // Boolean literals.
+    "TRUE",
+    "FALSE",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
@@ -2399,6 +2406,8 @@ pub const FUNCS: &[&str] = &[
     "SUBSTRING",
     "CONCAT",
     "REPLACE",
+    // SQL-style cast: CAST(expr AS INT|FLOAT|STRING|BOOL).
+    "CAST",
 ];
 
 /// Supported method-call names for `receiver.name(args)` dispatch. Single source
