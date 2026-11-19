@@ -2,6 +2,8 @@
   "name": "hprof-report-smoke",
   "private": true,
   "devDependencies": {
-    "@playwright/test": "^1.48.0"
+    "@playwright/test": "^1.48.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   }
 }

@@ -309,3 +309,4 @@ test('dominator flame graph tab renders without JS errors or crash', async ({ pa
 
   expect(errors, `JS errors after clicking Flame:\n${errors.join('\n')}`).toHaveLength(0);
 });
+

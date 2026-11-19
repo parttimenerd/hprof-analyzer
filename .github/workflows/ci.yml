@@ -96,11 +96,17 @@ jobs:
         working-directory: tests/playwright
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright smoke test
+      - name: Run Playwright smoke tests
         working-directory: tests/playwright
         env:
           HPROF_HTML: /tmp/smoke-report.html
         run: npx playwright test report-smoke.spec.ts
+
+      - name: Run click sweep (5-minute budget)
+        working-directory: tests/playwright
+        env:
+          HPROF_HTML: /tmp/smoke-report.html
+        run: npx ts-node click-sweep.ts --budget 300
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v7
