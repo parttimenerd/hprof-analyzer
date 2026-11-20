@@ -3426,7 +3426,7 @@ pub fn expand_union_queries(
                 .map(|ob| {
                     ob.keys
                         .iter()
-                        .map(|(key, dir)| (crate::query::execute::attr_name(key), *dir))
+                        .map(|(key, dir)| (crate::query::execute::expr_name(key), *dir))
                         .collect()
                 })
                 .unwrap_or_default(),

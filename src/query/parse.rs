@@ -1893,8 +1893,8 @@ where
                 ident_ci("ORDER")
                     .ignore_then(ident_ci("BY"))
                     .ignore_then(
-                        attr.clone()
-                            .labelled("ORDER BY column")
+                        expr.clone()
+                            .labelled("ORDER BY expression")
                             .then(
                                 ident_ci("ASC")
                                     .to(SortDir::Asc)
@@ -2149,7 +2149,7 @@ fn normalize_query_ref_paths(q: &mut Query) {
     }
     if let Some(ob) = &mut q.order_by {
         for (key, _dir) in &mut ob.keys {
-            normalize_attr(key, alias.as_deref());
+            normalize_expr(key, alias.as_deref());
         }
     }
     for e in &mut q.group_by {
@@ -4983,7 +4983,7 @@ mod tests {
         let q = parse("SELECT @objectId FROM C ORDER BY @retainedHeapSize DESC").unwrap();
         let ob = q.order_by.expect("ORDER BY parsed");
         assert_eq!(ob.keys.len(), 1);
-        assert_eq!(ob.keys[0].0, Attr::RetainedHeapSize);
+        assert_eq!(ob.keys[0].0, Expr::Attr(Attr::RetainedHeapSize));
         assert_eq!(ob.keys[0].1, SortDir::Desc);
     }
     #[test]
@@ -5070,16 +5070,21 @@ mod tests {
 
     #[test]
     fn report_order_by_aggregate_hint_in_caret_diagnostic() {
-        let rep = parse_or_report(
+        // ORDER BY COUNT(*) is now caught at plan time (parse succeeds; planner rejects it).
+        let q = parse_or_report(
             "SELECT classof(x) AS class, COUNT(*) AS n \
              FROM INSTANCEOF java.lang.Object x \
              GROUP BY classof(x) \
              ORDER BY COUNT(*) DESC",
         )
-        .unwrap_err();
+        .unwrap();
+        let err =
+            crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap_err();
         assert!(
-            rep.contains("aggregate functions are not valid ORDER BY keys"),
-            "expected aggregate hint in caret diagnostic, got:\n{rep}"
+            err.0
+                .contains("aggregate functions are not valid ORDER BY keys"),
+            "expected aggregate hint in plan error, got:\n{}",
+            err.0
         );
     }
 
@@ -5541,7 +5546,7 @@ mod tests {
             .expect("should parse");
         assert_eq!(
             q.order_by.map(|o| o.keys.into_iter().next()),
-            Some(Some((Attr::RetainedHeapSize, SortDir::Desc)))
+            Some(Some((Expr::Attr(Attr::RetainedHeapSize), SortDir::Desc)))
         );
     }
 

@@ -243,7 +243,7 @@ Bugs deferred from prior slices. Fix cost varies; listed in rough priority order
 | — | **Subquery in SELECT clause** | Low | Open |
 | — | **CROSS JOIN** | Low | Open |
 | — | ~~**`UNION ALL` syntax**~~ | ~~Low~~ | **DONE** — `UNION ALL` sets `query.union_all = true`; deduplication is distinct from UNION |
-| — | **Expressions in ORDER BY** | Low | Open |
+| — | ~~**Expressions in ORDER BY**~~ | ~~Low~~ | **DONE** — `OrderBy.keys` changed from `Vec<(Attr, SortDir)>` to `Vec<(Expr, SortDir)>`; parser and all execution sites updated |
 | — | ~~**Nested CASE WHEN**~~ | ~~Low~~ | **DONE** — parses correctly (`nested_case_when_parses` test) |
 | — | ~~**`SELECT` inside `IN` predicate**~~ | ~~Low~~ | **DONE** — `attr IN (SELECT ...)` subquery form is parsed and planned (plan.rs `Predicate::InSubquery`) |
 | — | ~~**String concat operator `\|\|`**~~ | ~~Low~~ | **DONE** — parsed as `CONCAT(lhs, rhs)` method call (parse.rs line ~754) |

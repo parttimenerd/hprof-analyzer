@@ -661,6 +661,25 @@ fn expr_has_string_method(e: &Expr) -> bool {
     }
 }
 
+fn expr_has_aggregate(e: &Expr) -> bool {
+    match e {
+        Expr::Aggregate { .. } => true,
+        Expr::Attr(_) | Expr::Lit(_) => false,
+        Expr::Method { receiver, args, .. } => {
+            expr_has_aggregate(receiver) || args.iter().any(expr_has_aggregate)
+        }
+        Expr::Binary { lhs, rhs, .. } => expr_has_aggregate(lhs) || expr_has_aggregate(rhs),
+        Expr::Unary { arg, .. } => expr_has_aggregate(arg),
+        Expr::Case { branches, else_ } => {
+            branches.iter().any(|(_, ex)| expr_has_aggregate(ex))
+                || else_.as_ref().is_some_and(|e| expr_has_aggregate(e))
+        }
+        Expr::Coalesce(args) => args.iter().any(expr_has_aggregate),
+        Expr::NullIf { lhs, rhs } => expr_has_aggregate(lhs) || expr_has_aggregate(rhs),
+        Expr::Cast { expr, .. } => expr_has_aggregate(expr),
+    }
+}
+
 /// Returns true if the expression tree contains a `get(n)` method call.
 /// Used to set `needs.array_index` so the P2 late window is armed.
 fn expr_has_get_method(e: &Expr) -> bool {
@@ -787,8 +806,10 @@ fn reject_unsupported_methods(q: &Query) -> Result<(), QueryError> {
     }
     if let Some(ob) = &q.order_by {
         for (key, _dir) in &ob.keys {
-            if let crate::query::ast::Attr::ToHex(inner) = key {
+            if let crate::query::ast::Expr::Attr(crate::query::ast::Attr::ToHex(inner)) = key {
                 check_method_arity_in_expr(inner, &mut check);
+            } else {
+                check_method_arity_in_expr(key, &mut check);
             }
         }
     }
@@ -1389,6 +1410,19 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         // HAVING evaluator can look it up in the projected row. Reject early with
         // an actionable error rather than silently filtering every group.
         validate_having_aggregates_in_select(having, &q.select)?;
+    }
+
+    // Reject aggregate functions as ORDER BY keys (use a column alias instead).
+    if let Some(ob) = &q.order_by {
+        for (key, _) in &ob.keys {
+            if expr_has_aggregate(key) {
+                return Err(QueryError(
+                    "aggregate functions are not valid ORDER BY keys; \
+                     use a column alias instead (e.g. `COUNT(*) AS n … ORDER BY n DESC`)"
+                        .into(),
+                ));
+            }
+        }
     }
 
     // Register needs for GROUP BY key expressions.
@@ -2227,10 +2261,11 @@ fn enforce_in_subquery_projection(lhs: &Attr, inner: &Query) -> Result<(), Query
 fn uses_retained(q: &Query) -> bool {
     let in_select = q.select.iter().any(select_uses_retained);
     let in_where = q.where_.as_ref().map(pred_uses_retained).unwrap_or(false);
-    let in_order = q
-        .order_by
-        .as_ref()
-        .is_some_and(|ob| ob.keys.iter().any(|(k, _)| *k == Attr::RetainedHeapSize));
+    let in_order = q.order_by.as_ref().is_some_and(|ob| {
+        ob.keys
+            .iter()
+            .any(|(k, _)| expr_any_attr(k, |a| matches!(a, Attr::RetainedHeapSize)))
+    });
     let in_group_by = q
         .group_by
         .iter()
@@ -2270,10 +2305,12 @@ fn uses_dominator_of(q: &Query) -> bool {
     // without the attr also being in SELECT.
     let in_order_by = q.order_by.as_ref().is_some_and(|ob| {
         ob.keys.iter().any(|(k, _)| {
-            matches!(
-                k,
-                Attr::DominatorDepth | Attr::DominatorClass | Attr::DominatorOf(_)
-            )
+            expr_any_attr(k, |a| {
+                matches!(
+                    a,
+                    Attr::DominatorDepth | Attr::DominatorClass | Attr::DominatorOf(_)
+                )
+            })
         })
     });
     in_select || in_where || in_group_by || in_order_by
@@ -2339,10 +2376,11 @@ fn uses_class_metadata(q: &Query) -> bool {
         .group_by
         .iter()
         .any(|e| expr_any_attr(e, is_class_meta_attr));
-    let in_order_by = q
-        .order_by
-        .as_ref()
-        .is_some_and(|ob| ob.keys.iter().any(|(k, _)| is_class_meta_attr(k)));
+    let in_order_by = q.order_by.as_ref().is_some_and(|ob| {
+        ob.keys
+            .iter()
+            .any(|(k, _)| expr_any_attr(k, is_class_meta_attr))
+    });
     in_select || in_where || in_group_by || in_order_by
 }
 
@@ -2584,7 +2622,7 @@ pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryE
     }
     if let Some(ob) = &q.order_by {
         for (key, _dir) in &ob.keys {
-            if let Attr::Field(name) = key {
+            if let Expr::Attr(Attr::Field(name)) = key {
                 // Skip if the name matches a SELECT column alias: ORDER BY foo where
                 // foo is `... AS foo` is a reference to an output column, not a field.
                 let is_alias = q

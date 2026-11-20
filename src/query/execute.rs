@@ -302,11 +302,11 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// at the start of each `where_passes`/`array_where_passes` call, matching
     /// the encounter order used by `collect_in_subplans` at plan time.
     in_cursor: std::cell::Cell<usize>,
-    /// ORDER BY attrs that are not present in the projected columns. Evaluated
+    /// ORDER BY expressions that are not present in the projected columns. Evaluated
     /// per matched row and appended as trailing hidden values so `finish_with_src`
     /// can sort on them even when they were not selected. Empty when all ORDER BY
     /// keys appear in the SELECT list (the common case, zero overhead).
-    extra_sort_attrs: Vec<Attr>,
+    extra_sort_attrs: Vec<Expr>,
     /// PARTITION BY attrs not in the projected columns, appended as hidden
     /// trailing values after the ORDER BY extras so `apply_window_functions`
     /// can resolve them (OQL-40). Stripped after window evaluation.
@@ -1009,14 +1009,14 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         // them. Computed here once; zero-cost (empty vec) for the common case.
         let projected_names: Vec<String> =
             query_columns(query).into_iter().map(|c| c.name).collect();
-        let extra_sort_attrs: Vec<Attr> = query
+        let extra_sort_attrs: Vec<Expr> = query
             .order_by
             .as_ref()
             .map(|ob| {
                 ob.keys
                     .iter()
                     .filter(|(key, _)| {
-                        let kname = attr_name(key);
+                        let kname = expr_name(key);
                         let bare = strip_leading_alias(&kname, query.alias.as_deref());
                         !projected_names.iter().any(|cn| {
                             cn == &kname || strip_leading_alias(cn, query.alias.as_deref()) == bare
@@ -1029,7 +1029,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         // OQL-40: PARTITION BY attrs not in projected columns are appended as
         // hidden trailing values (after extra_sort_attrs) so apply_window_functions
         // can partition on them. Deduplicated to avoid redundant appends.
-        let extra_sort_names: Vec<String> = extra_sort_attrs.iter().map(attr_name).collect();
+        let extra_sort_names: Vec<String> = extra_sort_attrs.iter().map(expr_name).collect();
         let mut extra_window_attrs: Vec<Attr> = Vec::new();
         let mut window_attr_seen: std::collections::HashSet<String> =
             std::collections::HashSet::new();
@@ -1295,8 +1295,12 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             .map(|item| self.project_item(item, src_idx, class_id, blob))
             .collect();
         // Append hidden trailing values for ORDER BY keys not in the SELECT list.
-        for attr in &self.extra_sort_attrs {
-            row.push(self.project_attr(attr, src_idx, class_id, blob));
+        for expr in &self.extra_sort_attrs {
+            let val = match expr {
+                Expr::Attr(a) => self.project_attr(a, src_idx, class_id, blob),
+                e => self.eval_expr(e, src_idx, class_id, blob),
+            };
+            row.push(val);
         }
         // Append hidden trailing values for PARTITION BY keys not in the SELECT list (OQL-40).
         for attr in &self.extra_window_attrs {
@@ -1461,8 +1465,12 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             .iter()
             .map(|item| self.project_array_item(item, src_idx, class_name, length))
             .collect();
-        for attr in &self.extra_sort_attrs {
-            row.push(self.project_array_attr(attr, src_idx, class_name, length));
+        for expr in &self.extra_sort_attrs {
+            let val = match expr {
+                Expr::Attr(a) => self.project_array_attr(a, src_idx, class_name, length),
+                e => self.eval_expr_array(e, src_idx, class_name, length),
+            };
+            row.push(val);
         }
         // Append hidden trailing values for PARTITION BY keys not in the SELECT list (OQL-40).
         for attr in &self.extra_window_attrs {
@@ -3824,9 +3832,9 @@ fn collect_like_regexes(
 pub(crate) fn order_by_column_index(
     q: &Query,
     columns: &[QueryColumn],
-    key: &Attr,
+    key: &Expr,
 ) -> Option<usize> {
-    let key_name = attr_name(key);
+    let key_name = expr_name(key);
     let bare = strip_leading_alias(&key_name, q.alias.as_deref());
     columns.iter().position(|c| {
         c.name == key_name || strip_leading_alias(&c.name, q.alias.as_deref()) == bare
@@ -5616,6 +5624,36 @@ mod tests {
         assert!(
             !ex.scan_satisfied(),
             "carry executor must never report scan_satisfied"
+        );
+    }
+
+    #[test]
+    fn order_by_arithmetic_expression() {
+        // ORDER BY with an arithmetic expression (@usedHeapSize * 2).
+        // Rows should be sorted by the computed expression, not just the attr.
+        let q = crate::query::parse::parse(
+            "SELECT @objectId, @usedHeapSize FROM C ORDER BY @usedHeapSize * 2 ASC",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        // Map: dense_idx → shallow_size (src_idx 1→30, 2→10, 3→20)
+        let sc = ShallowSchema::new("C", &[(1, 30), (2, 10), (3, 20)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        ex.visit_instance(3, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 3);
+        // Sorted ascending by usedHeapSize (10 < 20 < 30), so indices 2, 3, 1.
+        let ids: Vec<_> = res.rows.iter().map(|r| &r[0]).collect();
+        assert_eq!(
+            ids,
+            vec![
+                &QueryValue::Int(2),
+                &QueryValue::Int(3),
+                &QueryValue::Int(1),
+            ],
+            "ORDER BY @usedHeapSize * 2 must sort by the computed value"
         );
     }
 

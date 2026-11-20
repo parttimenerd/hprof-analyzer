@@ -55,9 +55,10 @@ pub enum SortDir {
 
 /// Our extension over MAT OQL: `ORDER BY <key> [ASC|DESC] [, <key> [ASC|DESC]]…`
 /// Multi-key: left-most key is primary, ties broken by secondary, etc.
+/// Keys are full expressions; `Expr::Attr(a)` is the common case.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct OrderBy {
-    pub keys: Vec<(Attr, SortDir)>,
+    pub keys: Vec<(Expr, SortDir)>,
 }
 
 /// One projected column.

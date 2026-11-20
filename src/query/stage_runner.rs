@@ -3251,7 +3251,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     let order_by_retained = q
         .order_by
         .as_ref()
-        .is_some_and(|ob| ob.keys.len() == 1 && ob.keys[0].0 == Attr::RetainedHeapSize);
+        .is_some_and(|ob| ob.keys.len() == 1 && ob.keys[0].0 == Expr::Attr(Attr::RetainedHeapSize));
 
     if order_by_retained {
         // Fast path: sort (idx,ret) pairs before projection, then cap.

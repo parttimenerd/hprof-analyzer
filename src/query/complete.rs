@@ -810,8 +810,8 @@ fn completions_from_context(
                     );
                 }
             }
-            // ORDER BY column: aliases and attributes.
-            "ORDER BY column" => {
+            // ORDER BY column/expression: aliases and attributes.
+            "ORDER BY column" | "ORDER BY expression" => {
                 res.extend(
                     info.select_aliases
                         .iter()
@@ -869,6 +869,7 @@ fn completions_from_context(
             | "HAVING predicate"
             | "GROUP BY expression"
             | "ORDER BY column"
+            | "ORDER BY expression"
             | "JOIN condition"
             | "CASE predicate"
             | "CASE result"
