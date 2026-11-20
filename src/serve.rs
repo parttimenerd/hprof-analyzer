@@ -347,6 +347,10 @@ fn split_path_query(url: &str) -> (&str, &str) {
     }
 }
 
+fn cors_header() -> tiny_http::Header {
+    tiny_http::Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap()
+}
+
 fn parse_limit(query: &str) -> Option<usize> {
     query.split('&').find_map(|part| {
         let (k, v) = part.split_once('=')?;
@@ -443,7 +447,8 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
                         serde_json::json!({"ok":false,"error":{"kind":"read_error","message":"failed to read request body"}}).to_string()
                     )
                     .with_status_code(400)
-                    .with_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap());
+                    .with_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap())
+                    .with_header(cors_header());
                     let _ = request.respond(resp);
                     continue;
                 }
@@ -452,7 +457,8 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
                         serde_json::json!({"ok":false,"error":{"kind":"body_too_large","message":"request body exceeds 64 KB limit"}}).to_string()
                     )
                     .with_status_code(413)
-                    .with_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap());
+                    .with_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap())
+                    .with_header(cors_header());
                     let _ = request.respond(resp);
                     continue;
                 }
@@ -474,6 +480,7 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
                                 .with_header(tiny_http::Header::from_bytes(
                                     "Content-Disposition", disposition.as_bytes(),
                                 ).unwrap())
+                                .with_header(cors_header())
                         }
                         Err((status, msg)) => {
                             Response::from_string(msg)
@@ -481,6 +488,7 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
                                 .with_header(tiny_http::Header::from_bytes(
                                     "Content-Type", "text/plain; charset=utf-8",
                                 ).unwrap())
+                                .with_header(cors_header())
                         }
                     };
                     let _ = request.respond(resp);
@@ -501,7 +509,8 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
                                 )
                                 .unwrap()
                             }),
-                    );
+                    )
+                    .with_header(cors_header());
                 let _ = request.respond(resp);
             }
         }));
