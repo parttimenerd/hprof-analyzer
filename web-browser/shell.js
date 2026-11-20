@@ -5878,3 +5878,16 @@ window._hprofLoadUrl = async (url, mode = 'oql-shell') => {
     connectToServer();
   }
 })();
+
+// ── ?backend=<url> auto-connect ───────────────────────────────────────────────
+// When the page is opened with ?backend=http://localhost:<port>, skip the
+// connect screen and wire straight to that hprof-analyzer serve instance.
+// Used by the IntelliJ plugin: it launches `hprof-analyzer serve <dump>` on a
+// random port, waits for /status 200, then opens this shell with ?backend=...
+(function autoConnectBackend() {
+  const backend = new URLSearchParams(location.search).get('backend');
+  if (!backend) return;
+  const input = document.getElementById('server-url');
+  if (input) input.value = backend;
+  connectToServer();
+})();
