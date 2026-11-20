@@ -297,6 +297,7 @@ impl Completer for OqlCompleter {
             if !partial.contains(char::is_whitespace) {
                 const META_CMDS: &[&str] = &[
                     "help",
+                    "h",
                     "views",
                     "quit",
                     "q",
@@ -306,6 +307,7 @@ impl Completer for OqlCompleter {
                     "classes",
                     "fields",
                     "reachable",
+                    "reachable-only",
                     "all",
                     "mode",
                     "width",
@@ -1041,6 +1043,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "views" => {
+                            print_named_queries_help_filtered(&mut stdout, None)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         "count" => {
                             if rest.is_empty() {
                                 let color = SESSION_SETTINGS.with(|s| s.borrow().color);
@@ -1068,6 +1075,26 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 }
                             } else {
                                 let is_cls = is_class_name_arg(rest);
+                                // Guard: a bare class name with spaces is a user error.
+                                // Don't construct internal OQL and show a confusing caret.
+                                let lower = rest.trim().to_ascii_lowercase();
+                                if !is_cls
+                                    && !lower.starts_with("select")
+                                    && !lower.starts_with("from")
+                                {
+                                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                                    let (ce, cr) = if color {
+                                        ("\x1b[31m", "\x1b[0m")
+                                    } else {
+                                        ("", "")
+                                    };
+                                    writeln!(
+                                        stdout,
+                                        "{ce}!count: {rest:?} is not a valid class name (use !count <ClassName> or !count <oql>){cr}"
+                                    )?;
+                                    stdout.flush()?;
+                                    continue;
+                                }
                                 let wrapped = wrap_count(rest);
                                 match run_one(
                                     path,
@@ -1718,12 +1745,32 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 writeln!(stdout, "{cg}\u{2713} history cleared{cr}")?;
                             } else {
                                 let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                let (cd, cc, cr) = if color {
-                                    ("\x1b[2m", "\x1b[36m", "\x1b[0m")
+                                let (cd, cc, ce, cr) = if color {
+                                    ("\x1b[2m", "\x1b[36m", "\x1b[31m", "\x1b[0m")
                                 } else {
-                                    ("", "", "")
+                                    ("", "", "", "")
                                 };
-                                let n: usize = arg.parse().unwrap_or(20);
+                                // Reject non-positive counts with an error.
+                                let n: usize = match arg.parse::<i64>() {
+                                    Ok(v) if v <= 0 => {
+                                        writeln!(
+                                            stdout,
+                                            "{ce}!history: count must be a positive integer{cr}"
+                                        )?;
+                                        stdout.flush()?;
+                                        continue;
+                                    }
+                                    Ok(v) => v as usize,
+                                    Err(_) if arg.is_empty() => 20,
+                                    Err(_) => {
+                                        writeln!(
+                                            stdout,
+                                            "{ce}!history: invalid count {arg:?} — usage: !history [N]{cr}"
+                                        )?;
+                                        stdout.flush()?;
+                                        continue;
+                                    }
+                                };
                                 let entries = line_editor
                                     .history()
                                     .search(SearchQuery::everything(
@@ -2947,6 +2994,21 @@ fn run_repl_line(
             }
             _ => {}
         }
+        // history is interactive-only (requires a reedline editor).
+        if cmd == "history" {
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            let (ce, cr) = if color {
+                ("\x1b[31m", "\x1b[0m")
+            } else {
+                ("", "")
+            };
+            writeln!(
+                out,
+                "{ce}!history is not supported in non-interactive mode{cr}"
+            )?;
+            out.flush()?;
+            return Ok(false);
+        }
         let quit = handle_meta(cmd, path_depth, reachable_only, names_for_meta, out)?;
         out.flush()?;
         return Ok(quit);
@@ -3031,12 +3093,19 @@ fn run_and_print(
         }
         Err(e) => {
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (ce, cr) = if color {
-                ("\x1b[31m", "\x1b[0m")
+            let msg = e.to_string();
+            // Parse errors from ariadne already carry their own ANSI color sequences;
+            // don't double-wrap them in a red prefix or the colors bleed.
+            if msg.starts_with("parse error:") {
+                writeln!(out, "{msg}")?;
             } else {
-                ("", "")
-            };
-            writeln!(out, "{ce}error: {e}{cr}")?;
+                let (ce, cr) = if color {
+                    ("\x1b[31m", "\x1b[0m")
+                } else {
+                    ("", "")
+                };
+                writeln!(out, "{ce}error: {msg}{cr}")?;
+            }
             Ok(None)
         }
     }
@@ -3562,15 +3631,20 @@ fn handle_set(
             _ => warn_out("usage: !set color on|off", out)?,
         },
         "null" => {
-            let s = if val.is_empty() {
-                "null".to_string()
+            if val.is_empty() {
+                // No argument — show current value rather than silently "resetting" to "null".
+                let cur = SESSION_SETTINGS.with(|ss| ss.borrow().null_str.clone());
+                writeln!(
+                    out,
+                    "{cd}null display is currently {cur:?}  — usage: !set null <string>{cr}"
+                )?;
             } else {
-                val.to_string()
-            };
-            writeln!(out, "{cg}\u{2713} null: \"{s}\"{cr}")?;
-            SESSION_SETTINGS.with(|ss| ss.borrow_mut().null_str = s);
-            if let Some(res) = last_result {
-                print_result(res, std::time::Duration::ZERO, max_width, out)?;
+                let s = val.to_string();
+                writeln!(out, "{cg}\u{2713} null: \"{s}\"{cr}")?;
+                SESSION_SETTINGS.with(|ss| ss.borrow_mut().null_str = s);
+                if let Some(res) = last_result {
+                    print_result(res, std::time::Duration::ZERO, max_width, out)?;
+                }
             }
         }
         _ => writeln!(
@@ -3790,7 +3864,7 @@ fn handle_filter(
                         // than silently falling through to a substring match on the literal "/...".
                         writeln!(
                             out,
-                            "{ce}hint: regex patterns must be enclosed in slashes: /pattern/{cr}"
+                            "{ce}invalid pattern: regex must be enclosed in slashes: /pattern/{cr}"
                         )?;
                         writeln!(
                             out,
@@ -3948,7 +4022,7 @@ fn handle_filter_not(
                     _ => {
                         writeln!(
                             out,
-                            "{ce}hint: regex patterns must be enclosed in slashes: /pattern/{cr}"
+                            "{ce}invalid pattern: regex must be enclosed in slashes: /pattern/{cr}"
                         )?;
                         writeln!(
                             out,
@@ -6349,6 +6423,13 @@ fn handle_meta(
                     break;
                 }
             }
+            if query_text.trim().is_empty() {
+                writeln!(
+                    out,
+                    "{cd}usage: !plan [--raw] [--verbose] [--json] <oql query>{cr}"
+                )?;
+                return Ok(false);
+            }
             match crate::query::parse::parse_or_report(query_text) {
                 Ok(q) => match crate::query::plan::plan_query(&q, path_depth) {
                     Ok(plan) => {
@@ -6426,7 +6507,6 @@ fn handle_meta(
                 "set",
                 "save",
                 "export",
-                "rename",
                 "reachable",
                 "all",
                 "mode",
@@ -8675,15 +8755,15 @@ mod tests {
     #[test]
     fn parse_methods_contains_intvalue_not_get() {
         // Single source-of-truth: METHODS must include intValue (Integer dispatch)
-        // and must NOT include get (intentionally excluded per NOTE comment).
+        // and must now also include get (--collections array element access).
         use crate::query::parse::METHODS;
         assert!(
             METHODS.contains(&"intValue"),
             "parse::METHODS must contain 'intValue'"
         );
         assert!(
-            !METHODS.contains(&"get"),
-            "parse::METHODS must NOT contain 'get' (see NOTE comment in parse.rs)"
+            METHODS.contains(&"get"),
+            "parse::METHODS must contain 'get' (--collections array element access)"
         );
     }
 
@@ -8847,9 +8927,7 @@ mod tests {
 
     #[test]
     fn method_completion_arraylist_offers_size_no_bare_get() {
-        // java.util.ArrayList: size() offered; the bare get() method is
-        // intentionally ABSENT (statically not emulable), while getKey() /
-        // getValue() remain (map entry access on elements).
+        // java.util.ArrayList: size() offered; get() is now also offered (--collections support).
         let mut c = completer_with_fields(&["java.util.ArrayList"], &[]);
         let line = "SELECT * FROM java.util.ArrayList a WHERE a.";
         let v = values(&c.complete(line, line.len()));
@@ -8857,30 +8935,27 @@ mod tests {
             v.contains(&"size(".to_string()),
             "size missing for ArrayList: {v:?}"
         );
+        // get() is now in METHODS (gated at plan time via plan_query_with_opts).
         assert!(
-            !v.contains(&"get(".to_string()),
-            "bare get() must NOT be offered (not in METHODS): {v:?}"
+            v.contains(&"get(".to_string()),
+            "get( should be offered for --collections support: {v:?}"
         );
         let _ = v;
     }
 
     #[test]
     fn method_completion_hashmap_offers_size_getkey_getvalue() {
-        // java.util.HashMap: size()/getKey()/getValue() offered; bare get()
-        // intentionally absent (statically not emulable).
+        // java.util.HashMap: size()/getKey()/getValue()/get() offered.
+        // get() is now in METHODS (gated at plan time via plan_query_with_opts).
         let mut c = completer_with_fields(&["java.util.HashMap"], &[]);
         let line = "SELECT * FROM java.util.HashMap m WHERE m.";
         let v = values(&c.complete(line, line.len()));
-        for method in ["size(", "getKey(", "getValue("] {
+        for method in ["size(", "getKey(", "getValue(", "get("] {
             assert!(
                 v.contains(&method.to_string()),
                 "{method} missing for HashMap: {v:?}"
             );
         }
-        assert!(
-            !v.contains(&"get(".to_string()),
-            "bare get() must NOT be in results: {v:?}"
-        );
     }
 
     #[test]
