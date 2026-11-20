@@ -751,7 +751,7 @@ function ExecSummaryCard({ report }: { report: Report }) {
       {top && (
         <div style={{ margin: "0.3rem 0", fontSize: "0.9rem" }}>
           <span style={labelStyle}>Top suspect</span>
-          <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={top.pretty_class}>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /><OqlBtn cls={top.pretty_class} /><ListObjectsBtn cls={top.pretty_class} /></span>
+          <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={top.pretty_class}>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /><OqlBtn cls={top.pretty_class} /><ListObjectsBtn cls={top.pretty_class} /><IdeBtn cls={top.pretty_class} /></span>
           {" "}retains{" "}
           <a href="#leak-suspects" className="summary-num" title={`${fmtExactBytes(top.retained)} retained heap — jump to Leak Suspects`}>
             <strong>{formatBytes(top.retained)}</strong>
@@ -909,7 +909,7 @@ function OomTriage({ report }: { report: Report }) {
             <li key={i} style={{ marginBottom: "0.25rem" }}>
               <span style={{ color: sevColor, marginRight: "0.35rem", fontSize: "0.78rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", verticalAlign: "middle" }}>{sevLabel}</span>
               <strong>{s.title}:</strong> <InlineCode text={detail} />
-              {s.nav_class && <>{" "}<PivotBtn cls={s.nav_class} /><OqlBtn cls={s.nav_class} /><ListObjectsBtn cls={s.nav_class} /></>}
+              {s.nav_class && <>{" "}<PivotBtn cls={s.nav_class} /><OqlBtn cls={s.nav_class} /><ListObjectsBtn cls={s.nav_class} /><IdeBtn cls={s.nav_class} /></>}
               {s.id === "headline-retainer" && s.nav_class && (
                 <>{" "}<a href="#top-consumers" style={{ fontSize: "0.82rem" }}
                   onClick={(e) => {
@@ -998,7 +998,7 @@ function KpiStrip({ report }: { report: Report }) {
     verdict = (
       <>
         <strong>Top Suspect:</strong>{" "}
-        <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={top.pretty_class}>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /><OqlBtn cls={top.pretty_class} /><ListObjectsBtn cls={top.pretty_class} /></span>
+        <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={top.pretty_class}>{top.pretty_class}</code><CopyBtn text={top.pretty_class} /><PivotBtn cls={top.pretty_class} /><OqlBtn cls={top.pretty_class} /><ListObjectsBtn cls={top.pretty_class} /><IdeBtn cls={top.pretty_class} /></span>
         — investigate this first.
       </>
     );
@@ -1261,7 +1261,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
             <CopyBtn text={r.pretty_class} />
             <PivotBtn cls={r.pretty_class} />
             <OqlBtn cls={r.pretty_class} />
-            <ListObjectsBtn cls={r.pretty_class} />
+            <ListObjectsBtn cls={r.pretty_class} /><IdeBtn cls={r.pretty_class} />
           </span>
         ),
         sortable: true,
@@ -1612,6 +1612,29 @@ function ListObjectsBtn({ cls }: { cls: string }) {
   );
 }
 
+// Sends a jump-to-source request to the IDE when the report is served by the
+// IntelliJ plugin (window.__HPROF_IDE_PORT__ injected at serve time). No-op
+// in standalone reports where the port is absent.
+declare global { interface Window { __HPROF_IDE_PORT__?: number } }
+function IdeBtn({ cls }: { cls: string }) {
+  const port = window.__HPROF_IDE_PORT__;
+  if (!port) return null;
+  return (
+    <button
+      className="copy-btn"
+      title={`Jump to source: "${cls}"`}
+      aria-label="Jump to source in IDE"
+      onClick={(e) => {
+        e.stopPropagation();
+        fetch(`http://localhost:${port}/ide/${encodeURIComponent(cls)}`, { method: "POST" }).catch(() => {});
+      }}
+      style={{ opacity: 0.7 }}
+    >
+      ↗
+    </button>
+  );
+}
+
 // ── TextModal ─────────────────────────────────────────────────────────────────
 // Full-screen overlay showing long text with a search/highlight bar.
 // Uses the native <dialog> element for focus-trap and backdrop.
@@ -1834,7 +1857,7 @@ function TopByLengthTable({ rows }: { rows: DupStringSample[] }) {
 
 function StringHoldersTable({ rows }: { rows: StringHolder[] }) {
   const cols: TableColumn<StringHolder>[] = [
-    { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (h) => <span className="copy-cell"><code title={h.class_name}>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
+    { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (h) => <span className="copy-cell"><code title={h.class_name}>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /><IdeBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
     { id: "refs", name: "String Refs", right: true, width: "120px", format: (h) => fmtCount(h.string_refs), selector: (h) => h.string_refs, sortable: true },
   ];
   return (
@@ -1853,7 +1876,7 @@ function DupPrimArrayRowsTable({ rows }: { rows: DupPrimArrayRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<DupPrimArrayRow>[] = [
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "type", name: "Array Type", grow: 1, cell: (r) => <span className="copy-cell"><code title={r.array_class}>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
+    { id: "type", name: "Array Type", grow: 1, cell: (r) => <span className="copy-cell"><code title={r.array_class}>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /><IdeBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
     { id: "groups", name: "Dup Groups", right: true, width: "125px", format: (r) => fmtCount(r.duplicated_groups), selector: (r) => r.duplicated_groups, sortable: true },
     { id: "wasted", name: useKB ? "Wasted (KB)" : "Wasted", right: true, width: useKB ? "132px" : "100px", cell: byteCell(r => r.wasted_bytes, fmtB, useKB), selector: (r) => r.wasted_bytes, sortable: true },
   ];
@@ -1869,7 +1892,7 @@ function DupPrimArrayRowsTable({ rows }: { rows: DupPrimArrayRow[] }) {
 function DupArrayHoldersTable({ rows }: { rows: DupArrayHolder[] }) {
   const cols: TableColumn<DupArrayHolder>[] = [
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (h) => <span className="copy-cell"><code title={h.class_name}>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
+    { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (h) => <span className="copy-cell"><code title={h.class_name}>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /><IdeBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
     { id: "refs", name: "Array Refs", right: true, width: "120px", format: (h) => fmtCount(h.array_refs), selector: (h) => h.array_refs, sortable: true },
   ];
   return (
@@ -1994,7 +2017,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
   const holders = report.overview.boxed_number_holders ?? [];
   const boxedCols: TableColumn<import("./types").BoxedNumberRow>[] = [
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, maxWidth: "450px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, maxWidth: "450px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /><IdeBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Total Shallow (KB)" : "Total Shallow", right: true, width: useKB ? "172px" : "138px", cell: byteCell(r => r.total_shallow, fmtB, useKB), selector: (r) => r.total_shallow, sortable: true },
     { id: "pct", name: "% of Heap", right: true, width: "115px", format: (r) => total > 0 ? (r.pct_of_heap_bp === 0 && r.total_shallow > 0 ? "< 0.1%" : fmtPct(r.pct_of_heap_bp / 100)) : "—", selector: (r) => r.pct_of_heap_bp, sortable: true },
@@ -2002,7 +2025,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
   ];
   const holderCols: TableColumn<import("./types").BoxedNumberHolder>[] = [
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (h) => <span className="copy-cell"><code title={h.class_name}>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
+    { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (h) => <span className="copy-cell"><code title={h.class_name}>{h.class_name}</code><CopyBtn text={h.class_name} /><PivotBtn cls={h.class_name} /><OqlBtn cls={h.class_name} /><ListObjectsBtn cls={h.class_name} /><IdeBtn cls={h.class_name} /></span>, selector: (h) => h.class_name, sortable: true },
     { id: "refs", name: "Boxed Refs", right: true, width: "130px", format: (h) => fmtCount(h.boxed_refs), selector: (h) => h.boxed_refs, sortable: true },
   ];
   return (
@@ -2028,7 +2051,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
   if (!rows?.length) return null;
   const cols: TableColumn<import("./types").HeaderOverheadRow>[] = [
     { id: "rank", name: "#", right: true, width: "36px", cell: (_r, i) => (i ?? 0) + 1 },
-    { id: "class", name: "Class", grow: 1, maxWidth: "312px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, maxWidth: "312px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /><IdeBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "hdr", name: "Header / Obj", right: true, width: "130px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes, sortable: true },
     { id: "total_hdr", name: useKB ? "Total Headers (KB)" : "Total Headers", right: true, width: useKB ? "176px" : "140px", cell: byteCell(r => r.total_header_bytes, fmtB, useKB), selector: (r) => r.total_header_bytes, sortable: true },
@@ -2277,7 +2300,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
                   {top.map((cc, j) => (
                     <span key={cc.class_name} style={{ display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap", marginRight: j < top.length - 1 ? "0.4em" : 0 }}>
                       {j > 0 ? <span style={{ color: "var(--muted)", marginRight: 2 }}>·</span> : null}
-                      <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={cc.class_name} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }}>{cc.class_name}</code><CopyBtn text={cc.class_name} /><PivotBtn cls={cc.class_name} /><OqlBtn cls={cc.class_name} /><ListObjectsBtn cls={cc.class_name} /></span> ×{fmtCount(cc.count)} (<span title={fmtExactBytes(cc.retained)}>{fmtB(cc.retained)}</span>)
+                      <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={cc.class_name} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }}>{cc.class_name}</code><CopyBtn text={cc.class_name} /><PivotBtn cls={cc.class_name} /><OqlBtn cls={cc.class_name} /><ListObjectsBtn cls={cc.class_name} /><IdeBtn cls={cc.class_name} /></span> ×{fmtCount(cc.count)} (<span title={fmtExactBytes(cc.retained)}>{fmtB(cc.retained)}</span>)
                     </span>
                   ))}
                 </div>
@@ -2415,12 +2438,12 @@ function DuplicateClassesTable({ rows }: { rows: DuplicateClass[] }) {
           {d.per_loader && d.per_loader.length > 0 ? (
             <details>
               <summary>
-                <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={d.pretty_class}>{d.pretty_class}</code><CopyBtn text={d.pretty_class} /><PivotBtn cls={d.pretty_class} /><OqlBtn cls={d.pretty_class} /><ListObjectsBtn cls={d.pretty_class} /></span>
+                <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={d.pretty_class}>{d.pretty_class}</code><CopyBtn text={d.pretty_class} /><PivotBtn cls={d.pretty_class} /><OqlBtn cls={d.pretty_class} /><ListObjectsBtn cls={d.pretty_class} /><IdeBtn cls={d.pretty_class} /></span>
               </summary>
               <DataTable columns={loaderDetailCols} data={d.per_loader} customStyles={histogramTableStyles} dense />
             </details>
           ) : (
-            <span className="copy-cell"><code title={d.pretty_class}>{d.pretty_class}</code><CopyBtn text={d.pretty_class} /><PivotBtn cls={d.pretty_class} /><OqlBtn cls={d.pretty_class} /><ListObjectsBtn cls={d.pretty_class} /></span>
+            <span className="copy-cell"><code title={d.pretty_class}>{d.pretty_class}</code><CopyBtn text={d.pretty_class} /><PivotBtn cls={d.pretty_class} /><OqlBtn cls={d.pretty_class} /><ListObjectsBtn cls={d.pretty_class} /><IdeBtn cls={d.pretty_class} /></span>
           )}
         </span>
       ),
@@ -2448,7 +2471,7 @@ function AccumulationPath({ s }: { s: Suspect }) {
               <CopyBtn text={p.display_class} />
               <PivotBtn cls={p.display_class} />
               <OqlBtn cls={p.display_class} />
-              <ListObjectsBtn cls={p.display_class} />
+              <ListObjectsBtn cls={p.display_class} /><IdeBtn cls={p.display_class} />
               <ExploreBtn denseIdx={p.obj_index_1based - 1} label={p.display_class} />
             </span>{" "}
             <span className="path-ret">retains <span title={fmtExactBytes(p.retained)}>{fmtB(p.retained)}</span></span>
@@ -2463,7 +2486,7 @@ function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectR
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   if (rows.length === 0) return null;
   const cols: TableColumn<HistRow>[] = [
-    { id: "class", name: "Class", grow: 1, maxWidth: "530px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, maxWidth: "530px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /><IdeBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
@@ -2685,7 +2708,7 @@ function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number 
         <CopyBtn text={node.display_class} />
         <PivotBtn cls={node.display_class} />
         <OqlBtn cls={node.display_class} />
-        <ListObjectsBtn cls={node.display_class} />
+        <ListObjectsBtn cls={node.display_class} /><IdeBtn cls={node.display_class} />
       </span>{" "}
       <span className="path-ret">
         {fmtCount(node.object_count)} object{node.object_count === 1 ? "" : "s"} · retained <span title={fmtExactBytes(node.retained)}>{fmtB(node.retained)}</span>
@@ -3045,7 +3068,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           <CopyBtn text={s.pretty_class} />
           <PivotBtn cls={s.pretty_class} />
           <OqlBtn cls={s.pretty_class} />
-          <ListObjectsBtn cls={s.pretty_class} />
+          <ListObjectsBtn cls={s.pretty_class} /><IdeBtn cls={s.pretty_class} />
         </span>{" "}
         <span className="pill">{s.is_single ? "Single Object" : `Class Group ×${fmtCount(s.instance_count)}`}</span>
       </h3>
@@ -3098,7 +3121,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <CopyBtn text={s.accumulation_class} />
             <PivotBtn cls={s.accumulation_class} />
             <OqlBtn cls={s.accumulation_class} />
-            <ListObjectsBtn cls={s.accumulation_class} />
+            <ListObjectsBtn cls={s.accumulation_class} /><IdeBtn cls={s.accumulation_class} />
             {s.accumulation_obj_1based != null &&
               <ExploreBtn denseIdx={s.accumulation_obj_1based - 1} label={s.accumulation_class} />}
           </span>
@@ -3109,7 +3132,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       <AccumulationPath s={s} />
       {s.dominated.length > 0 && (() => {
         const domCols: TableColumn<import("./types").DominatedRow>[] = [
-          { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (d) => <span className="copy-cell"><code title={d.display_class}>{d.display_class}</code><CopyBtn text={d.display_class} /><PivotBtn cls={d.display_class} /><OqlBtn cls={d.display_class} /><ListObjectsBtn cls={d.display_class} /><ExploreBtn denseIdx={d.obj_index_1based - 1} label={d.display_class} /></span>, selector: (d) => d.display_class, sortable: true },
+          { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (d) => <span className="copy-cell"><code title={d.display_class}>{d.display_class}</code><CopyBtn text={d.display_class} /><PivotBtn cls={d.display_class} /><OqlBtn cls={d.display_class} /><ListObjectsBtn cls={d.display_class} /><IdeBtn cls={d.display_class} /><ExploreBtn denseIdx={d.obj_index_1based - 1} label={d.display_class} /></span>, selector: (d) => d.display_class, sortable: true },
           { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(d => d.shallow, fmtB, useKB), selector: (d) => d.shallow, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(d => d.retained, fmtB, useKB), selector: (d) => d.retained, sortable: true },
         ];
@@ -3490,7 +3513,7 @@ function TopConsumersSection({ report }: { report: Report }) {
           <CopyBtn text={o.display_class} />
           <PivotBtn cls={o.display_class} />
           <OqlBtn cls={o.display_class} />
-          <ListObjectsBtn cls={o.display_class} />
+          <ListObjectsBtn cls={o.display_class} /><IdeBtn cls={o.display_class} />
           {inGraph && (
             <button className="copy-btn" title="Explore outbound references in Object Graph"
               onClick={() => { (window as any).__explorerNavigate?.("explore", denseIdx) ?? (window.location.hash = `explore/${denseIdx}`); }}>
@@ -3531,7 +3554,7 @@ function TopConsumersSection({ report }: { report: Report }) {
           <CopyBtn text={text} />
           {cls && <PivotBtn cls={cls} />}
           {cls && <OqlBtn cls={cls} />}
-          {cls && <ListObjectsBtn cls={cls} />}
+          {cls && <ListObjectsBtn cls={cls} />}{cls && <IdeBtn cls={cls} />}
           {o.held_via && !o.owner && <span className="muted"> (stack)</span>}
         </span>
       ) : <span>—</span>;
@@ -3553,7 +3576,7 @@ function TopConsumersSection({ report }: { report: Report }) {
   }, [t.biggest_classes]);
 
   const clsTableCols: TableColumn<ClassRow>[] = [
-    { id: "class", name: "Class", grow: 1, maxWidth: "500px", cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /><PivotBtn cls={c.pretty_class} /><OqlBtn cls={c.pretty_class} /><ListObjectsBtn cls={c.pretty_class} /></span>, selector: (c) => c.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, maxWidth: "500px", cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /><PivotBtn cls={c.pretty_class} /><OqlBtn cls={c.pretty_class} /><ListObjectsBtn cls={c.pretty_class} /><IdeBtn cls={c.pretty_class} /></span>, selector: (c) => c.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px",
       cell: (c) => (
         <Tooltip content={<>
@@ -3714,7 +3737,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               type LeafRow = { short: string; pretty_class: string; instances: number; retained: number };
               const leafRows: LeafRow[] = classes.map(r => ({ ...r, short: r.pretty_class.slice(dotPkg.length) }));
               const leafCols: TableColumn<LeafRow>[] = [
-                { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: r => <span className="copy-cell"><code title={r.pretty_class}>{r.short}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: r => r.short, sortable: true },
+                { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: r => <span className="copy-cell"><code title={r.pretty_class}>{r.short}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /><IdeBtn cls={r.pretty_class} /></span>, selector: r => r.short, sortable: true },
                 { id: "instances", name: "Instances", right: true, width: "110px", format: r => fmtCount(r.instances), selector: r => r.instances, sortable: true },
                 { id: "retained", name: "Retained", right: true, width: "110px", cell: r => <span title={fmtExactBytes(r.retained)}>{formatBytes(r.retained)}</span>, selector: r => r.retained, sortable: true },
               ];
@@ -3744,7 +3767,7 @@ function ThreadLocalsTable({ objs, totalCount }: { objs: ThreadLocalObj[]; total
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   if (objs.length === 0) return null;
   const cols: TableColumn<ThreadLocalObj>[] = [
-    { id: "obj", name: "Object", grow: 1, cell: (o) => <span className="copy-cell"><code title={o.display_class}>{o.display_class}</code><CopyBtn text={o.display_class} /><PivotBtn cls={o.display_class} /><OqlBtn cls={o.display_class} /><ListObjectsBtn cls={o.display_class} /><ExploreBtn denseIdx={o.obj_index_1based - 1} label={o.display_class} /></span>, selector: (o) => o.display_class, sortable: true },
+    { id: "obj", name: "Object", grow: 1, cell: (o) => <span className="copy-cell"><code title={o.display_class}>{o.display_class}</code><CopyBtn text={o.display_class} /><PivotBtn cls={o.display_class} /><OqlBtn cls={o.display_class} /><ListObjectsBtn cls={o.display_class} /><IdeBtn cls={o.display_class} /><ExploreBtn denseIdx={o.obj_index_1based - 1} label={o.display_class} /></span>, selector: (o) => o.display_class, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(o => o.shallow, fmtB, useKB), selector: (o) => o.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(o => o.retained, fmtB, useKB), selector: (o) => o.retained, sortable: true },
   ];
@@ -3790,7 +3813,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
       </summary>
       <div className="thread-body">
         <div className="thread-meta-row">
-          <span className="thread-meta-item"><span className="thread-meta-label">class</span><code title={cls}>{cls}</code><CopyBtn text={cls} /><PivotBtn cls={cls} /><OqlBtn cls={cls} /><ListObjectsBtn cls={cls} /></span>
+          <span className="thread-meta-item"><span className="thread-meta-label">class</span><code title={cls}>{cls}</code><CopyBtn text={cls} /><PivotBtn cls={cls} /><OqlBtn cls={cls} /><ListObjectsBtn cls={cls} /><IdeBtn cls={cls} /></span>
           <span className="thread-meta-item"><span className="thread-meta-label">shallow</span><span title={fmtExactBytes(t.shallow)}>{fmtB(t.shallow)}</span></span>
           <span className="thread-meta-item"><span className="thread-meta-label">retained</span><span title={fmtExactBytes(t.retained)}>{fmtB(t.retained)}</span></span>
           <span className="thread-meta-item"><span className="thread-meta-label">max local retained</span><span title={fmtExactBytes(t.max_local_retained)}>{fmtB(t.max_local_retained)}</span></span>
@@ -3811,12 +3834,12 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
               const frameCls = frameToClass(sf.frame);
               return (
               <li key={i}>
-                <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={sf.frame}>{sf.frame}</code><CopyBtn text={sf.frame} />{frameCls && <><PivotBtn cls={frameCls} /><OqlBtn cls={frameCls} /><ListObjectsBtn cls={frameCls} /></>}</span>
+                <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={sf.frame}>{sf.frame}</code><CopyBtn text={sf.frame} />{frameCls && <><PivotBtn cls={frameCls} /><OqlBtn cls={frameCls} /><ListObjectsBtn cls={frameCls} /><IdeBtn cls={frameCls} /></>}</span>
                 {sf.locals.length > 0 && (
                   <ul>
                     {sf.locals.map((loc, j) => (
                       <li key={j}>
-                        <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={loc.display_class}>{loc.display_class}</code><CopyBtn text={loc.display_class} /><PivotBtn cls={loc.display_class} /><OqlBtn cls={loc.display_class} /><ListObjectsBtn cls={loc.display_class} /></span>{" "}
+                        <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={loc.display_class}>{loc.display_class}</code><CopyBtn text={loc.display_class} /><PivotBtn cls={loc.display_class} /><OqlBtn cls={loc.display_class} /><ListObjectsBtn cls={loc.display_class} /><IdeBtn cls={loc.display_class} /></span>{" "}
                         <span className="path-ret">retains <span title={fmtExactBytes(loc.retained)}>{fmtB(loc.retained)}</span> ({fmtPct(loc.pct)} of thread retained)</span>
                       </li>
                     ))}
@@ -4080,7 +4103,7 @@ function ThreadLocalAnalysisTable({ rows }: { rows: ThreadLocalLeakRow[] }) {
       <p className="subtitle">Values stored in thread-local slots, grouped by value class. Stale entries have a null key — the <code>ThreadLocal</code> object was GC'd but the value remains. In pooled threads (Tomcat, Netty) the thread rarely terminates, so stale values accumulate; call <code>ThreadLocal.remove()</code> to clean up.</p>
       <StdTable
         columns={[
-          { id: "vc", name: "Value Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code title={r.value_class}>{r.value_class}</code><CopyBtn text={r.value_class} /><PivotBtn cls={r.value_class} /><OqlBtn cls={r.value_class} /><ListObjectsBtn cls={r.value_class} /></span>, selector: (r) => r.value_class, sortable: true },
+          { id: "vc", name: "Value Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code title={r.value_class}>{r.value_class}</code><CopyBtn text={r.value_class} /><PivotBtn cls={r.value_class} /><OqlBtn cls={r.value_class} /><ListObjectsBtn cls={r.value_class} /><IdeBtn cls={r.value_class} /></span>, selector: (r) => r.value_class, sortable: true },
           { id: "cnt", name: "Entries", right: true, width: "90px", format: (r) => fmtCount(r.entry_count), selector: (r) => r.entry_count, sortable: true },
           { id: "stl", name: "Stale", right: true, width: "100px",
             cell: (r) => r.stale_count > 0 ? <span style={{color:"var(--warning,#e67e22)"}}>{"⚠"} {fmtCount(r.stale_count)}</span> : <span>0</span>,
@@ -4231,7 +4254,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
           {c.top_classes.map((cc, j) => (
             <span key={j} style={{ display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap", minWidth: 0 }}>
               {j > 0 ? <span style={{ color: "var(--muted)", marginRight: 2 }}>·</span> : null}
-              <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle", minWidth: 0 }}><code title={cc.pretty_class} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }}>{cc.pretty_class}</code><CopyBtn text={cc.pretty_class} /><PivotBtn cls={cc.pretty_class} /><OqlBtn cls={cc.pretty_class} /><ListObjectsBtn cls={cc.pretty_class} /></span> <span title={fmtExactBytes(cc.retained)} style={{ color: "var(--muted)", fontSize: "0.85em" }}>({fmtB(cc.retained)})</span>
+              <span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle", minWidth: 0 }}><code title={cc.pretty_class} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }}>{cc.pretty_class}</code><CopyBtn text={cc.pretty_class} /><PivotBtn cls={cc.pretty_class} /><OqlBtn cls={cc.pretty_class} /><ListObjectsBtn cls={cc.pretty_class} /><IdeBtn cls={cc.pretty_class} /></span> <span title={fmtExactBytes(cc.retained)} style={{ color: "var(--muted)", fontSize: "0.85em" }}>({fmtB(cc.retained)})</span>
             </span>
           ))}
         </div>
@@ -4343,14 +4366,14 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
     const hasOwner = individual.some((r) => r.owner != null);
     const totalIndivShallow = individual.reduce((s, r) => s + r.shallow, 0);
     const indivCols: TableColumn<import("./types").TopArrayRow>[] = [
-      { id: "class", name: "Array Class", grow: 1, maxWidth: hasOwner ? "337px" : "575px", cell: (r) => <span className="copy-cell"><code title={r.array_class}>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
+      { id: "class", name: "Array Class", grow: 1, maxWidth: hasOwner ? "337px" : "575px", cell: (r) => <span className="copy-cell"><code title={r.array_class}>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /><IdeBtn cls={r.array_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
       { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
       ...(hasFill ? [{ id: "fill", name: "Used / Length", right: true, width: "165px", selector: (r: import("./types").TopArrayRow) => r.non_null ?? 0, format: (r: import("./types").TopArrayRow) => r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—", sortable: true } as TableColumn<import("./types").TopArrayRow>] : []),
       { id: "shallow", name: useKBArr ? "Shallow (KB)" : "Shallow", right: true, width: useKBArr ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtBArr, useKBArr), selector: (r) => r.shallow, sortable: true },
-      ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "337px", cell: (r: import("./types").TopArrayRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><CopyBtn text={r.owner} /><PivotBtn cls={r.owner.split("#")[0]} /><OqlBtn cls={r.owner.split("#")[0]} /><ListObjectsBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<import("./types").TopArrayRow>] : []),
+      ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "337px", cell: (r: import("./types").TopArrayRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><CopyBtn text={r.owner} /><PivotBtn cls={r.owner.split("#")[0]} /><OqlBtn cls={r.owner.split("#")[0]} /><ListObjectsBtn cls={r.owner.split("#")[0]} /><IdeBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<import("./types").TopArrayRow>] : []),
     ];
     const byClassCols: TableColumn<import("./types").TopArrayClassRow>[] = [
-      { id: "class", name: "Array Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code title={r.array_class}>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
+      { id: "class", name: "Array Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code title={r.array_class}>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /><IdeBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
       { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
       { id: "shallow", name: useKBArr ? "Shallow (KB)" : "Shallow", right: true, width: useKBArr ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtBArr, useKBArr), selector: (r) => r.shallow, sortable: true },
     ];
@@ -4549,7 +4572,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         const jdkRows = cpaRows.filter(r => r.is_jdk);
         const renderCpaTable = (rows: import("./types").ConstantArrayRow[], hasOwner: boolean) => {
           const cpaCols: TableColumn<import("./types").ConstantArrayRow>[] = [
-            { id: "class", name: "Array Class", grow: 1, maxWidth: hasOwner ? "308px" : "575px", cell: (r) => <span className="copy-cell"><code title={r.array_class}>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
+            { id: "class", name: "Array Class", grow: 1, maxWidth: hasOwner ? "308px" : "575px", cell: (r) => <span className="copy-cell"><code title={r.array_class}>{r.array_class}</code><CopyBtn text={r.array_class} /><PivotBtn cls={r.array_class} /><OqlBtn cls={r.array_class} /><ListObjectsBtn cls={r.array_class} /><IdeBtn cls={r.array_class} /></span>, selector: (r) => r.array_class, sortable: true },
             { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length, sortable: true },
             { id: "value", name: "Value", right: true, width: "90px",
               cell: (r) => (
@@ -4738,7 +4761,7 @@ function CollectionWasteBudgetSection({ report }: { report: Report }) {
 function TinyCollectionTable({ rows }: { rows: import("./types").TinyCollectionRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<import("./types").TinyCollectionRow>[] = [
-    { id: "field", name: "Class#field", grow: 1, maxWidth: "380px", cell: (r) => <span className="copy-cell"><code title={`${r.holder_class}#${r.field}`}>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+    { id: "field", name: "Class#field", grow: 1, maxWidth: "380px", cell: (r) => <span className="copy-cell"><code title={`${r.holder_class}#${r.field}`}>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /><IdeBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
     { id: "kind", name: "Kind", width: "130px", cell: (r) => <span style={{ textTransform: "capitalize" }}>{r.container_kind}</span>, selector: (r) => r.container_kind, sortable: true },
     { id: "empty", name: "Empty", right: true, width: "90px", format: (r) => fmtCount(r.empty_count), selector: (r) => r.empty_count, sortable: true },
     { id: "singleton", name: "Singleton", right: true, width: "100px", format: (r) => fmtCount(r.singleton_count), selector: (r) => r.singleton_count, sortable: true },
@@ -4764,7 +4787,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <p className="subtitle">No collections exceeded the size threshold.</p>
       ) : (() => {
         const overallCols: TableColumn<import("./types").FieldAttributionRow>[] = [
-          { id: "field", name: "Class#field", grow: 1, maxWidth: "320px", cell: (r) => <span className="copy-cell"><code title={`${r.holder_class}#${r.field}`}>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+          { id: "field", name: "Class#field", grow: 1, maxWidth: "320px", cell: (r) => <span className="copy-cell"><code title={`${r.holder_class}#${r.field}`}>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /><IdeBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
           { id: "kind", name: "Kind", width: "130px", cell: (r) => <span style={{ textTransform: "capitalize" }}>{r.container_kind}</span>, selector: (r) => r.container_kind, sortable: true },
           { id: "containers", name: "Containers", right: true, width: "110px", format: (r) => fmtCount(r.container_count), selector: (r) => r.container_count, sortable: true },
           { id: "holders", name: "Holders", right: true, width: "90px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances, sortable: true },
@@ -4780,8 +4803,8 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <p className="subtitle">No collections exceeded the size threshold.</p>
       ) : (() => {
         const singleCols: TableColumn<import("./types").FieldAttributionBiggestRow>[] = [
-          { id: "field", name: "Class#field", grow: 1, maxWidth: "300px", cell: (r) => <span className="copy-cell"><code title={`${r.holder_class}#${r.field}`}>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-          { id: "container", name: "Container Class", grow: 1, maxWidth: "280px", cell: (r) => <span className="copy-cell"><code title={r.container_class}>{r.container_class}</code><CopyBtn text={r.container_class} /><PivotBtn cls={r.container_class} /><OqlBtn cls={r.container_class} /><ListObjectsBtn cls={r.container_class} /></span>, selector: (r) => r.container_class, sortable: true },
+          { id: "field", name: "Class#field", grow: 1, maxWidth: "300px", cell: (r) => <span className="copy-cell"><code title={`${r.holder_class}#${r.field}`}>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /><IdeBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+          { id: "container", name: "Container Class", grow: 1, maxWidth: "280px", cell: (r) => <span className="copy-cell"><code title={r.container_class}>{r.container_class}</code><CopyBtn text={r.container_class} /><PivotBtn cls={r.container_class} /><OqlBtn cls={r.container_class} /><ListObjectsBtn cls={r.container_class} /><IdeBtn cls={r.container_class} /></span>, selector: (r) => r.container_class, sortable: true },
           { id: "elements", name: "Elements", right: true, width: "96px", format: (r) => fmtCount(r.elements), selector: (r) => r.elements, sortable: true },
           { id: "capacity", name: "Capacity", right: true, width: "96px", format: (r) => fmtCount(r.capacity), selector: (r) => r.capacity, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
@@ -4850,7 +4873,7 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
           <CopyBtn text={r.container_class} />
           <PivotBtn cls={r.container_class} />
           <OqlBtn cls={r.container_class} />
-          <ListObjectsBtn cls={r.container_class} />
+          <ListObjectsBtn cls={r.container_class} /><IdeBtn cls={r.container_class} />
           {count === 1 && r.obj_index_1based != null && (
             <ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.container_class} />
           )}
@@ -4860,14 +4883,14 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
       sortable: true,
     },
     { id: "elements", name: "Elements", right: true, width: "100px", format: ({ row: r, count }) => count > 1 ? `${fmtCount(r.elements)} each` : fmtCount(r.elements), selector: ({ row: r }) => r.elements, sortable: true },
-    ...(hasValue ? [{ id: "value", name: "Value Type", grow: 1, cell: ({ row: r }: CoalescedRow) => r.dominant_value_type ? <span className="copy-cell"><code title={r.dominant_value_type}>{r.dominant_value_type}</code><CopyBtn text={r.dominant_value_type} /><PivotBtn cls={r.dominant_value_type} /><OqlBtn cls={r.dominant_value_type} /><ListObjectsBtn cls={r.dominant_value_type} /></span> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
+    ...(hasValue ? [{ id: "value", name: "Value Type", grow: 1, cell: ({ row: r }: CoalescedRow) => r.dominant_value_type ? <span className="copy-cell"><code title={r.dominant_value_type}>{r.dominant_value_type}</code><CopyBtn text={r.dominant_value_type} /><PivotBtn cls={r.dominant_value_type} /><OqlBtn cls={r.dominant_value_type} /><ListObjectsBtn cls={r.dominant_value_type} /><IdeBtn cls={r.dominant_value_type} /></span> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
     ...(hasBreakdown ? [{
       id: "breakdown", name: "Value Types (top)", grow: 2, maxWidth: "280px",
       cell: ({ row: r }: CoalescedRow) => !r.value_type_breakdown || r.value_type_breakdown.length === 0
         ? <span>—</span>
-        : <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 6px", minWidth: 0, overflow: "hidden", whiteSpace: "normal", padding: "2px 0" }}>{r.value_type_breakdown.map((s, j) => <span key={j} style={{ display: "inline-flex", alignItems: "center", whiteSpace: "nowrap", minWidth: 0 }}><span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle", minWidth: 0 }}><code style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "160px" }} title={s.type_name}>{s.type_name}</code><CopyBtn text={s.type_name} /><PivotBtn cls={s.type_name} /><OqlBtn cls={s.type_name} /><ListObjectsBtn cls={s.type_name} /></span><span style={{ flexShrink: 0, color: "var(--muted)", fontSize: "0.85em" }}> ×{fmtCount(s.count)}</span></span>)}</div>,
+        : <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 6px", minWidth: 0, overflow: "hidden", whiteSpace: "normal", padding: "2px 0" }}>{r.value_type_breakdown.map((s, j) => <span key={j} style={{ display: "inline-flex", alignItems: "center", whiteSpace: "nowrap", minWidth: 0 }}><span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle", minWidth: 0 }}><code style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "160px" }} title={s.type_name}>{s.type_name}</code><CopyBtn text={s.type_name} /><PivotBtn cls={s.type_name} /><OqlBtn cls={s.type_name} /><ListObjectsBtn cls={s.type_name} /><IdeBtn cls={s.type_name} /></span><span style={{ flexShrink: 0, color: "var(--muted)", fontSize: "0.85em" }}> ×{fmtCount(s.count)}</span></span>)}</div>,
     } as TableColumn<CoalescedRow>] : []),
-    ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "240px", cell: ({ row: r }: CoalescedRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><CopyBtn text={r.owner} /><PivotBtn cls={r.owner.split("#")[0]} /><OqlBtn cls={r.owner.split("#")[0]} /><ListObjectsBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
+    ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, maxWidth: "240px", cell: ({ row: r }: CoalescedRow) => r.owner ? <span className="copy-cell"><code title={r.owner} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.owner}</code><CopyBtn text={r.owner} /><PivotBtn cls={r.owner.split("#")[0]} /><OqlBtn cls={r.owner.split("#")[0]} /><ListObjectsBtn cls={r.owner.split("#")[0]} /><IdeBtn cls={r.owner.split("#")[0]} /></span> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
     ...(hasRetained ? [{ id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "130px" : "110px", cell: ({ row: r }: CoalescedRow) => r.retained != null ? <span title={fmtExactBytes(r.retained)}>{fmtB(r.retained)}</span> : "—", selector: ({ row: r }: CoalescedRow) => r.retained ?? 0, sortable: true } as TableColumn<CoalescedRow>] : []),
   ];
   return (
@@ -4900,7 +4923,7 @@ function CollectionRetainedHeapSection({ histogram }: { histogram: HistRow[] }) 
   type Row = HistRow & { ratio: number };
   const data: Row[] = rows.map(h => ({ ...h, ratio: h.shallow > 0 ? h.retained / h.shallow : 0 }));
   const cols: TableColumn<Row>[] = [
-    { id: "class", name: "Class", grow: 1, maxWidth: "500px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, maxWidth: "500px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /><IdeBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "110px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "140px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
@@ -4932,7 +4955,7 @@ function ResourceHandlesSection({ histogram }: { histogram: HistRow[] }) {
     .sort((a, b) => b.instances - a.instances);
   if (rows.length === 0) return null;
   const cols: TableColumn<HistRow>[] = [
-    { id: "class", name: "Class", grow: 1, maxWidth: "500px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, maxWidth: "500px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /><IdeBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "110px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "140px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
@@ -4970,14 +4993,14 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
   if (!data) return null;
   const rows = data.rows ?? [];
   const cols: TableColumn<import("./types").CollectionContentsRow>[] = [
-    { id: "class", name: "Collection Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code title={r.collection_class}>{r.collection_class}</code><CopyBtn text={r.collection_class} /><PivotBtn cls={r.collection_class} /><OqlBtn cls={r.collection_class} /><ListObjectsBtn cls={r.collection_class} /></span>, selector: (r) => r.collection_class, sortable: true },
+    { id: "class", name: "Collection Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code title={r.collection_class}>{r.collection_class}</code><CopyBtn text={r.collection_class} /><PivotBtn cls={r.collection_class} /><OqlBtn cls={r.collection_class} /><ListObjectsBtn cls={r.collection_class} /><IdeBtn cls={r.collection_class} /></span>, selector: (r) => r.collection_class, sortable: true },
     { id: "instances", name: "Instances", right: true, width: "120px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances, sortable: true },
     { id: "values", name: "Total Values", right: true, width: "120px", format: (r) => fmtCount(r.total_values), selector: (r) => r.total_values, sortable: true },
     {
       id: "types", name: "Top Value Types", grow: 2, maxWidth: "400px",
       cell: (r) => r.top_value_types.length === 0
         ? <span>—</span>
-        : <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 8px", padding: "2px 0", whiteSpace: "normal" }}>{r.top_value_types.map((s, j) => <span key={j} style={{ display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap" }}><span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "200px" }} title={s.type_name}>{s.type_name}</code><CopyBtn text={s.type_name} /><PivotBtn cls={s.type_name} /><OqlBtn cls={s.type_name} /><ListObjectsBtn cls={s.type_name} /></span> <span style={{ color: "var(--muted)", fontSize: "0.85em" }}>×{fmtCount(s.count)}</span></span>)}</div>,
+        : <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 8px", padding: "2px 0", whiteSpace: "normal" }}>{r.top_value_types.map((s, j) => <span key={j} style={{ display: "inline-flex", alignItems: "center", gap: 2, whiteSpace: "nowrap" }}><span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: "200px" }} title={s.type_name}>{s.type_name}</code><CopyBtn text={s.type_name} /><PivotBtn cls={s.type_name} /><OqlBtn cls={s.type_name} /><ListObjectsBtn cls={s.type_name} /><IdeBtn cls={s.type_name} /></span> <span style={{ color: "var(--muted)", fontSize: "0.85em" }}>×{fmtCount(s.count)}</span></span>)}</div>,
     },
   ];
   return (
@@ -5011,8 +5034,8 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   const hasElements = rows.some((r) => (r.elements ?? 0) > 0);
   type FBSRow = import("./types").FieldBySizeRow;
   const cols: TableColumn<FBSRow>[] = [
-    { id: "field", name: "Class#field", grow: 2, minWidth: "160px", maxWidth: "280px", cell: (r) => <span className="copy-cell"><code title={`${r.holder_class}#${r.field}`}>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
-    { id: "pointee", name: "Pointee Type", grow: 2, minWidth: "140px", maxWidth: "260px", cell: (r) => <span className="copy-cell"><code title={r.pointee_type}>{r.pointee_type}</code><CopyBtn text={r.pointee_type} /><PivotBtn cls={r.pointee_type} /><OqlBtn cls={r.pointee_type} /><ListObjectsBtn cls={r.pointee_type} /></span>, selector: (r) => r.pointee_type, sortable: true },
+    { id: "field", name: "Class#field", grow: 2, minWidth: "160px", maxWidth: "280px", cell: (r) => <span className="copy-cell"><code title={`${r.holder_class}#${r.field}`}>{r.holder_class}#{r.field}</code><CopyBtn text={r.holder_class} /><PivotBtn cls={r.holder_class} /><OqlBtn cls={r.holder_class} /><ListObjectsBtn cls={r.holder_class} /><IdeBtn cls={r.holder_class} /></span>, selector: (r) => `${r.holder_class}#${r.field}`, sortable: true },
+    { id: "pointee", name: "Pointee Type", grow: 2, minWidth: "140px", maxWidth: "260px", cell: (r) => <span className="copy-cell"><code title={r.pointee_type}>{r.pointee_type}</code><CopyBtn text={r.pointee_type} /><PivotBtn cls={r.pointee_type} /><OqlBtn cls={r.pointee_type} /><ListObjectsBtn cls={r.pointee_type} /><IdeBtn cls={r.pointee_type} /></span>, selector: (r) => r.pointee_type, sortable: true },
     { id: "category", name: "Kind", width: "82px", cell: (r) => <span style={{ textTransform: "capitalize" }}>{r.category ?? "—"}</span>, selector: (r) => r.category ?? "", sortable: true },
     { id: "pointees", name: "Pointees", right: true, width: "96px", format: (r) => fmtCount(r.pointees), selector: (r) => r.pointees, sortable: true },
     ...(hasElements ? [{ id: "elements", name: "Elements", right: true, width: "90px", format: (r: FBSRow) => r.elements != null ? fmtCount(r.elements) : "—", selector: (r: FBSRow) => r.elements ?? 0, sortable: true } as TableColumn<FBSRow>] : []),
@@ -5057,7 +5080,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
 function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
   const [fmtB, kbBtn, useKB] = useFmtBytes();
   const cols: TableColumn<RefStatClassRow>[] = [
-    { id: "class", name: "Class", grow: 1, maxWidth: "650px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+    { id: "class", name: "Class", grow: 1, maxWidth: "650px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /><IdeBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
     { id: "objects", name: "Objects", right: true, width: "100px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
     { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
     { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained ?? 0, fmtB, useKB), selector: (r) => r.retained ?? 0, sortable: true },
@@ -5531,7 +5554,7 @@ function WhoHoldsSankey({ pairs, initialTarget, totalHeap, externalTarget, onPiv
         <span title={target} style={{ fontWeight: 600, fontFamily: "var(--mono, monospace)" }}>{shortClass(target)}</span>
         <CopyBtn text={target} />
         <OqlBtn cls={target} />
-        <ListObjectsBtn cls={target} />
+        <ListObjectsBtn cls={target} /><IdeBtn cls={target} />
       </span>
       <button className="show-more-btn" style={{ fontSize: "0.82rem", padding: "1px 6px", flexShrink: 0 }}
         onClick={() => fireInspect({ kind: "class", cls: target })}>
@@ -6764,9 +6787,9 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
         <p className="subtitle">No objects meet the threshold.</p>
       ) : (() => {
         const dropCols: TableColumn<import("./types").BigDropRow>[] = [
-          { id: "object", name: "Object", grow: 1, maxWidth: "310px", cell: (r) => <span className="copy-cell"><code title={r.display_class}>{r.display_class}</code><CopyBtn text={r.display_class} /><PivotBtn cls={r.display_class} /><OqlBtn cls={r.display_class} /><ListObjectsBtn cls={r.display_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.display_class} /><DomtreeBtn denseIdx={r.obj_index_1based - 1} label={r.display_class} /></span>, selector: (r) => r.display_class, sortable: true },
+          { id: "object", name: "Object", grow: 1, maxWidth: "310px", cell: (r) => <span className="copy-cell"><code title={r.display_class}>{r.display_class}</code><CopyBtn text={r.display_class} /><PivotBtn cls={r.display_class} /><OqlBtn cls={r.display_class} /><ListObjectsBtn cls={r.display_class} /><IdeBtn cls={r.display_class} /><ExploreBtn denseIdx={r.obj_index_1based - 1} label={r.display_class} /><DomtreeBtn denseIdx={r.obj_index_1based - 1} label={r.display_class} /></span>, selector: (r) => r.display_class, sortable: true },
           { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
-          { id: "largest_child", name: "Largest Child", grow: 1, maxWidth: "310px", cell: (r) => r.largest_child_class ? <span className="copy-cell"><code title={r.largest_child_class}>{r.largest_child_class}</code><CopyBtn text={r.largest_child_class} /><PivotBtn cls={r.largest_child_class} /><OqlBtn cls={r.largest_child_class} /><ListObjectsBtn cls={r.largest_child_class} /></span> : <span>—</span>, selector: (r) => r.largest_child_class ?? "", sortable: true },
+          { id: "largest_child", name: "Largest Child", grow: 1, maxWidth: "310px", cell: (r) => r.largest_child_class ? <span className="copy-cell"><code title={r.largest_child_class}>{r.largest_child_class}</code><CopyBtn text={r.largest_child_class} /><PivotBtn cls={r.largest_child_class} /><OqlBtn cls={r.largest_child_class} /><ListObjectsBtn cls={r.largest_child_class} /><IdeBtn cls={r.largest_child_class} /></span> : <span>—</span>, selector: (r) => r.largest_child_class ?? "", sortable: true },
           { id: "child_ret", name: useKB ? "Child Retained (KB)" : "Child Retained", right: true, width: useKB ? "160px" : "130px", cell: byteCell(r => r.largest_child_retained, fmtB, useKB), selector: (r) => r.largest_child_retained, sortable: true },
           { id: "drop", name: useKB ? "Drop (KB)" : "Drop", right: true, width: useKB ? "120px" : "110px", cell: byteCell(r => r.drop_bytes, fmtB, useKB), selector: (r) => r.drop_bytes, sortable: true },
         ];
@@ -6801,7 +6824,7 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
         <p className="subtitle">No immediate dominators.</p>
       ) : (() => {
         const idomCols: TableColumn<import("./types").ImmediateDominatorRow>[] = [
-          { id: "dominator_class", name: "Dominator Class", grow: 1, maxWidth: "360px", cell: (r) => <span className="copy-cell"><code title={r.dominator_class}>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /><PivotBtn cls={r.dominator_class} /><OqlBtn cls={r.dominator_class} /><ListObjectsBtn cls={r.dominator_class} /></span>, selector: (r) => r.dominator_class, sortable: true },
+          { id: "dominator_class", name: "Dominator Class", grow: 1, maxWidth: "360px", cell: (r) => <span className="copy-cell"><code title={r.dominator_class}>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /><PivotBtn cls={r.dominator_class} /><OqlBtn cls={r.dominator_class} /><ListObjectsBtn cls={r.dominator_class} /><IdeBtn cls={r.dominator_class} /></span>, selector: (r) => r.dominator_class, sortable: true },
           ...(hasTopApp ? [{ id: "top_app", name: "Top App Class", grow: 1, maxWidth: "280px", cell: (r: import("./types").ImmediateDominatorRow) => r.top_app_dominator ? (
             <Tooltip content={<><TipHeader>Top App Class</TipHeader><TipRow label="Class" value={r.top_app_dominator} /><TipNote>First non-JDK/framework ancestor in the idom chain — which of your own classes is upstream of this JDK class.</TipNote></>}>
               <span className="copy-cell" style={{ cursor: "help" }}>
@@ -7062,7 +7085,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
             <p className="subtitle" style={{ fontSize: "0.82rem" }}>Shallow heap is additive; retained sets overlap — nested subtrees are counted once per ancestor, so summing retained across classes overstates the total reclaimable memory.</p>
             {(() => {
               const unreachCols: TableColumn<UnreachableClassRow>[] = [
-                { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
+                { id: "class", name: "Class", grow: 1, maxWidth: "600px", cell: (r) => <span className="copy-cell"><code title={r.pretty_class}>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /><PivotBtn cls={r.pretty_class} /><OqlBtn cls={r.pretty_class} /><ListObjectsBtn cls={r.pretty_class} /><IdeBtn cls={r.pretty_class} /></span>, selector: (r) => r.pretty_class, sortable: true },
                 { id: "objects", name: "Objects", right: true, width: "110px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
                 { id: "shallow", name: useKB ? "Shallow (KB)" : "Shallow", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.shallow, fmtB, useKB), selector: (r) => r.shallow, sortable: true },
                 { id: "retained", name: useKB ? "Retained (KB)" : "Retained", right: true, width: useKB ? "135px" : "110px", cell: byteCell(r => r.retained, fmtB, useKB), selector: (r) => r.retained, sortable: true },
@@ -7347,7 +7370,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
                 <CopyBtn text={s.frames[0]} />
                 {cls && <PivotBtn cls={cls} />}
                 {cls && <OqlBtn cls={cls} />}
-                {cls && <ListObjectsBtn cls={cls} />}
+                {cls && <ListObjectsBtn cls={cls} />}{cls && <IdeBtn cls={cls} />}
               </span>
             );
             if (s.frames.length === 1) {
@@ -7360,7 +7383,7 @@ function AllocSitesSection({ data, biggestClasses }: { data: AllocSites; biggest
                   {s.frames.map((f, fi) => {
                     const fc = frameToClass(f);
                     return (
-                      <li key={fi}><span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={f}>{f}</code><CopyBtn text={f} />{fc && <><PivotBtn cls={fc} /><OqlBtn cls={fc} /><ListObjectsBtn cls={fc} /></>}</span></li>
+                      <li key={fi}><span className="copy-cell" style={{ display: "inline-flex", verticalAlign: "middle" }}><code title={f}>{f}</code><CopyBtn text={f} />{fc && <><PivotBtn cls={fc} /><OqlBtn cls={fc} /><ListObjectsBtn cls={fc} /><IdeBtn cls={fc} /></>}</span></li>
                     );
                   })}
                 </ol>
@@ -7573,7 +7596,7 @@ function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] 
             return (
               <span className="copy-cell">
                 <code>{r.name}</code>
-                <CopyBtn text={r.name} /><PivotBtn cls={cls} /><OqlBtn cls={cls} /><ListObjectsBtn cls={cls} />
+                <CopyBtn text={r.name} /><PivotBtn cls={cls} /><OqlBtn cls={cls} /><ListObjectsBtn cls={cls} /><IdeBtn cls={cls} />
                 {isThreadLocal && (
                   <span title="ThreadLocal entries live as long as the thread. In thread-pooled servers (Netty, Tomcat) values persist unless explicitly removed — classic slow leak."
                         style={{ marginLeft: 4, color: "var(--warn, #c84)", fontSize: "0.8em", cursor: "help" }}>⚠ TL</span>
@@ -7626,7 +7649,7 @@ function QueryCell({ val, colName }: { val: QueryValue; colName: string }) {
         <CopyBtn text={`${cls}@${idx}`} />
         <PivotBtn cls={cls} />
         <OqlBtn cls={cls} />
-        <ListObjectsBtn cls={cls} />
+        <ListObjectsBtn cls={cls} /><IdeBtn cls={cls} />
         <ExploreBtn denseIdx={idx} label={cls} />
       </span>
     );
@@ -8357,8 +8380,8 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
   React.useEffect(() => { setShowAllOut(false); setShowAllIn(false); setShowAllSiblings(false); }, [selected]);
 
   const tableCols: TableColumn<TypeEdge>[] = [
-    { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, maxWidth: "400px", cell: r => <span className="copy-cell"><code title={r.src_class}>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /></span> },
-    { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2, maxWidth: "400px", cell: r => <span className="copy-cell"><code title={r.dst_class}>{r.dst_class}</code><CopyBtn text={r.dst_class} /><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /></span> },
+    { id: "src_class", name: "Source Class", selector: r => r.src_class, sortable: true, wrap: true, grow: 2, maxWidth: "400px", cell: r => <span className="copy-cell"><code title={r.src_class}>{r.src_class}</code><CopyBtn text={r.src_class} /><PivotBtn cls={r.src_class} /><OqlBtn cls={r.src_class} /><ListObjectsBtn cls={r.src_class} /><IdeBtn cls={r.src_class} /></span> },
+    { id: "dst_class", name: "Dest Class", selector: r => r.dst_class, sortable: true, wrap: true, grow: 2, maxWidth: "400px", cell: r => <span className="copy-cell"><code title={r.dst_class}>{r.dst_class}</code><CopyBtn text={r.dst_class} /><PivotBtn cls={r.dst_class} /><OqlBtn cls={r.dst_class} /><ListObjectsBtn cls={r.dst_class} /><IdeBtn cls={r.dst_class} /></span> },
     { id: "edge_count", name: "Edge Count", selector: r => r.edge_count, sortable: true, right: true, width: "110px", format: r => fmtCount(r.edge_count) },
     { id: "retained_weight", name: "Retained Flow", selector: r => r.retained_weight, sortable: true, right: true, width: "130px", cell: r => <span title={fmtExactBytes(r.retained_weight)}>{fmtB(r.retained_weight)}</span> },
   ];
@@ -8693,7 +8716,7 @@ function TypeRefGraph({ edges, histogram, objGraph }: { edges: TypeEdge[]; histo
                 <CopyBtn text={selected} />
                 <PivotBtn cls={selected} />
                 <OqlBtn cls={selected} />
-                <ListObjectsBtn cls={selected} />
+                <ListObjectsBtn cls={selected} /><IdeBtn cls={selected} />
               </div>
             </div>
           )}
@@ -9095,7 +9118,7 @@ function WasmInboundPanel({ nodeId, session, fmtB, onNavigate, onNavigateDomtree
                   <button className="btn-link" title="Open in dominator tree" style={{ opacity: 0.6, flexShrink: 0 }} onClick={() => onNavigateDomtree(r.src_idx)}>⌞</button>
                   <PivotBtn cls={r.display_class} />
                   <OqlBtn cls={r.display_class} />
-                  <ListObjectsBtn cls={r.display_class} />
+                  <ListObjectsBtn cls={r.display_class} /><IdeBtn cls={r.display_class} />
                 </span>
               </td>
               <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.shallow)}>{fmtB(r.shallow)}</span></td>
@@ -10010,7 +10033,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                         </button>
                         <PivotBtn cls={r.cls} />
                         <OqlBtn cls={r.cls} />
-                        <ListObjectsBtn cls={r.cls} />
+                        <ListObjectsBtn cls={r.cls} /><IdeBtn cls={r.cls} />
                       </span>
                     </td>
                     <td style={{ textAlign: "right" }}>{fmtCount(r.count)}</td>
@@ -10051,7 +10074,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                   </button>
                   <PivotBtn cls={node.display_class} />
                   <OqlBtn cls={node.display_class} />
-                  <ListObjectsBtn cls={node.display_class} />
+                  <ListObjectsBtn cls={node.display_class} /><IdeBtn cls={node.display_class} />
                 </td>
                 <td style={{ color: "var(--muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>{id}</td>
                 <td><span title={fmtExactBytes(node.shallow)}>{fmtB(node.shallow)}</span></td>
@@ -10126,7 +10149,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                               <button className="btn-link" title="Open dominator tree" style={{ opacity: 0.6, flexShrink: 0 }} onClick={() => navigate("domtree", m.dense_idx, m.display_class)}>⌞</button>
                               <PivotBtn cls={m.display_class} />
                               <OqlBtn cls={m.display_class} />
-                              <ListObjectsBtn cls={m.display_class} />
+                              <ListObjectsBtn cls={m.display_class} /><IdeBtn cls={m.display_class} />
                             </span>
                           </td>
                           <td style={{ color: "var(--muted)", fontSize: "0.8rem" }}>{m.dense_idx}</td>
@@ -10231,7 +10254,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
           {effectiveCls && (
             <span className="copy-cell">
               <OqlBtn cls={effectiveCls} />
-              <ListObjectsBtn cls={effectiveCls} />
+              <ListObjectsBtn cls={effectiveCls} /><IdeBtn cls={effectiveCls} />
               <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Copy OQL for all {shortCls} instances</span>
             </span>
           )}
@@ -10260,7 +10283,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
               <td><span className="copy-cell">
                 <button className="btn-link" onClick={() => navigate("explore",idx,cls,field||undefined)}><code title={cls}>{cls}</code></button>
                 <button className="btn-link" title="Open in dominator tree" style={{ opacity:0.6,flexShrink:0 }} onClick={() => navigate("domtree",idx,cls,field||undefined)}>⌞</button>
-                <PivotBtn cls={cls}/><OqlBtn cls={cls}/><ListObjectsBtn cls={cls} />
+                <PivotBtn cls={cls}/><OqlBtn cls={cls}/><ListObjectsBtn cls={cls} /><IdeBtn cls={cls} />
               </span></td>
               <td style={{ textAlign:"right" }}><span title={fmtExactBytes(ret)}>{fmtB(ret)}</span></td>
             </tr>
@@ -10618,7 +10641,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                               </button>
                               <PivotBtn cls={edge.child_class} />
                               <OqlBtn cls={edge.child_class} />
-                              <ListObjectsBtn cls={edge.child_class} />
+                              <ListObjectsBtn cls={edge.child_class} /><IdeBtn cls={edge.child_class} />
                               {edge.count >= 2 && !edge.any_shared && isCollectionClass(edge.child_class) && (
                                 <span
                                   style={{
@@ -10688,7 +10711,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                                   </button>
                                   <PivotBtn cls={m.child_class} />
                                   <OqlBtn cls={m.child_class} />
-                                  <ListObjectsBtn cls={m.child_class} />
+                                  <ListObjectsBtn cls={m.child_class} /><IdeBtn cls={m.child_class} />
                                 </span>
                               </td>
                               <td style={{ textAlign: "right", whiteSpace: "nowrap", fontSize: "0.8rem" }}><span title={fmtExactBytes(m.child_retained)}>{fmtB(m.child_retained)}</span></td>
@@ -10770,7 +10793,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                                   <button className="btn-link" title="Open in dominator tree" style={{ opacity: 0.6, flexShrink: 0 }} onClick={() => navigate("domtree", e.src_idx, e.src_class)}>⌞</button>
                                   <PivotBtn cls={e.src_class} />
                                   <OqlBtn cls={e.src_class} />
-                                  <ListObjectsBtn cls={e.src_class} />
+                                  <ListObjectsBtn cls={e.src_class} /><IdeBtn cls={e.src_class} />
                                 </span>
                               </td>
                               <td style={{ textAlign: "right" }}><span title={fmtExactBytes(e.src_shallow)}>{fmtB(e.src_shallow)}</span></td>
@@ -10988,7 +11011,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                                   </button>
                                   <PivotBtn cls={rn.display_class} />
                                   <OqlBtn cls={rn.display_class} />
-                                  <ListObjectsBtn cls={rn.display_class} />
+                                  <ListObjectsBtn cls={rn.display_class} /><IdeBtn cls={rn.display_class} />
                                 </span>
                               </td>
                               <td style={{ textAlign: "right" }}><span title={fmtExactBytes(rn.shallow)}>{fmtB(rn.shallow)}</span></td>
@@ -11156,7 +11179,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                         <tbody>
                           {rows.map(r => (
                             <tr key={r.cls}>
-                              <td><span className="copy-cell"><code title={r.cls}>{r.cls}</code><CopyBtn text={r.cls} /><PivotBtn cls={r.cls} /><OqlBtn cls={r.cls} /><ListObjectsBtn cls={r.cls} /></span></td>
+                              <td><span className="copy-cell"><code title={r.cls}>{r.cls}</code><CopyBtn text={r.cls} /><PivotBtn cls={r.cls} /><OqlBtn cls={r.cls} /><ListObjectsBtn cls={r.cls} /><IdeBtn cls={r.cls} /></span></td>
                               <td style={{ textAlign: "right" }}>{fmtCount(r.count)}</td>
                               <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.total_retained)}>{fmtB(r.total_retained)}</span></td>
                               <td style={{ textAlign: "right" }}><span title={fmtExactBytes(r.max_retained)}>{fmtB(r.max_retained)}</span></td>
@@ -11202,7 +11225,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                                     </button>
                                     <PivotBtn cls={r.display_class} />
                                     <OqlBtn cls={r.display_class} />
-                                    <ListObjectsBtn cls={r.display_class} />
+                                    <ListObjectsBtn cls={r.display_class} /><IdeBtn cls={r.display_class} />
                                   </span>
                                 </td>
                                 <td style={{ textAlign: "right", color: "var(--muted)", fontSize: "0.8rem" }}>{r.depth}</td>
@@ -11250,7 +11273,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                                   </button>
                                   <PivotBtn cls={cn.display_class} />
                                   <OqlBtn cls={cn.display_class} />
-                                  <ListObjectsBtn cls={cn.display_class} />
+                                  <ListObjectsBtn cls={cn.display_class} /><IdeBtn cls={cn.display_class} />
                                 </span>
                               </td>
                               <td><span title={fmtExactBytes(cn.shallow)}>{fmtB(cn.shallow)}</span></td>
@@ -11307,7 +11330,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                     <CopyBtn text={currentNode.display_class} />
                     <PivotBtn cls={currentNode.display_class} />
                     <OqlBtn cls={currentNode.display_class} />
-                    <ListObjectsBtn cls={currentNode.display_class} />
+                    <ListObjectsBtn cls={currentNode.display_class} /><IdeBtn cls={currentNode.display_class} />
                   </span>
                   {classSiblings.length > 1 && (
                     <button className="btn-link" style={{ fontSize: "0.76rem", color: "var(--muted)", marginLeft: "0.3rem" }}
@@ -11521,7 +11544,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                       </button>
                       {idomNode && <PivotBtn cls={idomNode.display_class} />}
                       {idomNode && <OqlBtn cls={idomNode.display_class} />}
-                      {idomNode && <ListObjectsBtn cls={idomNode.display_class} />}
+                      {idomNode && <ListObjectsBtn cls={idomNode.display_class} />}{idomNode && <IdeBtn cls={idomNode.display_class} />}
                     </span>
                   ) : (
                     <em>GC root</em>
@@ -11691,7 +11714,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                           </button>
                           <PivotBtn cls={cn.display_class} />
                           <OqlBtn cls={cn.display_class} />
-                          <ListObjectsBtn cls={cn.display_class} />
+                          <ListObjectsBtn cls={cn.display_class} /><IdeBtn cls={cn.display_class} />
                         </span>
                       </div>
                       <div style={{ textAlign: "right", whiteSpace: "nowrap", padding: "1px 4px" }} title={fmtExactBytes(cn.retained)}>{fmtB(cn.retained)}</div>
@@ -11739,7 +11762,7 @@ function ObjectGraphExplorer({ data, totalHeapOverride }: { data: ObjGraphFlat; 
                           <code style={{ fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.class}>{row.class}</code>
                           <PivotBtn cls={row.class} />
                           <OqlBtn cls={row.class} />
-                          <ListObjectsBtn cls={row.class} />
+                          <ListObjectsBtn cls={row.class} /><IdeBtn cls={row.class} />
                         </span>
                       </div>
                       <div style={{ textAlign: "right", padding: "1px 4px", whiteSpace: "nowrap" }}>{fmtCount(row.instance_count)}</div>
