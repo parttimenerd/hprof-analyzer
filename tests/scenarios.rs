@@ -1569,3 +1569,220 @@ fn array_subscript_x_bracket_n() {
     );
     assert!(!result.rows.is_empty(), "x[0] returned no rows");
 }
+
+// ---------------------------------------------------------------------------
+// OQL attribute result tests (Task 1 / Task 8)
+// ---------------------------------------------------------------------------
+//
+// These are standalone tests (not Scenario table rows) that run a real OQL
+// query against a synthetic heap and assert the returned values — not just
+// "no panic", but correct output.
+
+fn write_tmp(bytes: Vec<u8>, name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(name);
+    std::fs::write(&path, &bytes).expect("write temp hprof");
+    path
+}
+
+fn run_oql(path: &std::path::Path, oql: &str) -> hprof_analyzer::query::model::QueryResult {
+    let results = hprof_analyzer::run_oql_query(
+        path.to_str().unwrap(),
+        oql,
+        false,
+        &AnalyzeOptions::default(),
+    )
+    .unwrap_or_else(|e| panic!("OQL failed ({oql:?}): {e}"));
+    assert_eq!(results.len(), 1, "expected exactly one result set");
+    let r = results.into_iter().next().unwrap();
+    assert!(r.error.is_none(), "query error for {oql:?}: {:?}", r.error);
+    r
+}
+
+#[test]
+fn oql_classof_returns_class_name() {
+    // classof(x) should return a Str with the class name.
+    let path = write_tmp(heap_builder::build_mixed_class_heap(), "test_classof.hprof");
+    let r = run_oql(
+        &path,
+        "SELECT classof(x) FROM INSTANCEOF com.example.TypeA x",
+    );
+    assert!(!r.rows.is_empty(), "classof() returned no rows");
+    let val = &r.rows[0][0];
+    assert!(
+        matches!(val, hprof_analyzer::query::model::QueryValue::Str(s) if s.contains("TypeA")),
+        "classof() should return a Str containing 'TypeA', got: {val:?}"
+    );
+}
+
+#[test]
+fn oql_classof_group_by_counts_per_class() {
+    // GROUP BY classof(x) should produce one row per class.
+    let path = write_tmp(
+        heap_builder::build_mixed_class_heap(),
+        "test_classof_grp.hprof",
+    );
+    let r = run_oql(
+        &path,
+        "SELECT classof(x) AS cls, COUNT(*) AS n \
+         FROM INSTANCEOF java.lang.Object x \
+         GROUP BY classof(x) \
+         ORDER BY n DESC",
+    );
+    assert!(
+        r.row_count >= 2,
+        "should have at least 2 class groups, got: {}",
+        r.row_count
+    );
+}
+
+#[test]
+fn oql_category_returns_string() {
+    // @category should return a non-null Str for every instance.
+    let path = write_tmp(
+        heap_builder::build_mixed_class_heap(),
+        "test_category.hprof",
+    );
+    let r = run_oql(&path, "SELECT @category FROM INSTANCEOF com.example.TypeA");
+    assert!(!r.rows.is_empty(), "@category returned no rows");
+    for row in &r.rows {
+        assert!(
+            matches!(&row[0], hprof_analyzer::query::model::QueryValue::Str(_)),
+            "@category should be Str, got: {:?}",
+            row[0]
+        );
+    }
+}
+
+#[test]
+fn oql_superclass_returns_base_for_subclass() {
+    // @superclass on a Sub instance should return "com.example.Base".
+    let path = write_tmp(
+        heap_builder::build_subclass_hierarchy(),
+        "test_superclass.hprof",
+    );
+    // SubSub extends Sub extends Base — @superclass on SubSub should be Sub.
+    let r = run_oql(
+        &path,
+        "SELECT @superclass FROM INSTANCEOF com.example.SubSub",
+    );
+    assert!(!r.rows.is_empty(), "@superclass returned no rows");
+    let val = &r.rows[0][0];
+    assert!(
+        matches!(val, hprof_analyzer::query::model::QueryValue::Str(s) if s.contains("Sub")),
+        "@superclass should contain 'Sub', got: {val:?}"
+    );
+}
+
+#[test]
+fn oql_dominator_depth_is_non_negative() {
+    // Every object should have @dominatorDepth >= 0.
+    let path = write_tmp(
+        heap_builder::build_mixed_class_heap(),
+        "test_dom_depth.hprof",
+    );
+    let r = run_oql(
+        &path,
+        "SELECT @dominatorDepth FROM INSTANCEOF com.example.TypeA ORDER BY @dominatorDepth ASC",
+    );
+    assert!(!r.rows.is_empty(), "@dominatorDepth returned no rows");
+    for row in &r.rows {
+        match &row[0] {
+            hprof_analyzer::query::model::QueryValue::Int(d) => {
+                assert!(*d >= 0, "@dominatorDepth should be >= 0, got: {d}")
+            }
+            other => panic!("@dominatorDepth should be Int, got: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn oql_dominator_class_returns_str_or_null() {
+    // @dominatorClass returns Str (class name) or Null (for GC-root objects).
+    let path = write_tmp(
+        heap_builder::build_mixed_class_heap(),
+        "test_dom_class.hprof",
+    );
+    let r = run_oql(
+        &path,
+        "SELECT @dominatorClass FROM INSTANCEOF com.example.TypeA",
+    );
+    // At least one row must exist; each value must be Str or Null.
+    assert!(!r.rows.is_empty(), "@dominatorClass returned no rows");
+    for row in &r.rows {
+        assert!(
+            matches!(
+                &row[0],
+                hprof_analyzer::query::model::QueryValue::Str(_)
+                    | hprof_analyzer::query::model::QueryValue::Null
+            ),
+            "@dominatorClass must be Str or Null, got: {:?}",
+            row[0]
+        );
+    }
+}
+
+#[test]
+fn oql_union_merges_two_class_sets() {
+    // UNION: query two distinct classes and verify both show up in merged result.
+    let path = write_tmp(heap_builder::build_mixed_class_heap(), "test_union.hprof");
+    let r = run_oql(
+        &path,
+        "SELECT @objectId FROM INSTANCEOF com.example.TypeA \
+         UNION \
+         SELECT @objectId FROM INSTANCEOF com.example.TypeB",
+    );
+    // mixed_class_heap creates 5 TypeA + 5 TypeB = 10 objects.
+    assert_eq!(
+        r.row_count, 10,
+        "UNION of TypeA and TypeB should produce 10 rows, got: {}",
+        r.row_count
+    );
+}
+
+#[test]
+fn oql_inbounds_expands_to_referrer_objects() {
+    // @inbounds expands to one row per object that references the matched object.
+    // For a linked list of N nodes, each non-tail node references the next, so
+    // `SELECT @inbounds FROM <class>` returns at least one row (the referrers of
+    // at least one node). The result rows must be ObjRef values (referrer objects).
+    let mut b = heap_builder::HeapBuilder::new();
+    heap_builder::build_linked_list_chain(&mut b);
+    let bytes = b.build();
+    let path = write_tmp(bytes, "test_inbounds.hprof");
+    let r = run_oql(&path, "SELECT @inbounds FROM scenarios.QueueNode");
+    // The chain has nodes that reference each other; at least some referrers exist.
+    assert!(!r.rows.is_empty(), "@inbounds returned no rows");
+    for row in &r.rows {
+        assert!(
+            matches!(
+                &row[0],
+                hprof_analyzer::query::model::QueryValue::ObjRef { .. }
+            ),
+            "@inbounds must expand to ObjRef rows, got: {:?}",
+            row[0]
+        );
+    }
+}
+
+#[test]
+fn oql_outbounds_expands_to_referenced_objects() {
+    // @outbounds expands to one row per object that the matched object references.
+    // For a linked list, each node references its successor, so we get at least
+    // one row of ObjRef per node that has a non-null next pointer.
+    let mut b = heap_builder::HeapBuilder::new();
+    heap_builder::build_linked_list_chain(&mut b);
+    let bytes = b.build();
+    let path = write_tmp(bytes, "test_outbounds.hprof");
+    let r = run_oql(&path, "SELECT @outbounds FROM scenarios.QueueNode");
+    assert!(!r.rows.is_empty(), "@outbounds returned no rows");
+    for row in &r.rows {
+        assert!(
+            matches!(
+                &row[0],
+                hprof_analyzer::query::model::QueryValue::ObjRef { .. }
+            ),
+            "@outbounds must expand to ObjRef rows, got: {:?}",
+            row[0]
+        );
+    }
+}

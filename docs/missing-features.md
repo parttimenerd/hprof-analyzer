@@ -47,14 +47,14 @@ From `docs/notes/LEAKCANARY_INSPIRED_PROPOSALS.md`.
 
 | Task | Feature | Status |
 |---|---|---|
-| 1 | Scenario tests for shipped features (`@inbounds`, `@outbounds`, `UNION`, `dominators()`, `classof()`) | Partially done — cli_query.rs has integration tests; scenarios.rs has no-panic coverage. No OQL-result scenario tests for `@inbounds`. |
+| 1 | Scenario tests for shipped features (`@inbounds`, `@outbounds`, `UNION`, `dominators()`, `classof()`) | **DONE** — 9 OQL-result scenario tests in `tests/scenarios.rs` covering `classof()`, `@category`, `@superclass`, `@dominatorClass`, `@dominatorDepth`, `UNION`, `@inbounds`, `@outbounds` |
 | 2 | `class_super_idx` on `Graph` | **DONE** — populated in pass2/mod.rs; used by `@superclass` |
 | 3 | `@category` OQL attr | **DONE** — wired in stage_runner; uses per-class category Vec |
 | 4 | `@dominatorClass`, `@dominatorDepth` OQL attrs | **DONE** — wired in stage_runner |
 | 5 | `@superclass` OQL attr | **DONE** — wired via `class_super_idx`; Null for java.lang.Object |
 | 6 | `pathToRoot(alias)` OQL function | **DONE** — `StageOp::PathToRoot` in stage_runner |
 | 7 | LIKE `%`/`_` SQL glob auto-translate | **DONE** — auto-translates when pattern has `%`/`_` but no regex metacharacters |
-| 8 | `@outbounds` scenario tests | No-panic scenario exists (Scenario 23); full OQL tests in cli_query.rs |
+| 8 | `@outbounds` scenario tests | **DONE** — `oql_outbounds_expands_to_referenced_objects` in `tests/scenarios.rs`; verifies ObjRef expansion on a linked-list chain |
 | 9 | `FROM ENTRIES ClassName` — collection entry iteration | **DONE** — `EntriesExpand` in stage_runner; supports ArrayList/HashMap |
 
 ---
