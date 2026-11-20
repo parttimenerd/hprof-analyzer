@@ -242,10 +242,10 @@ Bugs deferred from prior slices. Fix cost varies; listed in rough priority order
 | — | **Cartesian product FROM** (`FROM o1, o2`) | Low | Open |
 | — | **Subquery in SELECT clause** | Low | Open |
 | — | **CROSS JOIN** | Low | Open |
-| — | **`UNION ALL` syntax** | Low | Open |
+| — | ~~**`UNION ALL` syntax**~~ | ~~Low~~ | **DONE** — `UNION ALL` sets `query.union_all = true`; deduplication is distinct from UNION |
 | — | **Expressions in ORDER BY** | Low | Open |
-| — | **Nested CASE WHEN** | Low | Open |
-| — | **`SELECT` inside `IN` predicate** | Low | Open |
-| — | **String concat operator `\|\|`** | Low | Open |
+| — | ~~**Nested CASE WHEN**~~ | ~~Low~~ | **DONE** — parses correctly (`nested_case_when_parses` test) |
+| — | ~~**`SELECT` inside `IN` predicate**~~ | ~~Low~~ | **DONE** — `attr IN (SELECT ...)` subquery form is parsed and planned (plan.rs `Predicate::InSubquery`) |
+| — | ~~**String concat operator `\|\|`**~~ | ~~Low~~ | **DONE** — parsed as `CONCAT(lhs, rhs)` method call (parse.rs line ~754) |
 | — | **`ENTRIES` expansion in subqueries** | Low | Open |
 | — | **`@root` boolean attribute** | Low | Open |
