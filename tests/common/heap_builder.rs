@@ -1489,3 +1489,32 @@ pub fn build_component_pct_denominator(b: &mut HeapBuilder) {
     let big_array = b.prim_array(T_BYTE, &vec![0u8; 1_000_000]);
     b.class_with_static_root("scenarios/ComponentHolder", "big", big_array, &[]);
 }
+
+// ---------------------------------------------------------------------------
+// Scenario: thread_as_transiter_no_triple_fire (P0-1 DoD)
+// ---------------------------------------------------------------------------
+
+/// Build a heap where Thread itself is the dominant GC-root type (>50% by
+/// retained) but no single Thread object exceeds the 50% dominance floor, so
+/// `primary_culprits` stays empty. This is the "Thread as transit" case where
+/// three triage signals used to redundantly name Thread:
+///   "headline-retainer": "Thread retains 79.4%"
+///   "concentration": "Thread holds 79.4%"
+///   "gc-root-type": "79.4% held by Thread roots"
+///
+/// After the P0-1 fix, at most one Critical signal should fire for the Thread
+/// case; the others should be suppressed or downgraded to Info/Warning.
+///
+/// Construction: 4 Thread instances each holding one 100-KB byte[] payload.
+/// No single Thread holds >50%, so `primary_culprits` is empty.
+/// Thread's combined class-group retained is ~100% → Thread is suspects[0].
+pub fn build_thread_as_transiter_no_triple_fire(b: &mut HeapBuilder) {
+    let thread_class = b.class("java/lang/Thread", &[("payload", T_OBJECT)]);
+    for _ in 0..4 {
+        let arr = b.prim_array(T_BYTE, &vec![0u8; 100_000]);
+        let mut tdata = Vec::new();
+        obj_field(&mut tdata, arr);
+        let thread_obj = b.instance(thread_class, &tdata);
+        b.thread_root(thread_obj);
+    }
+}

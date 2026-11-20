@@ -899,6 +899,59 @@ fn build_reference_array_scenario() -> Vec<u8> {
     b.build()
 }
 
+// ---------------------------------------------------------------------------
+// Scenario 40: thread_as_transiter_no_triple_fire (P0-1 DoD)
+// ---------------------------------------------------------------------------
+
+fn build_thread_as_transiter_no_triple_fire() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_thread_as_transiter_no_triple_fire(&mut b);
+    b.build()
+}
+
+fn check_thread_as_transiter_no_triple_fire(report: &Report) {
+    // primary_culprits must be empty: no single Thread object holds >50%.
+    assert!(
+        report.primary_culprits.is_empty(),
+        "primary_culprits should be empty when no single Thread holds >50%, \
+         got: {:?}",
+        report
+            .primary_culprits
+            .iter()
+            .map(|c| &c.class_name)
+            .collect::<Vec<_>>()
+    );
+
+    // gc-root-type must NOT fire: DominantGcRootType should suppress it when
+    // suspects[0] already names the same type as the dominant GC-root class.
+    for sig in &report.triage {
+        assert_ne!(
+            sig.id, "gc-root-type",
+            "gc-root-type fired even though suspects[0] is already the same \
+             class as the dominant GC-root type — triple-fire regression: {}",
+            sig.detail
+        );
+    }
+
+    // headline-retainer must fire (at Warning level since primary_culprits empty).
+    let hr = report.triage.iter().find(|s| s.id == "headline-retainer");
+    assert!(
+        hr.is_some(),
+        "headline-retainer should still fire even with empty primary_culprits"
+    );
+    // concentration must fire at Info/diffuse, not at Critical (no dominant owner).
+    let conc = report.triage.iter().find(|s| s.id == "concentration");
+    if let Some(c) = conc {
+        assert_ne!(
+            c.severity,
+            hprof_analyzer::report::TriageSeverity::Critical,
+            "concentration should not be Critical when primary_culprits is empty; \
+             got: {}",
+            c.detail
+        );
+    }
+}
+
 fn check_overview_section_off_heap(report: &Report) {
     // The full markdown report includes the off-heap row (cap > 0).
     let full = hprof_analyzer::report::render_markdown(report);
@@ -1226,6 +1279,15 @@ const SCENARIOS: &[Scenario] = &[
         build: build_reference_array_scenario,
         check: |_r: &Report| {},
     },
+    // Scenario 40: thread_as_transiter_no_triple_fire (P0-1 DoD) — when Thread is
+    // the dominant GC-root class but primary_culprits is empty, gc-root-type must not
+    // re-surface Thread as a second redundant Critical headline.
+    Scenario {
+        name: "thread_as_transiter_no_triple_fire",
+        opts: default_opts,
+        build: build_thread_as_transiter_no_triple_fire,
+        check: check_thread_as_transiter_no_triple_fire,
+    },
 ];
 
 #[test]
@@ -1533,6 +1595,11 @@ fn scenario_get_method_rejected_without_collections() {
     );
 }
 
+#[test]
+fn scenario_thread_as_transiter_no_triple_fire() {
+    run_scenario(&SCENARIOS[40]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1541,7 +1608,7 @@ fn scenario_get_method_rejected_without_collections() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        40,
+        41,
         "update this test when adding scenarios"
     );
 }
