@@ -11,9 +11,9 @@ Updated 2026-11-20.
 
 | Feature | MAT uses | Notes |
 |---|---|---|
-| Numeric literal suffixes (`100L`, `1.5F`, `2.0D`) | ~23 | Pure parser + eval change; no new retention |
-| `FROM OBJECTS <id>` / `FROM OBJECTS 0x…` | ~52 | Single object by decimal or hex object-id as FROM target |
-| `@referenceArray` / `@valueArray` late resolution | — | Parse already works; always return Null; wiring deferred from wave 7 |
+| ~~Numeric literal suffixes (`100L`, `1.5F`, `2.0D`)~~ | ~~23~~ | **DONE** — lexer already strips `l/L` from ints and `f/F/d/D` from floats |
+| ~~`FROM OBJECTS <id>` / `FROM OBJECTS 0x…`~~ | ~~52~~ | **DONE** — `FromSource::Object` wired in parse.rs and execute.rs |
+| ~~`@referenceArray` / `@valueArray` late resolution~~ | — | **DONE** — `@referenceArray` wired in stage_runner (commit a65deb30) |
 
 ### Larger scope (need explicit go-ahead)
 
@@ -231,10 +231,10 @@ Bugs deferred from prior slices. Fix cost varies; listed in rough priority order
 
 | ID | Issue | Priority | Status |
 |---|---|---|---|
-| — | **`FROM "byte[]"` regex escaping** — fails with "unclosed character class"; workaround `"byte\\[\\]"` also fails for VALUES queries | High | Open |
+| — | ~~**`FROM "byte[]"` regex escaping**~~ — ~~fails with "unclosed character class"~~ | High | **DONE** — `compile_from_regex` already escapes invalid patterns as literal fallback |
 | — | ~~**LIKE NULL handling**~~ — ~~incorrect row-counts from LIKE filters involving NULL~~ | High | **FIXED** — NULL on either side returns UNKNOWN (SQL three-valued logic) |
-| — | **Boolean literals `true`/`false` not tokenized** — `WHERE true` → parse error | Medium | Open (audit: may already be fixed) |
-| — | **Multiple UNION** — second `UNION` → parse error; workaround: `(A UNION B) UNION C` | Medium | Open (audit: may already be fixed) |
+| — | ~~**Boolean literals `true`/`false` not tokenized**~~ — ~~`WHERE true` → parse error~~ | Medium | **DONE** — already tokenized as `Value::Bool(true/false)` and `Predicate::Bool(true/false)` |
+| — | ~~**Multiple UNION**~~ — ~~second `UNION` → parse error~~ | Medium | **DONE** — `union_with_all.repeated()` handles chains of any length |
 | — | ~~**Array subscript always `Null`**~~ — ~~`array_index` need flag armed~~ | Medium | **DONE** — `x[n]` works; `get(n)` added in `--collections` mode |
 | — | **`FROM INSTANCEOF <interface>` returns 0 rows** — HPROF CLASS_DUMP records don't include interface metadata | Medium | Out of scope (fundamental format limitation) |
 | — | **`--query-file` parse errors show no filename/line prefix** | Medium | Open |
