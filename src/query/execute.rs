@@ -1432,7 +1432,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // D4b: late resolution — ref-hop attrs; scan-time projects Null.
             Attr::ValueArray | Attr::ReferenceArray => QueryValue::Null,
             // G1: GC-root attrs; resolved in analyze-mode late phase only.
-            Attr::GcRoots | Attr::GcRootInfo => QueryValue::Null,
+            Attr::GcRoots | Attr::GcRootInfo | Attr::IsGcRoot => QueryValue::Null,
             // @category: resolved in the late phase (requires classifier + class_categories).
             Attr::Category => QueryValue::Null,
             // Array index/slice: resolved in P2 late window; scan-time projects Null.
@@ -1554,7 +1554,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 addr: self.resolver.addr_of(src_idx),
             },
             // G1: GC-root attrs; resolved in analyze-mode late phase only.
-            Attr::GcRoots | Attr::GcRootInfo => QueryValue::Null,
+            Attr::GcRoots | Attr::GcRootInfo | Attr::IsGcRoot => QueryValue::Null,
             // @category: resolved in the late phase (requires classifier + class_categories).
             Attr::Category => QueryValue::Null,
             // Array index/slice: resolved in P2 late window; scan-time projects Null.
@@ -4313,6 +4313,7 @@ pub(crate) fn attr_name(a: &Attr) -> String {
         // G1: GC-root attrs.
         Attr::GcRoots => "@GCRoots".into(),
         Attr::GcRootInfo => "@GCRootInfo".into(),
+        Attr::IsGcRoot => "@root".into(),
         Attr::Category => "@category".into(),
         Attr::CollectionSize => "@collectionSize".into(),
         Attr::FillRatio => "@fillRatio".into(),

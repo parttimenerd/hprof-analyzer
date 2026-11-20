@@ -2972,7 +2972,7 @@ fn note_attr_need_attr(a: &Attr, needs: &mut QueryNeeds) {
             }
         }
         // G1: GC-root attrs require the full analyze pipeline.
-        Attr::GcRoots | Attr::GcRootInfo => needs.gc_roots = true,
+        Attr::GcRoots | Attr::GcRootInfo | Attr::IsGcRoot => needs.gc_roots = true,
         // Array index/slice: resolved in P2 late window via ResolveArrayIndex op.
         Attr::ArrayIndex { .. } | Attr::ArraySlice { .. } => {
             needs.array_index = true;
@@ -5435,6 +5435,17 @@ mod tests {
             plan.finalize_at,
             Phase::P1,
             "@GCRoots must force finalize_at != P1 so the entry goes into carry mode"
+        );
+    }
+
+    #[test]
+    fn at_root_attr_sets_needs_gc_roots() {
+        let plan = pq(&parse("SELECT @root FROM java.lang.Thread").unwrap()).unwrap();
+        assert!(plan.needs.gc_roots, "@root must set needs.gc_roots");
+        assert_ne!(
+            plan.finalize_at,
+            Phase::P1,
+            "@root must force finalize_at != P1"
         );
     }
 

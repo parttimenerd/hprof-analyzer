@@ -899,13 +899,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                         None => QueryValue::Null,
                     }
                 }
-                SelectItem::Attr(Attr::Category) => {
-                    let ci = ctx.class_idx.get(s as usize).copied().unwrap_or(u32::MAX) as usize;
-                    ctx.class_categories
-                        .get(ci)
-                        .map(|cat| QueryValue::Str(cat.clone()))
-                        .unwrap_or(QueryValue::Null)
-                }
+                SelectItem::Attr(Attr::IsGcRoot) => QueryValue::Bool(ctx.gc_root_tag(s).is_some()),
                 SelectItem::Attr(Attr::ToHex(inner)) => {
                     let ret = ctx.retained.get(s as usize).copied().unwrap_or(0);
                     match eval_late_expr_multi(inner, s, ret, ctx, &like_regexes) {
@@ -1273,6 +1267,7 @@ fn eval_late_expr_multi(
                 Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
                 None => QueryValue::Null,
             },
+            Attr::IsGcRoot => QueryValue::Bool(ctx.gc_root_tag(idx).is_some()),
             Attr::ToHex(inner) => {
                 let inner_expr: &Expr = inner;
                 match eval_late_expr_multi(inner_expr, idx, ret, ctx, like_regexes) {
@@ -1851,6 +1846,7 @@ fn project_string_row_item(
                 None => QueryValue::Null,
             }
         }
+        SelectItem::Attr(Attr::IsGcRoot) => QueryValue::Bool(ctx.gc_root_tag(dense).is_some()),
         SelectItem::Attr(Attr::Category) => {
             let ci = ctx
                 .class_idx
@@ -1961,6 +1957,7 @@ fn project_array_index_item(
                 None => QueryValue::Null,
             }
         }
+        SelectItem::Attr(Attr::IsGcRoot) => QueryValue::Bool(ctx.gc_root_tag(dense).is_some()),
         SelectItem::Attr(Attr::Category) => {
             let ci = ctx
                 .class_idx
@@ -3403,6 +3400,7 @@ fn project_late_row(
                     None => QueryValue::Null,
                 }
             }
+            SelectItem::Attr(Attr::IsGcRoot) => QueryValue::Bool(ctx.gc_root_tag(idx).is_some()),
             SelectItem::Attr(Attr::Category) => {
                 let ci = ctx.class_idx.get(idx as usize).copied().unwrap_or(u32::MAX) as usize;
                 ctx.class_categories

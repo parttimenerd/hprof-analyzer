@@ -368,6 +368,7 @@ where
                 "referenceArray" => Attr::ReferenceArray,
                 "GCRoots" => Attr::GcRoots,
                 "GCRootInfo" | "info" => Attr::GcRootInfo,
+                "root" => Attr::IsGcRoot,
                 "category" => Attr::Category,
                 "dominatorClass" => Attr::DominatorClass,
                 "dominatorDepth" => Attr::DominatorDepth,
@@ -2561,6 +2562,7 @@ pub const ATTRIBUTES: &[&str] = &[
     "@GCRoots",
     "@GCRootInfo",
     "@info",
+    "@root",
     "@category",
     "@dominatorClass",
     "@dominatorDepth",
@@ -6849,6 +6851,7 @@ mod tests {
         assert!(parse("SELECT @GCRoots FROM java.lang.Thread").is_ok());
         assert!(parse("SELECT @GCRootInfo FROM java.lang.Thread").is_ok());
         assert!(parse("SELECT @info FROM java.lang.Thread").is_ok());
+        assert!(parse("SELECT @root FROM java.lang.Thread").is_ok());
     }
 
     // ============================================================

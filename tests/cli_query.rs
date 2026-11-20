@@ -1039,6 +1039,41 @@ fn query_subcommand_missing_query_file_errors() {
     );
 }
 
+/// A `--query-file` plan error includes the filename and line number so the user
+/// can locate the offending query.
+#[test]
+fn query_file_plan_error_names_file_and_line() {
+    let Some(hprof) = philosophers() else { return };
+    let path = std::env::temp_dir().join(format!("hprof_qf_plan_err_{}.oql", std::process::id()));
+    // `get(0)` is a plan-time error without `--collections`; write it on line 2.
+    std::fs::write(
+        &path,
+        "SELECT COUNT(*) FROM java.lang.String\nSELECT get(0) FROM java.lang.Object\n",
+    )
+    .unwrap();
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query-file", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        !out.status.success(),
+        "plan error should cause non-zero exit"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let path_str = path.to_str().unwrap();
+    assert!(
+        stderr.contains(path_str),
+        "plan error must name the query file:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("line 2"),
+        "plan error must name the line number:\n{stderr}"
+    );
+}
+
 /// The `query` subcommand refuses a non-HPROF input up front with a clear hint.
 #[test]
 fn query_subcommand_rejects_non_hprof_input() {
@@ -4961,6 +4996,26 @@ fn gcroot_attrs_resolve_in_analyze_mode() {
             "non-root String rows must all be null:\n{section}"
         );
     }
+}
+
+/// `@root` is a boolean shorthand: `true` for GC-root objects, `false` for
+/// non-roots. At least one `java.lang.Thread` must be a GC root (`true`), and
+/// a `java.lang.String` instance must be non-root (`false`).
+#[test]
+fn at_root_boolean_attr() {
+    let Some(hprof) = philosophers() else { return };
+    // Thread — expect at least one `true` row.
+    let out = run_query_stdout(&hprof, "SELECT @root FROM java.lang.Thread LIMIT 200");
+    assert!(
+        out.contains("true"),
+        "@root must project true for at least one GC-root Thread:\n{out}"
+    );
+    // String — no row should be true (Strings are not GC roots directly).
+    let out2 = run_query_stdout(&hprof, "SELECT @root FROM java.lang.String LIMIT 5");
+    assert!(
+        !out2.contains("true"),
+        "@root must not project true for ordinary String rows:\n{out2}"
+    );
 }
 
 /// The query subcommand defaults to reachable-only (Eclipse MAT parity): the

@@ -211,6 +211,9 @@ pub enum Attr {
     /// `@GCRootInfo` / `@info` — root descriptor detail (root type/tag) for a
     /// root object; empty/Null for a non-root. Analyze-pipeline only.
     GcRootInfo,
+    /// `@root` — `true` if this object is a GC root, `false` otherwise.
+    /// Equivalent to `@GCRoots != null` but returns a boolean. Analyze-pipeline only.
+    IsGcRoot,
     /// `base[index]` — single 0-based element of an array-valued attr.
     /// Out-of-bounds or non-array base → Null (not an error).
     /// Resolved in P2 (late window).
