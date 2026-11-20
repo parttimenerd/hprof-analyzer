@@ -3607,7 +3607,9 @@ pub(crate) fn compare_values_3vl(
                         .unwrap_or(false)
                 }
             }
-            // Non-string LHS or NULL: never "like" (SQL LIKE on NULL is NULL → false).
+            // NULL on either side → UNKNOWN (SQL three-valued logic).
+            (QueryValue::Null, _) | (_, QueryValue::Null) => return None,
+            // Non-string, non-null LHS: never "like".
             _ => false,
         };
         return Some(if matches!(op, CompareOp::Like) {
