@@ -892,6 +892,13 @@ fn build_overview_section_off_heap() -> Vec<u8> {
     b.build()
 }
 
+fn build_reference_array_scenario() -> Vec<u8> {
+    // A minimal heap with one int[] — enough for @referenceArray to have a target.
+    let mut b = HeapBuilder::new();
+    b.prim_array(10, &[0u8, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3]); // 3 ints (type 10)
+    b.build()
+}
+
 fn check_overview_section_off_heap(report: &Report) {
     // The full markdown report includes the off-heap row (cap > 0).
     let full = hprof_analyzer::report::render_markdown(report);
@@ -1204,6 +1211,14 @@ const SCENARIOS: &[Scenario] = &[
         build: build_overview_section_off_heap,
         check: check_overview_section_off_heap,
     },
+    // Scenario 38: reference_array_non_null — @referenceArray returns a non-null ObjRef
+    // for primitive array objects (verifies stage_runner late-phase wiring).
+    Scenario {
+        name: "reference_array_non_null",
+        opts: default_opts,
+        build: build_reference_array_scenario,
+        check: |_r: &Report| {},
+    },
 ];
 
 #[test]
@@ -1429,6 +1444,34 @@ fn scenario_overview_section_off_heap_row() {
     run_scenario(&SCENARIOS[37]);
 }
 
+#[test]
+fn scenario_reference_array_non_null() {
+    run_scenario(&SCENARIOS[38]);
+    // Verify @referenceArray returns a non-null ObjRef by running the OQL
+    // against a heap that contains an int[].
+    let bytes = build_reference_array_scenario();
+    let dir = std::env::temp_dir();
+    let path = dir.join("test_ref_array.hprof");
+    std::fs::write(&path, &bytes).expect("write temp hprof");
+    let results = hprof_analyzer::run_oql_query(
+        path.to_str().unwrap(),
+        "SELECT @referenceArray FROM INSTANCEOF int[]",
+        false,
+        &AnalyzeOptions::default(),
+    )
+    .expect("OQL query failed");
+    assert_eq!(results.len(), 1);
+    let result = &results[0];
+    assert!(result.error.is_none(), "query error: {:?}", result.error);
+    assert!(!result.rows.is_empty(), "@referenceArray returned no rows");
+    let val = &result.rows[0][0];
+    assert!(
+        matches!(val, hprof_analyzer::query::model::QueryValue::ObjRef { .. }),
+        "@referenceArray should return ObjRef for an int[], got: {:?}",
+        val
+    );
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1437,7 +1480,7 @@ fn scenario_overview_section_off_heap_row() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        38,
+        39,
         "update this test when adding scenarios"
     );
 }

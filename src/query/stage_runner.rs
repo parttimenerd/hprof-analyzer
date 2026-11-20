@@ -824,6 +824,12 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                         None => QueryValue::Null,
                     }
                 }
+                // @referenceArray: the array IS the reference array; return it as ObjRef.
+                SelectItem::Attr(Attr::ReferenceArray) => QueryValue::ObjRef {
+                    index: s as u64,
+                    class: ctx.class_name_of(s).unwrap_or("unknown[]").to_string(),
+                    addr: ctx.id_map.to_addr_opt(s),
+                },
                 SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(s as i64),
                 SelectItem::Attr(Attr::ObjectAddress) => {
                     QueryValue::Int(ctx.id_map.to_addr(s) as i64)
@@ -1386,6 +1392,14 @@ fn eval_late_expr_multi(
                 Some(re) => QueryValue::Int(re.targets_of(idx).len() as i64),
                 None => QueryValue::Null,
             },
+            // @referenceArray on an object-array: return the array itself as an ObjRef.
+            // The plan rejects @referenceArray on non-array instance classes, so here
+            // we can unconditionally project the current object as the reference array.
+            Attr::ReferenceArray => QueryValue::ObjRef {
+                index: idx as u64,
+                class: ctx.class_name_of(idx).unwrap_or("unknown[]").to_string(),
+                addr: ctx.id_map.to_addr_opt(idx),
+            },
             // ArrayIndex/ArraySlice: read one element (or a slice) from the
             // dump file at the object's byte offset. Requires `ctx.dump_path`
             // and `ctx.offsets` to be set (REPL/MCP path via `ReplCache`).
@@ -1858,6 +1872,17 @@ fn project_string_row_item(
         SelectItem::Attr(Attr::ValueArray) => {
             let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
             eval_late_expr_multi(&Expr::Attr(Attr::ValueArray), dense, ret, ctx, like_regexes)
+        }
+        // @referenceArray: route through eval_late_expr_multi
+        SelectItem::Attr(Attr::ReferenceArray) => {
+            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
+            eval_late_expr_multi(
+                &Expr::Attr(Attr::ReferenceArray),
+                dense,
+                ret,
+                ctx,
+                like_regexes,
+            )
         }
         SelectItem::Expr(e) => {
             let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0);
