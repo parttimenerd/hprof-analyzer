@@ -1219,6 +1219,13 @@ const SCENARIOS: &[Scenario] = &[
         build: build_reference_array_scenario,
         check: |_r: &Report| {},
     },
+    // Scenario 39: get_method_array_element — get(n) returns the n-th element of a prim array.
+    Scenario {
+        name: "get_method_array_element",
+        opts: opts_with_collections,
+        build: build_reference_array_scenario,
+        check: |_r: &Report| {},
+    },
 ];
 
 #[test]
@@ -1472,6 +1479,60 @@ fn scenario_reference_array_non_null() {
     );
 }
 
+#[test]
+fn scenario_get_method_array_element() {
+    run_scenario(&SCENARIOS[39]);
+    // Verify get(n) returns the n-th element from a prim array in --collections mode.
+    // The reference_array heap has: int[] with values [1, 2, 3] (see build_reference_array_scenario).
+    let bytes = build_reference_array_scenario();
+    let dir = std::env::temp_dir();
+    let path = dir.join("test_get_method.hprof");
+    std::fs::write(&path, &bytes).expect("write temp hprof");
+    let mut opts = AnalyzeOptions::default();
+    opts.collections = true;
+    let results = hprof_analyzer::run_oql_query(
+        path.to_str().unwrap(),
+        "SELECT s.get(0) FROM INSTANCEOF int[] s",
+        false,
+        &opts,
+    )
+    .expect("OQL query failed");
+    assert_eq!(results.len(), 1);
+    let result = &results[0];
+    assert!(
+        result.error.is_none(),
+        "get(n) query error: {:?}",
+        result.error
+    );
+    // get(0) should return a value (Int or similar) from the first int[] element.
+    assert!(!result.rows.is_empty(), "get(0) returned no rows");
+}
+
+#[test]
+fn scenario_get_method_rejected_without_collections() {
+    // get(n) must be rejected (planners error) when --collections is not set.
+    let bytes = build_reference_array_scenario();
+    let dir = std::env::temp_dir();
+    let path = dir.join("test_get_no_collections.hprof");
+    std::fs::write(&path, &bytes).expect("write temp hprof");
+    let result = hprof_analyzer::run_oql_query(
+        path.to_str().unwrap(),
+        "SELECT s.get(0) FROM INSTANCEOF int[] s",
+        false,
+        &AnalyzeOptions::default(),
+    );
+    assert!(
+        result.is_err(),
+        "get(n) without --collections should return an error, got: {:?}",
+        result
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("collections"),
+        "error should mention --collections, got: {err}"
+    );
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1480,7 +1541,31 @@ fn scenario_reference_array_non_null() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        39,
+        40,
         "update this test when adding scenarios"
     );
+}
+
+#[test]
+fn array_subscript_x_bracket_n() {
+    // Verify x[n] subscript works against a real heap file (native feature).
+    let bytes = build_reference_array_scenario();
+    let dir = std::env::temp_dir();
+    let path = dir.join("test_array_subscript.hprof");
+    std::fs::write(&path, &bytes).expect("write temp hprof");
+    let results = hprof_analyzer::run_oql_query(
+        path.to_str().unwrap(),
+        "SELECT s[0] FROM INSTANCEOF int[] s",
+        false,
+        &AnalyzeOptions::default(),
+    )
+    .expect("array subscript OQL query failed");
+    assert_eq!(results.len(), 1);
+    let result = &results[0];
+    assert!(
+        result.error.is_none(),
+        "x[n] query error: {:?}",
+        result.error
+    );
+    assert!(!result.rows.is_empty(), "x[0] returned no rows");
 }

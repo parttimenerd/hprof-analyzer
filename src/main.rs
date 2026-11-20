@@ -4207,6 +4207,7 @@ fn is_viz_directive_line(t: &str) -> bool {
 fn parse_plan_queries(
     query_texts: &[String],
     depth_cap: usize,
+    opts: &opts::AnalyzeOptions,
 ) -> io::Result<Vec<(query::ast::Query, query::plan::QueryPlan)>> {
     let mut parsed_queries: Vec<(query::ast::Query, query::plan::QueryPlan)> =
         Vec::with_capacity(query_texts.len());
@@ -4217,7 +4218,7 @@ fn parse_plan_queries(
                 format!("OQL parse error in `{text}`:\n{report}"),
             )
         })?;
-        let plan = query::plan::plan_query(&q, depth_cap).map_err(|e| {
+        let plan = query::plan::plan_query_with_opts(&q, depth_cap, opts).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("OQL plan error in `{text}`: {}", e.0),
@@ -4501,7 +4502,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
         ));
     }
     let query_texts: Vec<String> = collected.iter().map(|c| c.text.clone()).collect();
-    let parsed = parse_plan_queries(&query_texts, opts.query_path_depth)?;
+    let parsed = parse_plan_queries(&query_texts, opts.query_path_depth, &opts)?;
     let (flat, union_groups) = query::run::expand_union_queries(&parsed);
 
     // Subqueries need a two-phase (inner-then-outer) scan; `run_single_dump`
@@ -4913,7 +4914,7 @@ fn run(
     // fast (before the expensive graph build) with a message naming the query.
     let collected = collect_query_texts(&opts)?;
     let query_texts: Vec<String> = collected.iter().map(|c| c.text.clone()).collect();
-    let parsed_queries = parse_plan_queries(&query_texts, opts.query_path_depth)?;
+    let parsed_queries = parse_plan_queries(&query_texts, opts.query_path_depth, &opts)?;
     // Subqueries require a two-phase (inner-then-outer) scan of the dump. The
     // full-report pipeline scans once and immediately builds the graph +
     // dominators atop that scan, so it cannot run the inner pass here without an

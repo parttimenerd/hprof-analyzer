@@ -4813,12 +4813,12 @@ fn method_get_rejected_nonzero_exit() {
         .unwrap();
     assert!(
         !out.status.success(),
-        "get(0) must exit non-zero (plan rejection)"
+        "get(0) without --collections must exit non-zero"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("requires a live JVM") && stderr.contains("elementData"),
-        "get(0) rejection must be actionable (live-JVM + elementData hint):\n{stderr}"
+        stderr.contains("collections"),
+        "get(0) rejection must mention --collections:\n{stderr}"
     );
 }
 

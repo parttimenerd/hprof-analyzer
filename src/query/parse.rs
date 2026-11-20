@@ -2504,12 +2504,13 @@ pub const FUNCS: &[&str] = &[
 ];
 
 /// Supported method-call names for `receiver.name(args)` dispatch. Single source
-/// of truth shared by the plan-time validator and (Wave H) the REPL completer, so
-/// completions never drift from the dispatcher. NOTE: `get` is intentionally
-/// ABSENT — indexed object-array element access is not emulable statically.
+/// of truth shared by the plan-time validator and the REPL completer, so
+/// completions never drift from the dispatcher. `get(n)` is included here and
+/// gated at plan time by `plan_query_with_opts` (requires --collections).
 pub const METHODS: &[&str] = &[
     "length",
     "size",
+    "get",
     "getKey",
     "getValue",
     "equals",

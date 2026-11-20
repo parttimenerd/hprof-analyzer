@@ -1686,6 +1686,38 @@ fn eval_late_string_method(
                 QueryValue::Null
             }
         }
+        "get" => {
+            // get(n): read the n-th element from the receiver array (--collections mode).
+            #[cfg(feature = "native")]
+            {
+                let n_val = args
+                    .first()
+                    .map(|a| eval_late_expr_multi(a, idx, ret, ctx, like_regexes));
+                let skip = match n_val {
+                    Some(QueryValue::Int(n)) if n >= 0 => n as u64,
+                    _ => return QueryValue::Null,
+                };
+                let path = match ctx.dump_path.as_deref() {
+                    Some(p) => p,
+                    None => return QueryValue::Null,
+                };
+                let offset = match ctx.offsets.get(idx as usize).copied().filter(|&o| o != 0) {
+                    Some(o) => o,
+                    None => return QueryValue::Null,
+                };
+                match read_array_for_ctx(path, offset, ctx.id_size, skip, 1) {
+                    Some(arr) => arr
+                        .values
+                        .into_iter()
+                        .next()
+                        .map(field_value_to_query_value)
+                        .unwrap_or(QueryValue::Null),
+                    None => QueryValue::Null,
+                }
+            }
+            #[cfg(not(feature = "native"))]
+            QueryValue::Null
+        }
         _ => QueryValue::Null,
     }
 }

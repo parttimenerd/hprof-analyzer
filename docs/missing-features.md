@@ -19,7 +19,7 @@ Updated 2026-11-20.
 
 | Feature | MAT uses | Notes |
 |---|---|---|
-| `get(n)` indexed element access | ~74 (part of method-call gap) | Needs new subsystem for indexed object-array element dereference; `get(n)` rejected at plan time with actionable hint |
+| ~~`get(n)` indexed element access~~ | ~~74~~ | **DONE** — `get(n)` implemented in `--collections` mode; rejected at plan time without it |
 | `toString()` on non-String objects | ~20 | MAT calls each object's `toString()` reflectively; not statically replicable in full generality; could cover common cases (Integer, Long, Enum) |
 | `${snapshot}.getClasses()` | — | Class-object iteration as a FROM source |
 | `s[1:3]` array-slice syntax | — | MAT-only extension; no known high-demand use |
@@ -202,26 +202,26 @@ The existing `serve` routes already cover everything the shell needs:
 
 ## REPL dispatch bugs
 
-| Issue | Detail | Priority |
-|---|---|---|
-| **`!views` broken in interactive mode** | `"views"` is in `META_CMDS` (Tab-completes) but has no arm in `run_repl`'s match block and no arm in `handle_meta`. Typing `!views` in a live TTY session gives `unknown command: !views (try !help)`. Works only in piped/non-interactive path (`run_repl_line`). | Bug |
-| **`!history` broken in piped mode** | `"history"` is in `META_CMDS` but has no arm in `run_repl_line` or `handle_meta`. Falls through to `unknown command: !history` in piped mode. Error message should say "not supported in non-interactive mode" rather than the generic unknown-command message. | Minor |
-| **Missing Tab-completions** | `"h"` and `"reachable-only"` are handled in `handle_meta` but absent from `META_CMDS`, so they never Tab-complete. | Minor |
-| **`"rename"` duplicated in did-you-mean list** | Appears twice in `handle_meta`'s CMDS list (~lines 6413 and 6429). No functional impact. | Cosmetic |
+| Issue | Detail | Priority | Status |
+|---|---|---|---|
+| ~~**`!views` broken in interactive mode**~~ | ~~`"views"` is in `META_CMDS` but has no arm in `run_repl`'s match block~~ | Bug | **FIXED** |
+| ~~**`!history` broken in piped mode**~~ | ~~Falls through to `unknown command` in piped mode~~ | Minor | **FIXED** — now says "not supported in non-interactive mode" |
+| ~~**Missing Tab-completions**~~ | ~~`"h"` and `"reachable-only"` absent from `META_CMDS`~~ | Minor | **FIXED** |
+| ~~**`"rename"` duplicated in did-you-mean list**~~ | ~~Appears twice in `handle_meta`'s CMDS list~~ | Cosmetic | **FIXED** |
 
 ---
 
 ## REPL error message quality
 
-| Location | Input | Actual behaviour | Issue |
-|---|---|---|---|
-| `handle_set` | `!set null` (no value) | Silently resets to literal `"null"` and prints `✓ null: "null"` (green success) | No hint it was a no-arg call; looks like intended success |
-| `!history` | `!history 0` | Shows 0 rows, then `… N more — !history N to show more` | Confusing — user sees "more" with nothing shown |
-| `!history` | `!history -1` | Silently falls back to default of 20 | Silent wrong-input treatment |
-| `handle_filter` | `!filter /unclosed` | Prints red "hint: regex must be enclosed in slashes" then proceeds as literal substring match | "hint" label is weaker than the actual behaviour warrants |
-| `!count` wrap path | `!count java.lang.String extra words` | Constructs internal OQL that fails; caret points to auto-generated query, not user input | User never typed the failing OQL; caret is confusing |
-| Main query path | Any parse error | Wraps ariadne output (which has its own ANSI) in an extra red wrap | Double-wrapping may cause rendering artifacts |
-| `!plan` with no args | `!plan` | Emits "parse error: empty query" | Should emit `usage: !plan <oql>` |
+| Location | Input | Actual behaviour | Issue | Status |
+|---|---|---|---|---|
+| ~~`handle_set`~~ | ~~`!set null` (no value)~~ | ~~Silently resets~~ | ~~Looks like success~~ | **FIXED** — shows current value + usage hint |
+| ~~`!history`~~ | ~~`!history 0`~~ | ~~Shows 0 rows~~ | ~~Confusing~~ | **FIXED** — rejects non-positive with error |
+| ~~`!history`~~ | ~~`!history -1`~~ | ~~Silent fallback to 20~~ | ~~Silent wrong-input~~ | **FIXED** — rejects with error |
+| ~~`handle_filter`~~ | ~~`!filter /unclosed`~~ | ~~"hint:" label~~ | ~~Too weak~~ | **FIXED** — now "invalid pattern:" |
+| ~~`!count` wrap path~~ | ~~`!count java.lang.String extra words`~~ | ~~Caret on auto-generated OQL~~ | ~~Confusing~~ | **FIXED** — guards before constructing OQL |
+| ~~Main query path~~ | ~~Any parse error~~ | ~~Double-wrapping ANSI~~ | ~~Rendering artifacts~~ | **FIXED** — detects "parse error:" prefix, skips outer wrap |
+| ~~`!plan` with no args~~ | ~~`!plan`~~ | ~~"parse error: empty query"~~ | ~~No usage hint~~ | **FIXED** — shows `usage: !plan [--raw] [--verbose] [--json] <oql query>` |
 
 ---
 
@@ -229,22 +229,22 @@ The existing `serve` routes already cover everything the shell needs:
 
 Bugs deferred from prior slices. Fix cost varies; listed in rough priority order.
 
-| ID | Issue | Priority |
-|---|---|---|
-| — | **`FROM "byte[]"` regex escaping** — fails with "unclosed character class"; workaround `"byte\\[\\]"` also fails for VALUES queries | High |
-| — | **LIKE NULL handling** — incorrect row-counts from LIKE filters involving NULL | High |
-| — | **Boolean literals `true`/`false` not tokenized** — `WHERE true` → parse error | Medium |
-| — | **Multiple UNION** — second `UNION` → parse error; workaround: `(A UNION B) UNION C` | Medium |
-| — | **Array subscript always `Null`** — `array_index` need flag armed, actual read not implemented | Medium |
-| — | **`FROM INSTANCEOF <interface>` returns 0 rows** — HPROF CLASS_DUMP records don't include interface metadata | Medium |
-| — | **`--query-file` parse errors show no filename/line prefix** | Medium |
-| — | **Cartesian product FROM** (`FROM o1, o2`) | Low |
-| — | **Subquery in SELECT clause** | Low |
-| — | **CROSS JOIN** | Low |
-| — | **`UNION ALL` syntax** | Low |
-| — | **Expressions in ORDER BY** | Low |
-| — | **Nested CASE WHEN** | Low |
-| — | **`SELECT` inside `IN` predicate** | Low |
-| — | **String concat operator `\|\|`** | Low |
-| — | **`ENTRIES` expansion in subqueries** | Low |
-| — | **`@root` boolean attribute** | Low |
+| ID | Issue | Priority | Status |
+|---|---|---|---|
+| — | **`FROM "byte[]"` regex escaping** — fails with "unclosed character class"; workaround `"byte\\[\\]"` also fails for VALUES queries | High | Open |
+| — | ~~**LIKE NULL handling**~~ — ~~incorrect row-counts from LIKE filters involving NULL~~ | High | **FIXED** — NULL on either side returns UNKNOWN (SQL three-valued logic) |
+| — | **Boolean literals `true`/`false` not tokenized** — `WHERE true` → parse error | Medium | Open (audit: may already be fixed) |
+| — | **Multiple UNION** — second `UNION` → parse error; workaround: `(A UNION B) UNION C` | Medium | Open (audit: may already be fixed) |
+| — | ~~**Array subscript always `Null`**~~ — ~~`array_index` need flag armed~~ | Medium | **DONE** — `x[n]` works; `get(n)` added in `--collections` mode |
+| — | **`FROM INSTANCEOF <interface>` returns 0 rows** — HPROF CLASS_DUMP records don't include interface metadata | Medium | Out of scope (fundamental format limitation) |
+| — | **`--query-file` parse errors show no filename/line prefix** | Medium | Open |
+| — | **Cartesian product FROM** (`FROM o1, o2`) | Low | Open |
+| — | **Subquery in SELECT clause** | Low | Open |
+| — | **CROSS JOIN** | Low | Open |
+| — | **`UNION ALL` syntax** | Low | Open |
+| — | **Expressions in ORDER BY** | Low | Open |
+| — | **Nested CASE WHEN** | Low | Open |
+| — | **`SELECT` inside `IN` predicate** | Low | Open |
+| — | **String concat operator `\|\|`** | Low | Open |
+| — | **`ENTRIES` expansion in subqueries** | Low | Open |
+| — | **`@root` boolean attribute** | Low | Open |

@@ -370,6 +370,93 @@ pub fn plan_query(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> 
     Ok(head)
 }
 
+/// Like `plan_query` but also validates `get(n)` usage against `opts`.
+/// `get(n)` requires `--collections` mode (it reads array element data, which
+/// is only collected when collection analysis is enabled). Without it the method
+/// is rejected with an actionable hint; with it the plan is identical to
+/// `plan_query` — `get(n)` resolves via the array-index machinery at P2.
+pub fn plan_query_with_opts(
+    q: &Query,
+    depth_cap: usize,
+    opts: &crate::opts::AnalyzeOptions,
+) -> Result<QueryPlan, QueryError> {
+    if !opts.collections {
+        reject_get_without_collections(q)?;
+    }
+    plan_query(q, depth_cap)
+}
+
+fn reject_get_without_collections(q: &Query) -> Result<(), QueryError> {
+    fn expr_has_get(e: &Expr) -> bool {
+        match e {
+            Expr::Method {
+                name,
+                receiver,
+                args,
+            } => {
+                if name == "get" {
+                    return true;
+                }
+                expr_has_get(receiver) || args.iter().any(expr_has_get)
+            }
+            Expr::Attr(_) | Expr::Lit(_) => false,
+            Expr::Binary { lhs, rhs, .. } => expr_has_get(lhs) || expr_has_get(rhs),
+            Expr::Unary { arg, .. } => expr_has_get(arg),
+            Expr::Aggregate { arg, .. } => {
+                use crate::query::ast::SelectItem;
+                if let SelectItem::Expr(e) = arg.as_ref() {
+                    expr_has_get(e)
+                } else {
+                    false
+                }
+            }
+            Expr::Case { branches, else_ } => {
+                branches.iter().any(|(_, ex)| expr_has_get(ex))
+                    || else_.as_deref().is_some_and(expr_has_get)
+            }
+            Expr::Coalesce(_) | Expr::NullIf { lhs: _, rhs: _ } => false,
+            _ => false,
+        }
+    }
+    fn item_has_get(item: &crate::query::ast::SelectItem) -> bool {
+        match item {
+            crate::query::ast::SelectItem::Expr(e) => expr_has_get(e),
+            _ => false,
+        }
+    }
+    if q.select.iter().any(item_has_get) || q.where_.as_ref().is_some_and(pred_has_get) {
+        return Err(QueryError(
+            "get(n) is only available in --collections mode; \
+             re-run with --collections or dereference the backing array field directly"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn pred_has_get(p: &crate::query::ast::Predicate) -> bool {
+    use crate::query::ast::Predicate;
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => pred_has_get(a) || pred_has_get(b),
+        Predicate::Not(a) => pred_has_get(a),
+        Predicate::Compare { lhs, rhs, .. } => expr_pred_has_get(lhs) || expr_pred_has_get(rhs),
+        _ => false,
+    }
+}
+
+fn expr_pred_has_get(e: &Expr) -> bool {
+    match e {
+        Expr::Method {
+            name,
+            receiver,
+            args,
+        } => name == "get" || expr_pred_has_get(receiver) || args.iter().any(expr_pred_has_get),
+        Expr::Binary { lhs, rhs, .. } => expr_pred_has_get(lhs) || expr_pred_has_get(rhs),
+        Expr::Unary { arg, .. } => expr_pred_has_get(arg),
+        _ => false,
+    }
+}
+
 /// Scan-time row cap for a query with an optional OFFSET.
 /// When OFFSET is present the scan must collect `limit + offset` rows so
 /// the post-scan drain can skip the first `offset` rows and still deliver
@@ -574,6 +661,29 @@ fn expr_has_string_method(e: &Expr) -> bool {
     }
 }
 
+/// Returns true if the expression tree contains a `get(n)` method call.
+/// Used to set `needs.array_index` so the P2 late window is armed.
+fn expr_has_get_method(e: &Expr) -> bool {
+    match e {
+        Expr::Method {
+            name,
+            receiver,
+            args,
+        } => name == "get" || expr_has_get_method(receiver) || args.iter().any(expr_has_get_method),
+        Expr::Attr(_) | Expr::Lit(_) => false,
+        Expr::Binary { lhs, rhs, .. } => expr_has_get_method(lhs) || expr_has_get_method(rhs),
+        Expr::Unary { arg, .. } => expr_has_get_method(arg),
+        Expr::Aggregate { .. } => false,
+        Expr::Case { branches, else_ } => {
+            branches.iter().any(|(_, ex)| expr_has_get_method(ex))
+                || else_.as_ref().is_some_and(|e| expr_has_get_method(e))
+        }
+        Expr::Coalesce(args) => args.iter().any(expr_has_get_method),
+        Expr::NullIf { lhs, rhs } => expr_has_get_method(lhs) || expr_has_get_method(rhs),
+        Expr::Cast { expr, .. } => expr_has_get_method(expr),
+    }
+}
+
 /// Visit every `Attr` leaf reachable from a `Predicate` tree, calling `f` on
 /// each. Used by `expr_for_each_attr`'s `Expr::Case` arm to recurse into WHEN
 /// conditions.
@@ -640,7 +750,7 @@ fn reject_unsupported_methods(q: &Query) -> Result<(), QueryError> {
             | "getKey"
             | "getValue" => Some(0..=0),
             // One-argument methods:
-            "equals" | "contains" => Some(1..=1),
+            "equals" | "contains" | "get" => Some(1..=1),
             // substr: 1 or 2 args (start, optional length):
             "substr" => Some(1..=2),
             // concat/replace: 1+ or exactly 2 args respectively:
@@ -1131,6 +1241,10 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
                 // side table (decoded String text) to be available in the late window.
                 if expr_has_string_method(e) {
                     needs.string_values = true;
+                }
+                // `get(n)` reads array element data via the array-index machinery.
+                if expr_has_get_method(e) {
+                    needs.array_index = true;
                 }
             }
             // Window functions are post-processing; no scan-time needs to note here.
@@ -2385,7 +2499,8 @@ pub(crate) fn pred_uses_array_index(p: &Predicate) -> bool {
                 matches!(a, Attr::ArrayIndex { .. } | Attr::ArraySlice { .. })
             }) || expr_any_attr(rhs, |a| {
                 matches!(a, Attr::ArrayIndex { .. } | Attr::ArraySlice { .. })
-            })
+            }) || expr_has_get_method(lhs)
+                || expr_has_get_method(rhs)
         }
         _ => false,
     }
@@ -2946,6 +3061,10 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
             if expr_has_string_method(lhs) || expr_has_string_method(rhs) {
                 needs.string_values = true;
             }
+            // `get(n)` method calls in WHERE arm the array-index machinery.
+            if expr_has_get_method(lhs) || expr_has_get_method(rhs) {
+                needs.array_index = true;
+            }
             Ok(())
         }
         Predicate::Bool(_) => Ok(()),
@@ -3388,25 +3507,36 @@ mod tests {
         }
     }
 
-    // D5: `get(n)` is intentionally NOT supported (indexed object-array element
-    // access is not emulable statically); the message must carry the array hint.
+    // D5: `get(n)` is supported in --collections mode; plan_query accepts it,
+    // plan_query_with_opts rejects it without collections and allows it with collections.
     #[test]
     fn method_rejection_get() {
-        let err = pq(&parse("SELECT a.get(0) FROM java.util.ArrayList a").unwrap()).unwrap_err();
+        // plan_query itself does NOT reject get(n) — the gating is in plan_query_with_opts.
+        let q = parse("SELECT a.get(0) FROM java.util.ArrayList a").unwrap();
+        let plan = pq(&q);
         assert!(
-            err.0.contains("requires a live JVM"),
-            "get(0) must be rejected; got: {}",
+            plan.is_ok(),
+            "plan_query must accept get(0) (gating is in plan_query_with_opts); got: {:?}",
+            plan
+        );
+        // Without --collections, plan_query_with_opts must reject it with an actionable message.
+        let default_opts = crate::opts::AnalyzeOptions::default();
+        let err = plan_query_with_opts(&q, crate::query::DEFAULT_PATH_DEPTH_CAP, &default_opts)
+            .unwrap_err();
+        assert!(
+            err.0.contains("collections"),
+            "get(0) rejection must mention --collections; got: {}",
             err.0
         );
+        // With --collections, plan_query_with_opts must succeed.
+        let collections_opts = crate::opts::AnalyzeOptions {
+            collections: true,
+            ..crate::opts::AnalyzeOptions::default()
+        };
         assert!(
-            err.0.contains("elementData"),
-            "get(0) rejection must include the array-element access hint; got: {}",
-            err.0
-        );
-        assert!(
-            !err.0.contains(", get,") && !err.0.contains(" get "),
-            "`get` must NOT appear in the supported-methods list; got: {}",
-            err.0
+            plan_query_with_opts(&q, crate::query::DEFAULT_PATH_DEPTH_CAP, &collections_opts)
+                .is_ok(),
+            "get(0) must be accepted with --collections"
         );
     }
 

@@ -642,7 +642,7 @@ pub fn run_oql_query(
 ) -> std::io::Result<Vec<query::model::QueryResult>> {
     let q = query::parse::parse_or_report(oql)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    let plan = query::plan::plan_query(&q, opts::DEFAULT_QUERY_PATH_DEPTH)
+    let plan = query::plan::plan_query_with_opts(&q, opts::DEFAULT_QUERY_PATH_DEPTH, opts)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.0))?;
     let plan = query::optimize::optimize(plan, &q, &query::optimize::SchemaStats::default());
     let flat_plans = vec![(q, plan)];
