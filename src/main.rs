@@ -4106,6 +4106,9 @@ struct CollectedQuery {
     viz: Option<query::viz::VizSpec>,
     warning: Option<String>,
     name: Option<String>,
+    /// Source location for `--query-file` entries: `(filename, 1-based line number)`.
+    /// `None` for inline `--query` args and config `[[query]]` entries.
+    source: Option<(String, usize)>,
 }
 
 /// Collect the OQL queries for a run: inline `--query` flags first, then each
@@ -4128,6 +4131,7 @@ fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<CollectedQuery>>
                 viz,
                 warning,
                 name: None,
+                source: None,
             }
         })
         .collect();
@@ -4174,6 +4178,7 @@ fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<CollectedQuery>>
                 viz,
                 warning,
                 name: None,
+                source: Some((qf.clone(), line_num)),
             });
         }
     }
@@ -4186,6 +4191,7 @@ fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<CollectedQuery>>
             viz,
             warning,
             name: cq.name,
+            source: None,
         });
     }
     Ok(collected)
@@ -4204,14 +4210,18 @@ fn is_viz_directive_line(t: &str) -> bool {
 
 /// Parse and plan each OQL text, failing fast with an actionable message that
 /// names the offending query text and includes the parser/planner detail.
+/// `sources` is a parallel slice of optional `(filename, line_num)` pairs that
+/// are prepended to plan-error messages when present.
 fn parse_plan_queries(
     query_texts: &[String],
+    sources: &[Option<(String, usize)>],
     depth_cap: usize,
     opts: &opts::AnalyzeOptions,
 ) -> io::Result<Vec<(query::ast::Query, query::plan::QueryPlan)>> {
     let mut parsed_queries: Vec<(query::ast::Query, query::plan::QueryPlan)> =
         Vec::with_capacity(query_texts.len());
-    for text in query_texts {
+    for (i, text) in query_texts.iter().enumerate() {
+        let src = sources.get(i).and_then(|s| s.as_ref());
         let q = query::parse::parse_or_report(text).map_err(|report| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -4219,9 +4229,13 @@ fn parse_plan_queries(
             )
         })?;
         let plan = query::plan::plan_query_with_opts(&q, depth_cap, opts).map_err(|e| {
+            let location = src.map_or_else(
+                || format!("`{text}`"),
+                |(file, line)| format!("`{text}` (--query-file '{file}' line {line})"),
+            );
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("OQL plan error in `{text}`: {}", e.0),
+                format!("OQL plan error in {location}: {}", e.0),
             )
         })?;
         let plan = query::optimize::optimize(plan, &q, &query::optimize::SchemaStats::default());
@@ -4502,7 +4516,9 @@ fn run_queries(input: &str, opts: AnalyzeOptions, json_out: bool) -> io::Result<
         ));
     }
     let query_texts: Vec<String> = collected.iter().map(|c| c.text.clone()).collect();
-    let parsed = parse_plan_queries(&query_texts, opts.query_path_depth, &opts)?;
+    let sources: Vec<Option<(String, usize)>> =
+        collected.iter().map(|c| c.source.clone()).collect();
+    let parsed = parse_plan_queries(&query_texts, &sources, opts.query_path_depth, &opts)?;
     let (flat, union_groups) = query::run::expand_union_queries(&parsed);
 
     // Subqueries need a two-phase (inner-then-outer) scan; `run_single_dump`
@@ -4914,7 +4930,9 @@ fn run(
     // fast (before the expensive graph build) with a message naming the query.
     let collected = collect_query_texts(&opts)?;
     let query_texts: Vec<String> = collected.iter().map(|c| c.text.clone()).collect();
-    let parsed_queries = parse_plan_queries(&query_texts, opts.query_path_depth, &opts)?;
+    let sources: Vec<Option<(String, usize)>> =
+        collected.iter().map(|c| c.source.clone()).collect();
+    let parsed_queries = parse_plan_queries(&query_texts, &sources, opts.query_path_depth, &opts)?;
     // Subqueries require a two-phase (inner-then-outer) scan of the dump. The
     // full-report pipeline scans once and immediately builds the graph +
     // dominators atop that scan, so it cannot run the inner pass here without an

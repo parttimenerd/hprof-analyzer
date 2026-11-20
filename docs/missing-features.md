@@ -238,7 +238,7 @@ Bugs deferred from prior slices. Fix cost varies; listed in rough priority order
 | — | ~~**Multiple UNION**~~ — ~~second `UNION` → parse error~~ | Medium | **DONE** — `union_with_all.repeated()` handles chains of any length |
 | — | ~~**Array subscript always `Null`**~~ — ~~`array_index` need flag armed~~ | Medium | **DONE** — `x[n]` works; `get(n)` added in `--collections` mode |
 | — | **`FROM INSTANCEOF <interface>` returns 0 rows** — HPROF CLASS_DUMP records don't include interface metadata | Medium | Out of scope (fundamental format limitation) |
-| — | **`--query-file` parse errors show no filename/line prefix** | Medium | Open |
+| — | ~~**`--query-file` parse errors show no filename/line prefix**~~ | ~~Medium~~ | **DONE** — plan errors from `parse_plan_queries` now include `--query-file '<file>' line <N>` prefix |
 | — | **Cartesian product FROM** (`FROM o1, o2`) | Low | Open |
 | — | **Subquery in SELECT clause** | Low | Open |
 | — | **CROSS JOIN** | Low | Open |
@@ -248,4 +248,4 @@ Bugs deferred from prior slices. Fix cost varies; listed in rough priority order
 | — | ~~**`SELECT` inside `IN` predicate**~~ | ~~Low~~ | **DONE** — `attr IN (SELECT ...)` subquery form is parsed and planned (plan.rs `Predicate::InSubquery`) |
 | — | ~~**String concat operator `\|\|`**~~ | ~~Low~~ | **DONE** — parsed as `CONCAT(lhs, rhs)` method call (parse.rs line ~754) |
 | — | **`ENTRIES` expansion in subqueries** | Low | Open |
-| — | **`@root` boolean attribute** | Low | Open |
+| — | ~~**`@root` boolean attribute**~~ | ~~Low~~ | **DONE** — `Attr::IsGcRoot`; returns `true` for GC-root objects, `false` for non-roots; auto-escalates like `@GCRoots` |
