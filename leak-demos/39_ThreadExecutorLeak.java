@@ -6,6 +6,7 @@
  * Capture (after "HEAP_DUMP_READY" is printed):
  *   jcmd $(pgrep -f ThreadExecutorLeak) GC.heap_dump heap.hprof
  *
+ * expected-triage: thread-swarm
  * Pattern:
  *   A common anti-pattern in services and frameworks: instead of sharing a
  *   single thread pool, each incoming request creates a new ThreadPoolExecutor

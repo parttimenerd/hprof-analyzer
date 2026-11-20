@@ -13,6 +13,7 @@
  * Capture (after "HEAP_DUMP_READY" is printed):
  *   jcmd $(pgrep -f ClassLoaderLeak) GC.heap_dump heap.hprof
  *
+ * expected-triage: metaspace-pressure
  * What's in the heap:
  *   10 URLClassLoader instances                → one per simulated deployment
  *   10 × 100 = 1000 DomainService proxy objs  → created inside each loader

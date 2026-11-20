@@ -6,6 +6,7 @@
  * Capture (after "HEAP_DUMP_READY" is printed):
  *   jcmd $(pgrep -f DirectBufferLeak) GC.heap_dump heap.hprof
  *
+ * expected-triage: off-heap
  * Pattern:
  *   A NIO server allocates one DirectByteBuffer per accepted connection for
  *   zero-copy I/O. When the connection closes, the buffer is added to a

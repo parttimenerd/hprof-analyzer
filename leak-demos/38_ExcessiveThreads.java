@@ -11,6 +11,7 @@
  * Capture (after "HEAP_DUMP_READY" is printed):
  *   jcmd $(pgrep -f ExcessiveThreads) GC.heap_dump heap.hprof
  *
+ * expected-triage: thread-swarm
  * What's in the heap:
  *   500 connection-handler threads, each retaining 1 ConnectionState
  *   ConnectionState: sessionId (String), remoteAddr (String),

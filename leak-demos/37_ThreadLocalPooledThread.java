@@ -10,8 +10,8 @@
  * Capture (after "HEAP_DUMP_READY" is printed):
  *   jcmd $(pgrep -f ThreadLocalPooledThread) GC.heap_dump heap.hprof
  *
+ * expected-triage: threadlocal-leak
  * What's in the heap:
- *   4 pool threads (idle after shutdown), each retaining 1 RequestContext
  *   RequestContext: requestId (String), userId (String), payload (byte[1024]),
  *                   timestamp (long)
  *
