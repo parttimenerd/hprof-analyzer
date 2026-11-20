@@ -20,6 +20,7 @@ Updated 2026-11-20.
 | Feature | MAT uses | Notes |
 |---|---|---|
 | ~~`get(n)` indexed element access~~ | ~~74~~ | **DONE** — `get(n)` implemented in `--collections` mode; rejected at plan time without it |
+| ~~`FROM ENTRIES ClassName`~~ | — | **DONE** — `EntriesExpand` in stage_runner (see LeakCanary task 9 below) |
 | `toString()` on non-String objects | ~20 | MAT calls each object's `toString()` reflectively; not statically replicable in full generality; could cover common cases (Integer, Long, Enum) |
 | `${snapshot}.getClasses()` | — | Class-object iteration as a FROM source |
 | `s[1:3]` array-slice syntax | — | MAT-only extension; no known high-demand use |
@@ -28,7 +29,7 @@ Updated 2026-11-20.
 
 | Feature | Plan task |
 |---|---|
-| `FROM ENTRIES ClassName` (collection entry iteration) | Task 9 |
+| ~~`FROM ENTRIES ClassName` (collection entry iteration)~~ | ~~Task 9~~ — **DONE** |
 
 ---
 
@@ -42,19 +43,19 @@ Updated 2026-11-20.
 
 ## LeakCanary-inspired OQL attributes and functions
 
-From `docs/superpowers/plans/2026-11-04-leakcanary-inspired-features.md`.
+From `docs/notes/LEAKCANARY_INSPIRED_PROPOSALS.md`.
 
-| Task | Feature | Key files |
+| Task | Feature | Status |
 |---|---|---|
-| 1 | Scenario tests for shipped features (`@inbounds`, `@outbounds`, `UNION`, `dominators()`, `classof()`) | `tests/scenarios.rs` |
-| 2 | `class_super_idx` on `Graph` | `src/pass2/model.rs`, `src/cache.rs` (bump VERSION) |
-| 3 | `@category` OQL attr | `ast.rs`, `execute.rs`, `stage_runner.rs` |
-| 4 | `@dominatorClass`, `@dominatorDepth` OQL attrs | same |
-| 5 | `@superclass` OQL attr (depends on task 2) | same |
-| 6 | `pathToRoot(alias)` OQL function | `ast.rs`, `plan.rs`, `stage_runner.rs` |
-| 7 | LIKE `%`/`_` SQL glob auto-translate (currently errors) | `src/query/execute.rs` |
-| 8 | `@outbounds` scenario tests | `tests/scenarios.rs` |
-| 9 | `FROM ENTRIES ClassName` — collection entry iteration | new `src/query/collection_entries.rs`, `ast.rs`, `plan.rs`, `stage_runner.rs` |
+| 1 | Scenario tests for shipped features (`@inbounds`, `@outbounds`, `UNION`, `dominators()`, `classof()`) | Partially done — cli_query.rs has integration tests; scenarios.rs has no-panic coverage. No OQL-result scenario tests for `@inbounds`. |
+| 2 | `class_super_idx` on `Graph` | **DONE** — populated in pass2/mod.rs; used by `@superclass` |
+| 3 | `@category` OQL attr | **DONE** — wired in stage_runner; uses per-class category Vec |
+| 4 | `@dominatorClass`, `@dominatorDepth` OQL attrs | **DONE** — wired in stage_runner |
+| 5 | `@superclass` OQL attr | **DONE** — wired via `class_super_idx`; Null for java.lang.Object |
+| 6 | `pathToRoot(alias)` OQL function | **DONE** — `StageOp::PathToRoot` in stage_runner |
+| 7 | LIKE `%`/`_` SQL glob auto-translate | **DONE** — auto-translates when pattern has `%`/`_` but no regex metacharacters |
+| 8 | `@outbounds` scenario tests | No-panic scenario exists (Scenario 23); full OQL tests in cli_query.rs |
+| 9 | `FROM ENTRIES ClassName` — collection entry iteration | **DONE** — `EntriesExpand` in stage_runner; supports ArrayList/HashMap |
 
 ---
 
