@@ -1450,137 +1450,18 @@ impl HprofMcpServer {
         let base_r = &baseline_result.report;
         let curr_r = &current_result.report;
 
-        // Build class → (baseline_retained, baseline_instances) maps.
-        use std::collections::HashMap;
-        let mut base_map: HashMap<&str, (u64, u64)> = HashMap::new();
-        for h in &base_r.overview.histogram {
-            base_map.insert(&h.pretty_class, (h.retained, h.instances));
-        }
-        let mut curr_map: HashMap<&str, (u64, u64)> = HashMap::new();
-        for h in &curr_r.overview.histogram {
-            curr_map.insert(&h.pretty_class, (h.retained, h.instances));
-        }
-
-        // Growth leaders: in both dumps, sorted by delta_retained descending.
-        let mut growth_pairs: Vec<(&str, i64, u64, u64, u64, u64)> = curr_r
-            .overview
-            .histogram
-            .iter()
-            .filter_map(|h| {
-                let (base_ret, base_inst) = base_map
-                    .get(h.pretty_class.as_str())
-                    .copied()
-                    .unwrap_or((0, 0));
-                let delta = h.retained as i64 - base_ret as i64;
-                if delta > 0 {
-                    Some((
-                        h.pretty_class.as_str(),
-                        delta,
-                        base_ret,
-                        h.retained,
-                        base_inst,
-                        h.instances,
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        growth_pairs.sort_by_key(|a| std::cmp::Reverse(a.1));
-
-        let growth_leaders: Vec<serde_json::Value> = growth_pairs
-            .iter()
-            .take(limit)
-            .map(|(class, delta, base_ret, curr_ret, base_inst, curr_inst)| {
-                serde_json::json!({
-                    "class": class,
-                    "baseline_retained": base_ret,
-                    "current_retained": curr_ret,
-                    "delta_retained": delta,
-                    "baseline_instances": base_inst,
-                    "current_instances": curr_inst,
-                })
-            })
-            .collect();
-
-        // New classes: present in current, absent from baseline.
-        let mut new_classes: Vec<serde_json::Value> = curr_r
-            .overview
-            .histogram
-            .iter()
-            .filter(|h| !base_map.contains_key(h.pretty_class.as_str()))
-            .map(|h| {
-                serde_json::json!({
-                    "class": h.pretty_class,
-                    "current_retained": h.retained,
-                    "current_instances": h.instances,
-                })
-            })
-            .collect();
-        new_classes.sort_by(|a, b| {
-            b["current_retained"]
-                .as_u64()
-                .unwrap_or(0)
-                .cmp(&a["current_retained"].as_u64().unwrap_or(0))
-        });
-        new_classes.truncate(limit);
-
-        // Grown suspects: leak suspects in current that grew or are new.
-        let mut grown_suspects: Vec<serde_json::Value> = curr_r
-            .leaks
-            .suspects
-            .iter()
-            .filter_map(|s| {
-                let base_ret = base_map
-                    .get(s.pretty_class.as_str())
-                    .map(|(r, _)| *r)
-                    .unwrap_or(0);
-                let delta = s.retained as i64 - base_ret as i64;
-                if delta > 0 || base_ret == 0 {
-                    Some(serde_json::json!({
-                        "class": s.pretty_class,
-                        "baseline_retained": base_ret,
-                        "current_retained": s.retained,
-                        "delta_retained": delta,
-                        "is_new": base_ret == 0,
-                    }))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        grown_suspects.sort_by(|a, b| {
-            b["delta_retained"]
-                .as_i64()
-                .unwrap_or(0)
-                .cmp(&a["delta_retained"].as_i64().unwrap_or(0))
-        });
-        grown_suspects.truncate(limit);
-
-        // Compute totals.
-        let base_total_retained: u64 = base_r.overview.histogram.iter().map(|h| h.retained).sum();
-        let curr_total_retained: u64 = curr_r.overview.histogram.iter().map(|h| h.retained).sum();
-        let net_delta = curr_total_retained as i64 - base_total_retained as i64;
-        let gross_growth: i64 = growth_pairs.iter().map(|(_, d, ..)| d).sum();
-        let base_total_objects: u64 = base_r.overview.histogram.iter().map(|h| h.instances).sum();
-        let curr_total_objects: u64 = curr_r.overview.histogram.iter().map(|h| h.instances).sum();
-
-        let result = serde_json::json!({
-            "baseline": p.baseline,
-            "current": p.current,
-            "net_delta_retained": net_delta,
-            "gross_growth_retained": gross_growth,
-            "delta_total_objects": curr_total_objects as i64 - base_total_objects as i64,
-            "growth_leaders": growth_leaders,
-            "new_classes": new_classes,
-            "grown_suspects": grown_suspects,
-            "_hint": "growth_leaders shows classes with the largest increase in retained bytes. \
-                      new_classes are classes added between dumps (possible new accumulation). \
-                      grown_suspects are leak suspects that grew or appeared. \
-                      To investigate a specific growing class: load_dump on the current dump, then \
-                      query({oql: \"SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> \
-                      ORDER BY ret DESC LIMIT 10\"}), then browse_dominators on the largest instances.",
-        });
+        // Shared diff logic (dedup with heap CLI / HTTP).
+        let mut result =
+            crate::heap_ops::compare_reports(base_r, curr_r, &p.baseline, &p.current, limit);
+        // MCP enrichment: inline next-step guidance for the LLM.
+        result["_hint"] = serde_json::json!(
+            "growth_leaders shows classes with the largest increase in retained bytes. \
+             new_classes are classes added between dumps (possible new accumulation). \
+             grown_suspects are leak suspects that grew or appeared. \
+             To investigate a specific growing class: load_dump on the current dump, then \
+             query({oql: \"SELECT @objectId AS idx, @retainedHeapSize AS ret FROM <ClassName> \
+             ORDER BY ret DESC LIMIT 10\"}), then browse_dominators on the largest instances."
+        );
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;

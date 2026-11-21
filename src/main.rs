@@ -721,6 +721,18 @@ enum HeapCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Compare two dumps for class-level retained-heap growth (leak regression).
+    Compare {
+        /// Baseline (older) .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        baseline: String,
+        /// Current (newer) .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        current: String,
+        /// Max growth-leader / new-class / grown-suspect rows (default 20).
+        #[arg(long, value_name = "N", default_value_t = 20)]
+        limit: usize,
+    },
     /// Browse the dominator tree.
     Browse {
         /// Path to the .hprof dump.
@@ -2154,6 +2166,19 @@ fn run_heap_cmd(
                     None => println!("{}", serde_json::to_string_pretty(&result)?),
                 }
             }
+        }
+        HeapCmd::Compare {
+            baseline,
+            current,
+            limit,
+        } => {
+            let result = hprof_analyzer::heap_ops::compare_dumps(
+                std::path::Path::new(&baseline),
+                std::path::Path::new(&current),
+                limit,
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         HeapCmd::Browse {
             dump,

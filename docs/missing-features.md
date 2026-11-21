@@ -82,8 +82,8 @@ See `docs/notes/DESIGN_UNIFIED_SERVING.md` for the full design.
 | Feature | Notes |
 |---|---|
 | **MCP over HTTP/SSE** | `mcp --http-port` multiplexes *stdio MCP + REST HTTP*; it does not yet speak the **MCP protocol** over HTTP/SSE. Needed only if a client can attach to an MCP HTTP endpoint but cannot spawn a stdio child (e.g. some IDE assistants). Required by the IntelliJ-plugin "managed MCP server" mode's open question (below). |
-| **`explain`/`plan` on heap HTTP** | The lazy `server` subcommand has `POST /plan` + `POST /explain`; the `heap server` / MCP paths do not expose query-plan introspection. Low demand (GAPS.md §7). |
-| **`compare_dumps` in `heap_ops`** | Cross-dump growth diff exists in MCP (`compare_dumps`) and the top-level `compare reports` CLI, but not as a `heap_ops` function / `heap` subcommand / HTTP endpoint. Low priority (GAPS.md §7). |
+| ~~**`explain`/`plan` on heap HTTP**~~ | **DONE** — `heap_ops::explain()`, `heap plan` CLI, `POST /plan`+`/explain` HTTP, `explain_query` MCP tool. |
+| ~~**`compare_dumps` in `heap_ops`**~~ | **DONE** — `heap_ops::compare_reports()`/`compare_dumps()`, `heap compare` CLI, `GET /compare` HTTP; MCP `compare_dumps` delegates its diff to `compare_reports`. |
 
 ---
 

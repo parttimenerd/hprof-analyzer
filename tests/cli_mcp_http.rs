@@ -175,6 +175,32 @@ fn mcp_http_oql_plan() {
     );
 }
 
+/// `GET /compare` of a dump against itself returns a zero net retained delta.
+#[test]
+fn mcp_http_compare_same_dump() {
+    let Some(hprof) = philosophers() else { return };
+    let (child, port) = start_mcp_http(&hprof);
+    // URL-encode the path's slashes are fine as-is for loopback curl; pass raw.
+    let path = format!(
+        "/compare?baseline={}&current={}&limit=3",
+        hprof.replace('/', "%2F"),
+        hprof.replace('/', "%2F")
+    );
+    let (status, body) = curl_get(port, &path);
+    kill(child);
+    assert_eq!(status, 200, "expected 200 from GET /compare, got {status}");
+    assert!(
+        body.contains("\"net_delta_retained\": 0") || body.contains("\"net_delta_retained\":0"),
+        "comparing a dump to itself should give net_delta_retained 0, got: {}",
+        &body[..body.len().min(400)]
+    );
+    assert!(
+        body.contains("\"growth_leaders\"") && body.contains("\"new_classes\""),
+        "/compare should return growth_leaders + new_classes, got: {}",
+        &body[..body.len().min(400)]
+    );
+}
+
 /// `--http-port` without `--dump` is rejected with a clear error and non-zero
 /// exit (the HTTP server needs a preloaded session).
 #[test]

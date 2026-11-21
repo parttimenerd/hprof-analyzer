@@ -253,6 +253,25 @@ impl HeapServerState {
                 None => json_err(400, "missing ?class=X parameter"),
             },
 
+            // ── Compare two dumps ─────────────────────────────────────────
+            ("GET", "/compare") => {
+                match (qs_param(query, "baseline"), qs_param(query, "current")) {
+                    (Some(baseline), Some(current)) => {
+                        let baseline = urlish_decode(baseline);
+                        let current = urlish_decode(current);
+                        let limit = qs_usize(query, "limit", 20).min(100);
+                        ops(|| {
+                            heap_ops::compare_dumps(
+                                std::path::Path::new(&baseline),
+                                std::path::Path::new(&current),
+                                limit,
+                            )
+                        })
+                    }
+                    _ => json_err(400, "missing ?baseline=<path>&current=<path> parameters"),
+                }
+            }
+
             // ── 404 ───────────────────────────────────────────────────────
             _ => not_found(path),
         }
@@ -284,6 +303,7 @@ impl HeapServerState {
                 {"method":"GET",  "path":"/gc-roots",      "desc":"list GC root objects (?limit=N)"},
                 {"method":"GET",  "path":"/retained-set",  "desc":"dominator subtree (?index=N&limit=N&class_filter=X)"},
                 {"method":"GET",  "path":"/find-incoming-by-class","desc":"inbound refs aggregated by class (?class=X&limit=N) — requires graph cache"},
+                {"method":"GET",  "path":"/compare",       "desc":"cross-dump growth diff (?baseline=<path>&current=<path>&limit=N)"},
             ]
         }))
     }

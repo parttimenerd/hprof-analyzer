@@ -170,17 +170,15 @@ The following gaps have been resolved:
 | 7 | `static-collections`/`resources` fell through to full report | ✅ Fixed in `heap_ops::report_section()` — now returns focused synthesized views |
 | 8 | CLI `heap report --json` duplicated report_section logic | ✅ CLI now delegates to `heap_ops::report_section()` |
 | 9 | `explain`/`plan` missing from heap_ops/CLI/HTTP/MCP | ✅ Added `heap_ops::explain()`, `heap plan` CLI, `POST /plan`+`/explain` (and `GET`) HTTP, and the `explain_query` MCP tool — plans/optimizes an OQL string and returns the plan dump without executing |
+| 10 | `compare_dumps` missing from heap_ops/CLI/HTTP | ✅ Added `heap_ops::compare_reports()` (pure diff) + `heap_ops::compare_dumps()` (loads both dumps concurrently via `std::thread::scope`), `heap compare <baseline> <current>` CLI, `GET /compare?baseline=&current=` HTTP. The MCP `compare_dumps` tool now delegates its diff to `heap_ops::compare_reports` (keeps its tokio-concurrent loads + the LLM `_hint`). |
 
 ### Remaining gaps (not addressed)
 
-- **`compare_dumps`** in heap_ops — MCP and top-level CLI already have this
-  (`compare_dumps` tool + `compare reports` CLI); adding it to the `heap`
-  subcommands / `heap_ops` would mean lifting the MCP path's tokio-concurrent
-  dual-load into a transport-agnostic form. Low priority.
 - **MCP delegation for `query`** — the read-only ops (`report_section`,
   `histogram`, `browse`, `inspect`, `dominator_path`, `outbound_references`,
   `gc_roots`, `retained_set`, `find_incoming`, `find_incoming_by_class`,
-  `field_name`, and now `explain`) all delegate to `heap_ops`. `query` keeps its
-  own two-phase path (it does MCP-specific missing-exact-class detection), and
-  `load_dump`/`get_session_info`/`redact`/`compare_dumps` are MCP-specific
-  orchestration. No further dedup with user-facing impact remains.
+  `field_name`, `explain`, and the `compare_dumps` diff) all delegate to
+  `heap_ops`. `query` keeps its own two-phase path (MCP-specific
+  missing-exact-class detection), and `load_dump`/`get_session_info`/`redact`
+  are MCP-specific orchestration. No further dedup with user-facing impact
+  remains.

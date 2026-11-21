@@ -1551,6 +1551,194 @@ pub fn field_name(
     }
 }
 
+// ── Cross-dump comparison ──────────────────────────────────────────────────────
+
+/// Diff two already-analyzed reports for class-level retained-heap growth.
+///
+/// Pure function: given a baseline and current [`Report`](crate::report::Report)
+/// (plus their display paths and a row limit) it returns the standard
+/// comparison JSON — `growth_leaders`, `new_classes`, `grown_suspects`, and net
+/// totals. This is the transport-agnostic core shared by the MCP `compare_dumps`
+/// tool, the `heap compare` CLI, and `GET /compare`; the caller decides how the
+/// two reports are loaded.
+pub fn compare_reports(
+    base_r: &crate::report::Report,
+    curr_r: &crate::report::Report,
+    baseline_path: &str,
+    current_path: &str,
+    limit: usize,
+) -> serde_json::Value {
+    // Build class → (baseline_retained, baseline_instances) maps.
+    let mut base_map: HashMap<&str, (u64, u64)> = HashMap::new();
+    for h in &base_r.overview.histogram {
+        base_map.insert(&h.pretty_class, (h.retained, h.instances));
+    }
+
+    // Growth leaders: in both dumps, sorted by delta_retained descending.
+    let mut growth_pairs: Vec<(&str, i64, u64, u64, u64, u64)> = curr_r
+        .overview
+        .histogram
+        .iter()
+        .filter_map(|h| {
+            let (base_ret, base_inst) = base_map
+                .get(h.pretty_class.as_str())
+                .copied()
+                .unwrap_or((0, 0));
+            let delta = h.retained as i64 - base_ret as i64;
+            if delta > 0 {
+                Some((
+                    h.pretty_class.as_str(),
+                    delta,
+                    base_ret,
+                    h.retained,
+                    base_inst,
+                    h.instances,
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+    growth_pairs.sort_by_key(|a| std::cmp::Reverse(a.1));
+
+    let growth_leaders: Vec<serde_json::Value> = growth_pairs
+        .iter()
+        .take(limit)
+        .map(|(class, delta, base_ret, curr_ret, base_inst, curr_inst)| {
+            serde_json::json!({
+                "class": class,
+                "baseline_retained": base_ret,
+                "current_retained": curr_ret,
+                "delta_retained": delta,
+                "baseline_instances": base_inst,
+                "current_instances": curr_inst,
+            })
+        })
+        .collect();
+
+    // New classes: present in current, absent from baseline.
+    let mut new_classes: Vec<serde_json::Value> = curr_r
+        .overview
+        .histogram
+        .iter()
+        .filter(|h| !base_map.contains_key(h.pretty_class.as_str()))
+        .map(|h| {
+            serde_json::json!({
+                "class": h.pretty_class,
+                "current_retained": h.retained,
+                "current_instances": h.instances,
+            })
+        })
+        .collect();
+    new_classes.sort_by(|a, b| {
+        b["current_retained"]
+            .as_u64()
+            .unwrap_or(0)
+            .cmp(&a["current_retained"].as_u64().unwrap_or(0))
+    });
+    new_classes.truncate(limit);
+
+    // Grown suspects: leak suspects in current that grew or are new.
+    let mut grown_suspects: Vec<serde_json::Value> = curr_r
+        .leaks
+        .suspects
+        .iter()
+        .filter_map(|s| {
+            let base_ret = base_map
+                .get(s.pretty_class.as_str())
+                .map(|(r, _)| *r)
+                .unwrap_or(0);
+            let delta = s.retained as i64 - base_ret as i64;
+            if delta > 0 || base_ret == 0 {
+                Some(serde_json::json!({
+                    "class": s.pretty_class,
+                    "baseline_retained": base_ret,
+                    "current_retained": s.retained,
+                    "delta_retained": delta,
+                    "is_new": base_ret == 0,
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+    grown_suspects.sort_by(|a, b| {
+        b["delta_retained"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&a["delta_retained"].as_i64().unwrap_or(0))
+    });
+    grown_suspects.truncate(limit);
+
+    // Totals.
+    let base_total_retained: u64 = base_r.overview.histogram.iter().map(|h| h.retained).sum();
+    let curr_total_retained: u64 = curr_r.overview.histogram.iter().map(|h| h.retained).sum();
+    let net_delta = curr_total_retained as i64 - base_total_retained as i64;
+    let gross_growth: i64 = growth_pairs.iter().map(|(_, d, ..)| d).sum();
+    let base_total_objects: u64 = base_r.overview.histogram.iter().map(|h| h.instances).sum();
+    let curr_total_objects: u64 = curr_r.overview.histogram.iter().map(|h| h.instances).sum();
+
+    serde_json::json!({
+        "baseline": baseline_path,
+        "current": current_path,
+        "net_delta_retained": net_delta,
+        "gross_growth_retained": gross_growth,
+        "delta_total_objects": curr_total_objects as i64 - base_total_objects as i64,
+        "growth_leaders": growth_leaders,
+        "new_classes": new_classes,
+        "grown_suspects": grown_suspects,
+    })
+}
+
+/// Load two dumps (concurrently) and compare them with [`compare_reports`].
+///
+/// Both analyses use the on-disk cache, so a second run of the same pair is
+/// fast. The two loads run on separate OS threads; this function is synchronous
+/// and transport-agnostic (the MCP tool keeps its own tokio-based load but
+/// shares [`compare_reports`] for the diff).
+pub fn compare_dumps(
+    baseline: &std::path::Path,
+    current: &std::path::Path,
+    limit: usize,
+) -> Result<serde_json::Value, HeapOpsError> {
+    let baseline_str = baseline.display().to_string();
+    let current_str = current.display().to_string();
+
+    let load = |p: &std::path::Path| {
+        crate::analyze_with_cache(
+            p,
+            &AnalyzeOptions::default(),
+            crate::cache::CacheMode::Full,
+            |_| {},
+        )
+    };
+
+    // Run the two loads concurrently on scoped threads.
+    let (base_res, curr_res) = std::thread::scope(|scope| {
+        let b = scope.spawn(|| load(baseline));
+        let c = scope.spawn(|| load(current));
+        // join() only errors if the thread panicked; surface that as Internal.
+        let b = b
+            .join()
+            .map_err(|_| HeapOpsError::Internal("baseline analysis thread panicked".into()));
+        let c = c
+            .join()
+            .map_err(|_| HeapOpsError::Internal("current analysis thread panicked".into()));
+        (b, c)
+    });
+
+    let base_sess = base_res?.map_err(|e| HeapOpsError::Internal(format!("baseline: {e}")))?;
+    let curr_sess = curr_res?.map_err(|e| HeapOpsError::Internal(format!("current: {e}")))?;
+
+    Ok(compare_reports(
+        &base_sess.report,
+        &curr_sess.report,
+        &baseline_str,
+        &current_str,
+        limit,
+    ))
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 //
 // These build a real disk cache (arrays.bin + graph.bin) in a tempdir and a
