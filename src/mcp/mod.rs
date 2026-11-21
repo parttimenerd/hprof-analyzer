@@ -436,7 +436,12 @@ fn is_zero_usize(n: &usize) -> bool {
 
 #[derive(Clone)]
 pub struct HprofMcpServer {
-    session: Arc<Mutex<Option<CachedSession>>>,
+    /// The loaded session, behind an `Arc` so an optional in-process HTTP
+    /// adapter (`mcp --http-port`) can share the exact same `CachedSession`
+    /// rather than loading a second copy. Each HTTP request clones the inner
+    /// `Arc` under a brief lock and routes against it, so MCP reloads are
+    /// reflected on the HTTP side too.
+    session: Arc<Mutex<Option<Arc<CachedSession>>>>,
     /// Session epoch (H1): bumped on every SUCCESSFUL load_dump (including a
     /// same-path reload). Stamped into every tool response as `session_epoch`
     /// so an agent can detect that indices it collected earlier now refer to a
@@ -808,7 +813,7 @@ impl HprofMcpServer {
             classes = top_classes_text,
             oql_hints = oql_hints,
         );
-        *session_ref.lock().await = Some(result);
+        *session_ref.lock().await = Some(Arc::new(result));
         let new_epoch = self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         let summary = format!("{summary}\nsession_epoch: {new_epoch}");
         Ok(CallToolResult::success(vec![ContentBlock::text(summary)]))
@@ -2346,17 +2351,62 @@ fn strip_ansi(s: &str) -> String {
 
 /// Start the MCP server on stdio. Blocks until the client disconnects.
 pub fn run_mcp_server(preload_dump: Option<PathBuf>) -> anyhow::Result<()> {
+    run_mcp_server_with_http(preload_dump, None, AnalyzeOptions::default())
+}
+
+/// Run the MCP stdio server, optionally also exposing the heap HTTP endpoints
+/// on `http_port` (requires a preloaded dump). The HTTP adapter and the MCP
+/// server share the *same* preloaded `CachedSession` through a cloned `Arc`,
+/// so there is a single in-memory copy.
+///
+/// Note: the HTTP side serves the dump that was preloaded at startup. If an
+/// MCP client subsequently calls `load_dump` with a different dump, the stdio
+/// side switches but the HTTP side keeps serving the original preloaded dump —
+/// `--http-port` is meant for exposing one fixed dump over both transports.
+pub fn run_mcp_server_with_http(
+    preload_dump: Option<PathBuf>,
+    http_port: Option<u16>,
+    http_opts: AnalyzeOptions,
+) -> anyhow::Result<()> {
     let server = HprofMcpServer::new();
+
     if let Some(path) = preload_dump {
         let sess =
             crate::analyze_with_cache(&path, &AnalyzeOptions::default(), CacheMode::Full, |_| {})?;
+        let shared = Arc::new(sess);
+
+        // Spin up the HTTP adapter on a background OS thread, sharing the same
+        // Arc<CachedSession> (single in-memory copy).
+        if let Some(port) = http_port {
+            let graph_cached = crate::cache::CacheDir::for_dump(&path)
+                .map(|c| c.is_valid(CacheMode::Graph))
+                .unwrap_or(false);
+            let state = crate::heap_server::HeapServerState {
+                sess: Arc::clone(&shared),
+                lib_opts: http_opts,
+                dump_path: path.display().to_string(),
+                graph_cached,
+            };
+            eprintln!(
+                "hprof-analyzer mcp: also serving heap HTTP endpoints on http://127.0.0.1:{port}"
+            );
+            std::thread::spawn(move || {
+                if let Err(e) = crate::heap_server::run_heap_server_quiet(state, port) {
+                    eprintln!("hprof-analyzer mcp: HTTP server on port {port} exited: {e}");
+                }
+            });
+        }
+
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         rt.block_on(async {
-            *server.session.lock().await = Some(sess);
+            *server.session.lock().await = Some(shared);
         });
+    } else if http_port.is_some() {
+        anyhow::bail!("mcp --http-port requires a preloaded dump (--dump)");
     }
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?

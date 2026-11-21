@@ -13,6 +13,8 @@ mod dominator;
 pub mod gzindex;
 #[cfg(feature = "native")]
 pub mod heap_ops;
+#[cfg(feature = "native")]
+pub mod heap_server;
 mod id_map;
 #[cfg(feature = "native")]
 pub mod mcp;

@@ -4,7 +4,7 @@
 //! (running the full pipeline if needed), then serves every `heap *`
 //! subcommand as a JSON endpoint on a loopback port.
 //!
-//! All business logic lives in [`heap_ops`](hprof_analyzer::heap_ops); this
+//! All business logic lives in [`heap_ops`](crate::heap_ops); this
 //! module is a thin HTTP adapter that maps URL routes to `heap_ops` calls
 //! and wraps `HeapOpsError` into HTTP status codes.
 
@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use tiny_http::{Response, Server};
 
-use hprof_analyzer::AnalyzeOptions;
-use hprof_analyzer::cache::CachedSession;
-use hprof_analyzer::heap_ops::{self, HeapOpsError};
+use crate::AnalyzeOptions;
+use crate::cache::CachedSession;
+use crate::heap_ops::{self, HeapOpsError};
 
 pub const DEFAULT_PORT: u16 = 30044;
 
@@ -113,7 +113,12 @@ fn urlish_decode(s: &str) -> String {
 // ── Shared server state ───────────────────────────────────────────────────────
 
 pub struct HeapServerState {
-    pub sess: CachedSession,
+    /// The loaded session. Held behind an `Arc` so the same session can be
+    /// shared with another transport in the same process — see
+    /// `hprof-analyzer mcp --http-port`, where the MCP stdio server and this
+    /// HTTP adapter reference one preloaded `CachedSession` (single in-memory
+    /// copy) through a cloned `Arc`.
+    pub sess: Arc<CachedSession>,
     pub lib_opts: AnalyzeOptions,
     pub dump_path: String,
     pub graph_cached: bool,
@@ -275,46 +280,10 @@ impl HeapServerState {
 
 // ── HTTP server loop ──────────────────────────────────────────────────────────
 
-pub fn run_heap_server(state: HeapServerState, port: u16) -> io::Result<()> {
-    let addr = format!("127.0.0.1:{port}");
-    let server =
-        Server::http(&addr).map_err(|e| io::Error::other(format!("bind {addr} failed: {e}")))?;
-    let bound = server.server_addr();
-
-    eprintln!("hprof-analyzer heap server listening on http://{bound}");
-    eprintln!();
-    eprintln!("Dump: {}", state.dump_path);
-    eprintln!(
-        "Graph cache: {}",
-        if state.graph_cached { "yes" } else { "no" }
-    );
-    eprintln!();
-    eprintln!("Endpoints (all return JSON):");
-    eprintln!("  GET  /                          → endpoint catalog");
-    eprintln!("  GET  /summary                   → top suspects + top classes");
-    eprintln!("  GET  /report                    → full report JSON");
-    eprintln!(
-        "  GET  /report?section=leaks      → report section (leaks|top|threads|overview|triage|waste|...)"
-    );
-    eprintln!("  GET  /histogram?limit=50        → class histogram by retained size");
-    eprintln!("  POST /query   -d 'SELECT ...'   → OQL query (body = raw OQL)");
-    eprintln!("  GET  /query?oql=SELECT+...      → OQL query (URL param)");
-    eprintln!("  GET  /browse?index=N            → dominator tree (&depth=3&width=10)");
-    eprintln!("  GET  /inspect?index=N           → single object details");
-    eprintln!("  GET  /find-incoming?index=N     → inbound references (&limit=50)");
-    eprintln!("  GET  /docs?topic=syntax         → OQL documentation");
-    eprintln!("  GET  /views                     → named query views");
-    eprintln!("  GET  /field-name?src=N&edge=N   → resolve field name");
-    eprintln!();
-    eprintln!("examples:");
-    eprintln!("  curl -s http://{bound}/summary");
-    eprintln!("  curl -s http://{bound}/report?section=leaks");
-    eprintln!("  curl -s http://{bound}/histogram?limit=20");
-    eprintln!("  curl -s http://{bound}/query -d 'SELECT @displayName FROM java.lang.Thread'");
-    eprintln!("  curl -s 'http://{bound}/browse?depth=5'");
-    eprintln!("(loopback only; Ctrl-C to stop)");
-
-    let state = Arc::new(state);
+/// Worker-pool request loop shared by every serving path (the standalone
+/// `heap server` and the multiplexed `mcp --http-port`), so both reuse the
+/// same request I/O, body-size guards, and response framing.
+fn serve_loop(state: Arc<HeapServerState>, server: Server) -> io::Result<()> {
     let server = Arc::new(server);
     let n_workers = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -383,4 +352,56 @@ pub fn run_heap_server(state: HeapServerState, port: u16) -> io::Result<()> {
         let _ = h.join();
     }
     Ok(())
+}
+
+/// Bind a loopback HTTP server on `port` without the verbose banner. Used by
+/// the multiplexed `mcp --http-port` path, which prints its own startup notice
+/// and runs this on a background thread while MCP owns stdio.
+pub fn run_heap_server_quiet(state: HeapServerState, port: u16) -> io::Result<()> {
+    let addr = format!("127.0.0.1:{port}");
+    let server =
+        Server::http(&addr).map_err(|e| io::Error::other(format!("bind {addr} failed: {e}")))?;
+    serve_loop(Arc::new(state), server)
+}
+
+pub fn run_heap_server(state: HeapServerState, port: u16) -> io::Result<()> {
+    let addr = format!("127.0.0.1:{port}");
+    let server =
+        Server::http(&addr).map_err(|e| io::Error::other(format!("bind {addr} failed: {e}")))?;
+    let bound = server.server_addr();
+
+    eprintln!("hprof-analyzer heap server listening on http://{bound}");
+    eprintln!();
+    eprintln!("Dump: {}", state.dump_path);
+    eprintln!(
+        "Graph cache: {}",
+        if state.graph_cached { "yes" } else { "no" }
+    );
+    eprintln!();
+    eprintln!("Endpoints (all return JSON):");
+    eprintln!("  GET  /                          → endpoint catalog");
+    eprintln!("  GET  /summary                   → top suspects + top classes");
+    eprintln!("  GET  /report                    → full report JSON");
+    eprintln!(
+        "  GET  /report?section=leaks      → report section (leaks|top|threads|overview|triage|waste|...)"
+    );
+    eprintln!("  GET  /histogram?limit=50        → class histogram by retained size");
+    eprintln!("  POST /query   -d 'SELECT ...'   → OQL query (body = raw OQL)");
+    eprintln!("  GET  /query?oql=SELECT+...      → OQL query (URL param)");
+    eprintln!("  GET  /browse?index=N            → dominator tree (&depth=3&width=10)");
+    eprintln!("  GET  /inspect?index=N           → single object details");
+    eprintln!("  GET  /find-incoming?index=N     → inbound references (&limit=50)");
+    eprintln!("  GET  /docs?topic=syntax         → OQL documentation");
+    eprintln!("  GET  /views                     → named query views");
+    eprintln!("  GET  /field-name?src=N&edge=N   → resolve field name");
+    eprintln!();
+    eprintln!("examples:");
+    eprintln!("  curl -s http://{bound}/summary");
+    eprintln!("  curl -s http://{bound}/report?section=leaks");
+    eprintln!("  curl -s http://{bound}/histogram?limit=20");
+    eprintln!("  curl -s http://{bound}/query -d 'SELECT @displayName FROM java.lang.Thread'");
+    eprintln!("  curl -s 'http://{bound}/browse?depth=5'");
+    eprintln!("(loopback only; Ctrl-C to stop)");
+
+    serve_loop(Arc::new(state), server)
 }

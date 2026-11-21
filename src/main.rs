@@ -23,7 +23,6 @@ mod diff;
 mod diff_reports;
 mod dominator;
 mod gzindex;
-mod heap_server;
 mod html;
 mod id_map;
 mod mat;
@@ -470,6 +469,12 @@ enum Cmd {
         /// Pre-load this dump on startup (faster for single-dump sessions).
         #[arg(long, value_name = "HPROF", value_hint = ValueHint::FilePath)]
         dump: Option<String>,
+        /// Also expose the heap HTTP endpoints on this loopback port, sharing
+        /// the same preloaded session (requires `--dump`). Lets scripts/curl
+        /// hit the REST API while an MCP client talks over stdio — one process,
+        /// all interfaces.
+        #[arg(long, value_name = "PORT")]
+        http_port: Option<u16>,
     },
     /// Reduce data exposure in a heap dump before sharing — but read the
     /// disclaimer below before treating the result as safe.
@@ -1744,9 +1749,17 @@ fn main() {
                 fail(e);
             }
         }
-        Some(Cmd::Mcp { dump }) => {
-            let preload = dump.map(std::path::PathBuf::from);
-            if let Err(e) = hprof_analyzer::mcp::run_mcp_server(preload) {
+        Some(Cmd::Mcp { dump, http_port }) => {
+            let preload = dump.clone().map(std::path::PathBuf::from);
+            if http_port.is_some() && preload.is_none() {
+                fail(
+                    "mcp --http-port requires --dump (the HTTP server shares the preloaded session)",
+                );
+            }
+            let http_opts = hprof_analyzer::AnalyzeOptions::default();
+            if let Err(e) =
+                hprof_analyzer::mcp::run_mcp_server_with_http(preload, http_port, http_opts)
+            {
                 fail(e);
             }
         }
@@ -2997,13 +3010,16 @@ fn run_heap_cmd(
                 CacheMode::Full
             };
             let sess = load(&dump, mode)?;
-            let state = heap_server::HeapServerState {
+            let state = hprof_analyzer::heap_server::HeapServerState {
                 dump_path: dump.clone(),
                 graph_cached,
-                sess,
+                sess: std::sync::Arc::new(sess),
                 lib_opts: lib_opts.clone(),
             };
-            heap_server::run_heap_server(state, port.unwrap_or(heap_server::DEFAULT_PORT))?;
+            hprof_analyzer::heap_server::run_heap_server(
+                state,
+                port.unwrap_or(hprof_analyzer::heap_server::DEFAULT_PORT),
+            )?;
         }
     }
     Ok(())
