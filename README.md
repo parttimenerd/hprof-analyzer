@@ -616,6 +616,20 @@ These are `@Value`/`@RequestMapping` literals baked into class files. They are n
 
 A standalone `hprof-redact` binary is also available for environments where a small dependency footprint matters (under 1 MB). The MCP server exposes redaction via the `redact` tool.
 
+**Detecting a redacted dump (for tool authors):**
+
+The redaction marker is a standard `STRING_IN_UTF8` record (tag `0x01`) appended *after* the final `HPROF_HEAP_DUMP_END` record — never inline in the heap-dump segment — so any conforming HPROF parser reads straight past it. Its layout:
+
+```
+u8   tag            = 0x01            (STRING_IN_UTF8)
+u32  time           = 0               (zeroed)
+u32  length         = id_size + N     (N = payload byte length)
+id   string_id      = "REDACTED"      (ASCII, truncated to id_size, e.g. "REDA" for 4-byte ids)
+u8[N] payload       = "hprof-analyzer:redacted:v1:<mode>"   (mode = "lean" | "complete")
+```
+
+Detection keys on the **payload prefix** `hprof-analyzer:redacted:v1:` (constant `REDACTED_SENTINEL_PREFIX`), not the string ID. There is no hashing or custom record type: the sentinel sits at the very end of the file where no genuine string record is written, and an accidental occurrence of the exact literal is negligible. Re-redacting a dump drops any pre-existing sentinel and writes a fresh one. (A legacy custom marker record, tag `0xDE`, from older hprof-analyzer versions is still *recognized* on read but never written — prefer the `STRING_IN_UTF8` sentinel above.)
+
 ## Secret detection
 
 Heap dumps contain everything the JVM held in memory at the time of capture: database passwords, API keys, session tokens, bearer tokens, connection strings. The `detect-secrets` subcommand scans all `String` values and JVM symbol table strings against [betterleaks](https://github.com/betterleaks/betterleaks) patterns (463 service-specific rules, MIT License) plus heap-dump-specific extras (JDBC URLs, JWT tokens, Spring Security encoded passwords, and more).
