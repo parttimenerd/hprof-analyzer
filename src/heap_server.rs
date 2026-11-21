@@ -161,6 +161,16 @@ impl HeapServerState {
                 None => json_err(400, "missing ?oql= parameter"),
             },
 
+            // ── OQL plan / explain (no execution) ─────────────────────────
+            ("POST", "/plan") | ("POST", "/explain") => ops(|| heap_ops::explain(&self.sess, body)),
+            ("GET", "/plan") | ("GET", "/explain") => match qs_param(query, "oql") {
+                Some(oql) => {
+                    let decoded = urlish_decode(oql);
+                    ops(|| heap_ops::explain(&self.sess, &decoded))
+                }
+                None => json_err(400, "missing ?oql= parameter"),
+            },
+
             // ── Browse dominator tree ─────────────────────────────────────
             ("GET", "/browse") => {
                 let index = qs_u64(query, "index");
@@ -262,6 +272,7 @@ impl HeapServerState {
                 {"method":"GET",  "path":"/histogram",     "desc":"class histogram by retained size (?limit=N, default 50)"},
                 {"method":"POST", "path":"/query",         "desc":"OQL query (body = raw OQL text)"},
                 {"method":"GET",  "path":"/query",         "desc":"OQL query (?oql=SELECT+...)"},
+                {"method":"POST", "path":"/plan",          "desc":"OQL query plan without executing (body = raw OQL; alias /explain)"},
                 {"method":"GET",  "path":"/browse",        "desc":"dominator tree (?index=N&depth=N&width=N)"},
                 {"method":"GET",  "path":"/inspect",       "desc":"single object details (?index=N)"},
                 {"method":"GET",  "path":"/find-incoming",  "desc":"inbound references (?index=N&limit=N) — requires graph cache"},

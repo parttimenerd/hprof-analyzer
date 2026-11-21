@@ -686,6 +686,38 @@ pub fn run_oql(
     Ok(serde_json::json!(out))
 }
 
+/// Return the optimized query plan for an OQL string *without executing it*
+/// (the `POST /explain` / `POST /plan` operation). Resolves named views, parses
+/// with the session's class-name context (so exact-class suggestions work),
+/// plans, optimizes, and renders the plan via [`QueryPlan::explain`].
+pub fn explain(sess: &CachedSession, oql: &str) -> Result<serde_json::Value, HeapOpsError> {
+    let oql = oql.trim();
+    if oql.is_empty() {
+        return Err(HeapOpsError::BadParam("empty OQL query".into()));
+    }
+
+    // Resolve named-view name → OQL text (same as run_oql).
+    let resolved = crate::named_queries::NAMED_QUERIES
+        .iter()
+        .find(|nq| nq.name.eq_ignore_ascii_case(oql))
+        .map(|nq| nq.oql.to_string())
+        .unwrap_or_else(|| oql.to_string());
+
+    let parse_ctx = crate::query::parse::ParseContext {
+        class_names: &sess.class_names,
+    };
+    let query = crate::query::parse::parse_or_report_with_context(&resolved, &parse_ctx)
+        .map_err(HeapOpsError::BadParam)?;
+    let plan = crate::query::plan::plan_query(&query, crate::opts::DEFAULT_QUERY_PATH_DEPTH)
+        .map_err(|e| HeapOpsError::BadParam(e.to_string()))?;
+    let plan = crate::query::optimize::optimize(
+        plan,
+        &query,
+        &crate::query::optimize::SchemaStats::default(),
+    );
+    Ok(serde_json::json!({ "ok": true, "plan": plan.explain() }))
+}
+
 /// Browse the dominator tree.  Omit `index` to start at the virtual GC root.
 pub fn browse(
     sess: &CachedSession,

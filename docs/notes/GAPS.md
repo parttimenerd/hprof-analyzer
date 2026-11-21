@@ -169,9 +169,18 @@ The following gaps have been resolved:
 | 6 | Synthesized report sections MCP-only | ✅ Added `top-objects`, `top-classes`, `gc-roots`, `classloaders`, `strings`, `packages`, `culprits`, `self-referential` to `heap_ops::report_section()` |
 | 7 | `static-collections`/`resources` fell through to full report | ✅ Fixed in `heap_ops::report_section()` — now returns focused synthesized views |
 | 8 | CLI `heap report --json` duplicated report_section logic | ✅ CLI now delegates to `heap_ops::report_section()` |
+| 9 | `explain`/`plan` missing from heap_ops/CLI/HTTP/MCP | ✅ Added `heap_ops::explain()`, `heap plan` CLI, `POST /plan`+`/explain` (and `GET`) HTTP, and the `explain_query` MCP tool — plans/optimizes an OQL string and returns the plan dump without executing |
 
 ### Remaining gaps (not addressed)
 
-- **`compare_dumps`** in heap_ops — MCP and top-level CLI already have this; adding to `heap` subcommands is low priority
-- **`explain/plan`** in heap HTTP — query server already provides this; low demand from `heap server` users
-- **MCP delegation to `heap_ops`** — MCP still uses its own inline implementations; refactoring to delegate is a pure dedup exercise with no user-facing impact
+- **`compare_dumps`** in heap_ops — MCP and top-level CLI already have this
+  (`compare_dumps` tool + `compare reports` CLI); adding it to the `heap`
+  subcommands / `heap_ops` would mean lifting the MCP path's tokio-concurrent
+  dual-load into a transport-agnostic form. Low priority.
+- **MCP delegation for `query`** — the read-only ops (`report_section`,
+  `histogram`, `browse`, `inspect`, `dominator_path`, `outbound_references`,
+  `gc_roots`, `retained_set`, `find_incoming`, `find_incoming_by_class`,
+  `field_name`, and now `explain`) all delegate to `heap_ops`. `query` keeps its
+  own two-phase path (it does MCP-specific missing-exact-class detection), and
+  `load_dump`/`get_session_info`/`redact`/`compare_dumps` are MCP-specific
+  orchestration. No further dedup with user-facing impact remains.

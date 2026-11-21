@@ -163,6 +163,15 @@ pub struct GetHistogramParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExplainQueryParams {
+    /// OQL query string (or a built-in view name) to plan. The query is parsed,
+    /// planned, and optimized but NOT executed — use this to introspect the
+    /// query plan (scan vs index, predicate pushdown, stages) before running a
+    /// potentially expensive query with `query`.
+    pub oql: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct QueryParams {
     /// OQL query string OR a built-in view name (no SQL needed).
     ///
@@ -894,6 +903,29 @@ impl HprofMcpServer {
         })?;
         let limit = p.limit.unwrap_or(50).min(500) as usize;
         let result = crate::heap_ops::histogram(sess, limit).map_err(ops_to_mcp)?;
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// Introspect an OQL query plan without executing it.
+    #[tool(
+        description = "Return the optimized OQL query plan WITHOUT executing the query. \
+                          Parses, plans, and optimizes the OQL (predicate pushdown, scan vs index, \
+                          stages) and returns {ok, plan} where `plan` is a human-readable plan dump. \
+                          Use this to understand what a query will do — and roughly how expensive it \
+                          is — before running it with `query`. Accepts a built-in view name too."
+    )]
+    async fn explain_query(
+        &self,
+        Parameters(p): Parameters<ExplainQueryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _gate = self.gate.lock().await;
+        let guard = self.session.lock().await;
+        let sess = guard.as_ref().ok_or_else(|| {
+            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
+        })?;
+        let result = crate::heap_ops::explain(sess, &p.oql).map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))

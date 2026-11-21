@@ -156,6 +156,25 @@ fn mcp_http_oql_query() {
     );
 }
 
+/// `POST /plan` returns the optimized query plan without executing it.
+#[test]
+fn mcp_http_oql_plan() {
+    let Some(hprof) = philosophers() else { return };
+    let (child, port) = start_mcp_http(&hprof);
+    let (status, body) = curl_post(
+        port,
+        "/plan",
+        "SELECT @objectId FROM java.lang.String WHERE @retainedHeapSize > 100",
+    );
+    kill(child);
+    assert_eq!(status, 200, "expected 200 from POST /plan, got {status}");
+    assert!(
+        body.contains("\"plan\"") && body.contains("\"ok\""),
+        "POST /plan should return {{ok, plan}}, got: {}",
+        &body[..body.len().min(300)]
+    );
+}
+
 /// `--http-port` without `--dump` is rejected with a clear error and non-zero
 /// exit (the HTTP server needs a preloaded session).
 #[test]

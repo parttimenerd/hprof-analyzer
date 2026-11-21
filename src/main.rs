@@ -709,6 +709,18 @@ enum HeapCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Show the optimized OQL query plan without executing it.
+    Plan {
+        /// Path to the .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        dump: String,
+        /// OQL query text (or a built-in view name) to plan.
+        #[arg(long = "oql", value_name = "OQL")]
+        oql: String,
+        /// Emit JSON ({ok, plan}) instead of the plain plan text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Browse the dominator tree.
     Browse {
         /// Path to the .hprof dump.
@@ -2126,6 +2138,20 @@ fn run_heap_cmd(
                     if let Some(n) = &r.note {
                         println!("note: {n}");
                     }
+                }
+            }
+        }
+        HeapCmd::Plan { dump, oql, json } => {
+            let sess = load(&dump, CacheMode::Full)?;
+            let result = hprof_analyzer::heap_ops::explain(&sess, &oql)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                // Extract the "plan" string for a plain-text dump.
+                match result.get("plan").and_then(|p| p.as_str()) {
+                    Some(plan) => println!("{plan}"),
+                    None => println!("{}", serde_json::to_string_pretty(&result)?),
                 }
             }
         }
