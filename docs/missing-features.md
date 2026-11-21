@@ -67,6 +67,26 @@ From `docs/notes/LEAKCANARY_INSPIRED_PROPOSALS.md`.
 
 ---
 
+## Serving architecture (unified-serving redesign)
+
+See `docs/notes/DESIGN_UNIFIED_SERVING.md` for the full design.
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Extract `heap_ops.rs` — one pure-logic layer behind both the `heap server` HTTP adapter and the MCP tools; eliminate the copy-pasted per-transport logic | **DONE** — `src/heap_ops.rs`; both `heap_server.rs` and `mcp/mod.rs` delegate |
+| 2 | `mcp --http-port` — one process exposes MCP over stdio **and** the heap REST endpoints over HTTP, sharing a single preloaded `CachedSession` | **DONE** (2026-11-21) — `run_mcp_server_with_http`; `tests/cli_mcp_http.rs` |
+| 3 | Merge `serve.rs` (lazy-analysis `server` subcommand) into `heap_ops` / disk cache | **Deferred** — different analysis lifecycle (instant OQL while full analysis runs in the background); low priority per the design doc |
+
+### Transport follow-ups
+
+| Feature | Notes |
+|---|---|
+| **MCP over HTTP/SSE** | `mcp --http-port` multiplexes *stdio MCP + REST HTTP*; it does not yet speak the **MCP protocol** over HTTP/SSE. Needed only if a client can attach to an MCP HTTP endpoint but cannot spawn a stdio child (e.g. some IDE assistants). Required by the IntelliJ-plugin "managed MCP server" mode's open question (below). |
+| **`explain`/`plan` on heap HTTP** | The lazy `server` subcommand has `POST /plan` + `POST /explain`; the `heap server` / MCP paths do not expose query-plan introspection. Low demand (GAPS.md §7). |
+| **`compare_dumps` in `heap_ops`** | Cross-dump growth diff exists in MCP (`compare_dumps`) and the top-level `compare reports` CLI, but not as a `heap_ops` function / `heap` subcommand / HTTP endpoint. Low priority (GAPS.md §7). |
+
+---
+
 ## Correctness bugs (pre-existing, deferred)
 
 | Bug | Location | Notes |
@@ -169,6 +189,57 @@ want the full CLI analysis pipeline (not the WASM subset). The shell needs an
 The existing `serve` routes already cover everything the shell needs:
 `POST /` (OQL query), `GET /report` (full report), `GET /status`,
 `POST /analyze` (run analysis). No new endpoints required.
+
+#### 3 — MCP support: expose the IDE's heap dump to AI assistants
+
+The plugin should also surface the loaded dump to any MCP-speaking AI assistant
+in the IDE (JetBrains AI Assistant / Junie, or an external Claude/Cursor client
+the developer has configured), so a developer can ask "why is this heap
+leaking?" in natural language and have the model drive the same analysis tools
+the human UI uses.
+
+This reuses the `mcp --http-port` multiplexing (shipped 2026-11-21): a single
+`hprof-analyzer` process serves **both** transports from **one** preloaded
+`CachedSession`:
+
+```
+hprof-analyzer mcp --dump <file> --http-port <port>
+```
+
+- **stdio (MCP):** the full tool set (`load_dump`, `get_report`, `query`,
+  `browse_dominators`, `get_dominator_path`, `get_retained_set`, …) for the AI
+  assistant.
+- **HTTP (`<port>`):** the same `heap server` REST endpoints the JCEF report and
+  OQL shell already consume (`/summary`, `/report`, `/query`, `/browse`, …).
+
+**Two integration modes, pick per IDE capability:**
+
+| Mode | How | When |
+|---|---|---|
+| **Managed MCP server** | Plugin writes an MCP server entry (`command: hprof-analyzer`, `args: ["mcp","--dump",<file>,"--http-port",<port>]`) into the IDE's MCP config, or registers it via the JetBrains MCP API, so the IDE's built-in assistant can call the tools. | IDE has a native MCP client (recent IntelliJ AI Assistant / Junie). |
+| **External client handoff** | Plugin shows the ready-to-paste `claude mcp add` / config snippet (with the resolved dump path + port) in the tool window, so the developer wires up their own Claude Code / Cursor. | No native MCP client, or developer prefers their own agent. |
+
+**Jump-to-source still works for the AI path:** when the model names a class in
+its answer, the plugin can render it through the same `.ide-class-link` /
+`POST /ide/<fqn>` mechanism used by the HTML report (feature #1), so "take me to
+`com.example.LeakyCache`" navigates in the editor.
+
+**Scope:**
+- hprof-analyzer: **none** — `mcp --http-port` already does the multiplexing.
+  (The HTTP side serves the dump preloaded at startup; the plugin owns one
+  process per open `.hprof`, so the "MCP `load_dump` of a different dump only
+  switches stdio" caveat does not apply here.)
+- Plugin side: launch/lifecycle (reuse `JeffreyLauncher.kt` pattern), MCP-config
+  registration (managed mode) or snippet display (handoff mode), and surfacing
+  the stdio handle to the IDE's assistant.
+
+**Open question (plugin-side, not hprof-analyzer):** whether the IDE's assistant
+consumes MCP over the child's stdio directly or whether we also want an MCP
+HTTP/SSE transport. `mcp --http-port` currently multiplexes *stdio MCP + REST
+HTTP*; it does **not** yet speak the MCP protocol itself over HTTP/SSE. If a
+target IDE can only attach to an MCP *HTTP* endpoint (not spawn a stdio child),
+that would be a follow-up on the hprof-analyzer side (MCP-over-HTTP transport),
+tracked separately below.
 
 ---
 

@@ -181,3 +181,23 @@ of the analysis pipeline, not a serving-framework change.
 
 Start with Phase 1 + 2. They give you the most value (de-duplication + "one process
 serves everything") with minimal risk. Phase 3 can wait until there's a concrete need.
+
+---
+
+## Status (updated 2026-11-21)
+
+- **Phase 1 — DONE.** `src/heap_ops.rs` is the shared layer; `heap_server.rs`
+  and `mcp/mod.rs` are thin adapters that delegate to it.
+- **Phase 2 — DONE.** `hprof-analyzer mcp --dump <file> --http-port <port>`
+  multiplexes MCP-over-stdio and the heap REST endpoints over one preloaded
+  `CachedSession` (`run_mcp_server_with_http` in `src/mcp/mod.rs`;
+  `run_heap_server_quiet` in `src/heap_server.rs`; `heap_server` was moved into
+  the lib so the MCP module can spawn it). `HeapServerState.sess` and the MCP
+  session both hold `Arc<CachedSession>`, so there is a single in-memory copy.
+  Covered by `tests/cli_mcp_http.rs`. The HTTP side serves the dump preloaded
+  at startup; a later MCP `load_dump` of a different dump switches stdio only.
+- **Phase 3 — Deferred.** No change to `serve.rs` yet (see "What about
+  `serve.rs`?" above).
+- **Follow-up tracked in `docs/missing-features.md` → Serving architecture:**
+  MCP-over-HTTP/SSE transport (distinct from the REST multiplexing), and
+  wiring `mcp --http-port` into the IntelliJ plugin as a managed MCP server.
