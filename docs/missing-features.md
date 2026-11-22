@@ -97,6 +97,13 @@ See `docs/notes/DESIGN_UNIFIED_SERVING.md` for the full design.
 
 ## IntelliJ plugin integration
 
+> **Implementation-ready spec: `docs/notes/DESIGN_INTELLIJ_PLUGIN.md`** — grounded
+> in the working sibling plugin `parttimenerd/jstall-intellij-plugin` and the
+> shipped `mcp --http-port` multiplexing. Key finding: jump-to-source is already
+> done in this repo (`IdeBtn`, commit c3d39b37); the plugin only injects
+> `window.__HPROF_IDE_PORT__` into the served HTML. The notes below are the
+> original high-level sketch; the DESIGN doc supersedes them where they differ.
+
 Integrate hprof-analyzer into `parttimenerd/intellij-profiler-plugin` (20k+
 downloads; already ships JCEF + jump-to-source + file-editor pattern for `.jfr`).
 
