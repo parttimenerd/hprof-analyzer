@@ -90,6 +90,30 @@ function ReportHeader({ report }: { report: Report }) {
           <CopyBtn text={src} />
         </span>
       </h1>
+      {(report.truncated_input || report.redacted_input || report.redacted_report) && (
+        <div className="report-banners">
+          {report.truncated_input && (
+            <p className="report-banner report-banner-warn">
+              ⚠ <strong>Truncated dump</strong> — the input ended mid-record; totals, leak
+              suspects, and top consumers may be understated.
+            </p>
+          )}
+          {report.redacted_input && (
+            <p className="report-banner report-banner-info">
+              🛡 <strong>Redacted dump</strong> — primitive field values and array contents are
+              zeroed. Structural analyses (histogram, dominator tree, leak suspects, GC roots) are
+              accurate.
+            </p>
+          )}
+          {report.redacted_report && (
+            <p className="report-banner report-banner-info">
+              🛡 <strong>Redacted report</strong> — data values (string contents, system-property
+              values, constant-array values) are suppressed for safe sharing. Class names, counts,
+              retained sizes, the dominator tree, and triage signals are preserved.
+            </p>
+          )}
+        </div>
+      )}
       <p className="report-meta">
         {dumpMs > 0 && (
           <>

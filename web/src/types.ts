@@ -857,6 +857,10 @@ export interface Report {
   generated: string;
   /** True when the input gzip stream was truncated; report covers partial data only. */
   truncated_input?: boolean;
+  /** True when the dump was produced by `hprof-analyzer redact` (primitive values zeroed). */
+  redacted_input?: boolean;
+  /** True when this report was rendered with `--redact` (data values suppressed). */
+  redacted_report?: boolean;
   overview: SystemOverview;
   leaks: LeakSuspects;
   top: TopConsumers;
