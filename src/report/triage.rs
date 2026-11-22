@@ -4629,6 +4629,7 @@ mod tests {
             generated: String::new(),
             truncated_input: false,
             redacted_input: false,
+            redacted_report: false,
             overview: SystemOverview::default(),
             leaks: LeakSuspects::default(),
             top: TopConsumers::default(),

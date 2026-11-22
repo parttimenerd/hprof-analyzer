@@ -318,6 +318,14 @@ pub fn render_markdown(r: &Report) -> String {
              are accurate. Duplicate-string and collections analyses are skipped.\n\n",
         );
     }
+    if r.redacted_report {
+        out.push_str(
+            "> **Redacted report** — data values (string contents, system-property \
+             values, constant-array values) are suppressed for safe sharing. Class \
+             names, counts, retained sizes, the dominator tree, and triage signals are \
+             preserved.\n\n",
+        );
+    }
     render_toc(r, &mut out);
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);

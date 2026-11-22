@@ -2057,6 +2057,12 @@ pub struct Report {
     /// True when the dump was produced by `hprof-analyzer redact` (primitive values zeroed).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub redacted_input: bool,
+    /// True when this report was rendered with `--redact` (`redact_report`):
+    /// data values (string contents, system-property values, constant-array
+    /// values) are suppressed while class names, counts, sizes, and structure
+    /// are preserved. Distinct from `redacted_input` (which refers to the dump).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redacted_report: bool,
     pub overview: SystemOverview,
     pub leaks: LeakSuspects,
     pub top: TopConsumers,

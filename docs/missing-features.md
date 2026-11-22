@@ -63,7 +63,7 @@ From `docs/notes/LEAKCANARY_INSPIRED_PROPOSALS.md`.
 
 | Feature | Notes |
 |---|---|
-| **Redacted reports** (`heap report --redact`) | Produce a self-contained HTML/JSON/MD report that shows class names, counts, retained sizes, dominator tree, and triage signals, but suppresses all actual field values, collection entry contents, and string values. For sharing reports from production heaps without leaking data. Distinct from `hprof-redact` (which zeros the raw dump binary). |
+| ~~**Redacted reports** (`heap report --redact`)~~ | **DONE** — `report::redact_report()` blanks data values (string contents, system-property values, constant-array values) while keeping class names, counts, retained sizes, dominator tree, and triage; `heap report --redact` (JSON or Markdown, any `--section`); `redacted_report: true` flag + a Markdown banner. Leak surface + the planted-sentinel guardrail test are in `docs/notes/DESIGN_REDACTED_REPORTS.md` and `src/report/redact_report.rs`. Distinct from `hprof-redact` (which zeros the raw dump binary). Not yet exposed on the HTTP/MCP transports (CLI only). |
 
 ---
 

@@ -218,7 +218,17 @@ pub fn report_section_with_limit(
     section: &str,
     limit: Option<usize>,
 ) -> Result<serde_json::Value, HeapOpsError> {
-    let r = &sess.report;
+    report_section_from_report(&sess.report, section, limit)
+}
+
+/// Core of [`report_section_with_limit`] that operates on a bare [`Report`],
+/// so callers that want to transform the report first (e.g. `--redact` via
+/// [`redact_report`](crate::report::redact_report)) can pass a modified clone.
+pub fn report_section_from_report(
+    r: &crate::report::Report,
+    section: &str,
+    limit: Option<usize>,
+) -> Result<serde_json::Value, HeapOpsError> {
     let val = match section {
         "leaks" => {
             let mut v = serde_json::to_value(&r.leaks)

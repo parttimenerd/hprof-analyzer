@@ -38,6 +38,7 @@ mod pass2;
 mod progress;
 mod query;
 mod reader;
+#[allow(dead_code, unused_imports)]
 mod report;
 mod retained;
 mod rpo_dfs;
@@ -676,6 +677,11 @@ enum HeapCmd {
         /// Emit JSON instead of Markdown.
         #[arg(long)]
         json: bool,
+        /// Suppress data values (string contents, system-property values,
+        /// constant-array values) so the report is safe to share. Class names,
+        /// counts, sizes, dominator tree, and triage are preserved.
+        #[arg(long)]
+        redact: bool,
     },
     /// Print a class histogram sorted by retained size.
     Histogram {
@@ -1984,20 +1990,27 @@ fn run_heap_cmd(
             dump,
             section,
             json,
+            redact,
         } => {
             let sess = load(&dump, CacheMode::Full)?;
             truncation_gate(&sess, &dump)?;
+            let sec = section.as_deref().unwrap_or("all");
+            // When --redact, work from a redacted clone of the report so data
+            // values are suppressed before rendering (either format).
+            let redacted = if redact {
+                let mut clone = sess.report.clone();
+                hprof_analyzer::report::redact_report(&mut clone);
+                Some(clone)
+            } else {
+                None
+            };
+            let report = redacted.as_ref().unwrap_or(&sess.report);
             if json {
-                let sec = section.as_deref().unwrap_or("all");
-                let val = hprof_analyzer::heap_ops::report_section(&sess, sec)
+                let val = hprof_analyzer::heap_ops::report_section_from_report(report, sec, None)
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 println!("{}", serde_json::to_string_pretty(&val)?);
             } else {
-                let sec = section.as_deref().unwrap_or("all");
-                println!(
-                    "{}",
-                    hprof_analyzer::render_report_section(&sess.report, sec)
-                );
+                println!("{}", hprof_analyzer::render_report_section(report, sec));
             }
         }
         HeapCmd::Histogram {

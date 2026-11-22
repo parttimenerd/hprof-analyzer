@@ -759,6 +759,7 @@ pub fn build_model(
         generated,
         truncated_input: false,
         redacted_input: redacted,
+        redacted_report: false,
         overview,
         leaks,
         top,

@@ -5122,6 +5122,10 @@
       "description": "True when the dump was produced by `hprof-analyzer redact` (primitive values zeroed).",
       "type": "boolean"
     },
+    "redacted_report": {
+      "description": "True when this report was rendered with `--redact` (`redact_report`):\ndata values (string contents, system-property values, constant-array\nvalues) are suppressed while class names, counts, sizes, and structure\nare preserved. Distinct from `redacted_input` (which refers to the dump).",
+      "type": "boolean"
+    },
     "references": {
       "$ref": "#/$defs/ReferencesAnalysis",
       "default": {

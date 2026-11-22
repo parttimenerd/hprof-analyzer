@@ -98,6 +98,7 @@ mod tests {
             generated: "x".to_string(),
             truncated_input: false,
             redacted_input: false,
+            redacted_report: false,
             overview: SystemOverview {
                 source_name: "s".to_string(),
                 file_path: "s".to_string(),
