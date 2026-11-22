@@ -152,6 +152,11 @@ pub struct GetReportParams {
     /// Also limits rows for "retainers", "waste" (waste_breakdown rows),
     /// and "alloc_sites" (alloc site rows).
     pub limit: Option<usize>,
+    /// When true, suppress data values (string contents, system-property
+    /// values, constant-array values) so the section is safe to share. Class
+    /// names, counts, retained sizes, dominator tree, and triage are preserved.
+    #[serde(default)]
+    pub redact: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -873,8 +878,12 @@ impl HprofMcpServer {
             McpError::invalid_params("No dump loaded. Call load_dump first.", None)
         })?;
         let section = p.section.as_deref().unwrap_or("triage");
-        let result = crate::heap_ops::report_section_with_limit(sess, section, p.limit)
-            .map_err(ops_to_mcp)?;
+        let result = if p.redact.unwrap_or(false) {
+            crate::heap_ops::report_section_redacted(sess, section, p.limit)
+        } else {
+            crate::heap_ops::report_section_with_limit(sess, section, p.limit)
+        }
+        .map_err(ops_to_mcp)?;
         let hint = format!(
             "Report section '{section}' exceeded the {MAX_TOOL_OUTPUT_BYTES}-byte output cap and was \
              replaced with this stub. Request a focused section (triage, top-objects, top-classes, \

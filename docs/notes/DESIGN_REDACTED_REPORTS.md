@@ -1,12 +1,13 @@
 # Design: Redacted Reports (`heap report --redact`)
 
-> Status: **IMPLEMENTED 2026-11-22** (CLI only; HTTP/MCP exposure not yet wired).
-> `report::redact_report()` + `heap report --redact`, guarded by the
-> planted-sentinel test `redacted_report_suppresses_values`. Distinct from
-> `hprof-redact` (which zeros the raw **dump**); this redacts the **report
-> output** so a production heap report can be shared without leaking data
-> values, while keeping everything needed to reason about a leak: class names,
-> counts, retained sizes, dominator tree, triage signals, thread stacks.
+> Status: **IMPLEMENTED 2026-11-22** (CLI + HTTP + MCP). `report::redact_report()`
+> + `heap report --redact` / `GET /report?redact=1` / `get_report({redact:true})`,
+> guarded by the planted-sentinel test `redacted_report_suppresses_values`.
+> Distinct from `hprof-redact` (which zeros the raw **dump**); this redacts the
+> **report output** so a production heap report can be shared without leaking
+> data values, while keeping everything needed to reason about a leak: class
+> names, counts, retained sizes, dominator tree, triage signals, thread stacks.
+> Remaining: no HTML redaction banner yet.
 
 ## Goal
 
@@ -61,8 +62,9 @@ value-bearing fields are added in one obvious place.
    report; redaction is a render-time transform).
 3. Renderers: HTML/MD show a "⚠ Redacted report — data values suppressed"
    banner when `redacted`. JSON carries `"redacted": true`.
-4. (Optional) expose on `heap_ops::report_section` via a `redact: bool` param so
-   the HTTP `/report?redact=1` and an MCP option get it for free.
+4. **(Done)** exposed on all transports via `heap_ops::report_section_redacted`
+   (clones the report, runs `redact_report`, then sections it): `GET
+   /report?redact=1` and the MCP `get_report({redact: true})` param.
 
 ## Test (the important part)
 

@@ -221,6 +221,22 @@ pub fn report_section_with_limit(
     report_section_from_report(&sess.report, section, limit)
 }
 
+/// Like [`report_section_with_limit`] but redacts data values first (the
+/// `--redact` path for HTTP/MCP). Clones the report, runs
+/// [`redact_report`](crate::report::redact_report), then sections it — so
+/// string contents, system-property values, and constant-array values are
+/// suppressed while structure/sizes/triage survive. The cache keeps the full
+/// report untouched; redaction is a per-request transform.
+pub fn report_section_redacted(
+    sess: &CachedSession,
+    section: &str,
+    limit: Option<usize>,
+) -> Result<serde_json::Value, HeapOpsError> {
+    let mut clone = sess.report.clone();
+    crate::report::redact_report(&mut clone);
+    report_section_from_report(&clone, section, limit)
+}
+
 /// Core of [`report_section_with_limit`] that operates on a bare [`Report`],
 /// so callers that want to transform the report first (e.g. `--redact` via
 /// [`redact_report`](crate::report::redact_report)) can pass a modified clone.

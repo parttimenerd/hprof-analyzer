@@ -141,6 +141,25 @@ fn mcp_http_report_overview() {
     );
 }
 
+/// `/report?redact=1` returns a report flagged redacted (data values
+/// suppressed). The full report carries `redacted_report: true`.
+#[test]
+fn mcp_http_report_redacted() {
+    let Some(hprof) = philosophers() else { return };
+    let (child, port) = start_mcp_http(&hprof);
+    let (status, body) = curl_get(port, "/report?redact=1");
+    kill(child);
+    assert_eq!(
+        status, 200,
+        "expected 200 from /report?redact=1, got {status}"
+    );
+    assert!(
+        body.contains("\"redacted_report\": true") || body.contains("\"redacted_report\":true"),
+        "/report?redact=1 should set redacted_report:true, got: {}",
+        &body[..body.len().min(400)]
+    );
+}
+
 /// An OQL query over the shared session works via the HTTP transport.
 #[test]
 fn mcp_http_oql_query() {

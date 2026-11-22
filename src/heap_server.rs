@@ -140,7 +140,14 @@ impl HeapServerState {
             // ── Report section(s) ─────────────────────────────────────────
             ("GET", "/report") => {
                 let section = qs_param(query, "section").unwrap_or("all");
-                ops(|| heap_ops::report_section(&self.sess, section))
+                let redact = qs_param(query, "redact")
+                    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                    .unwrap_or(false);
+                if redact {
+                    ops(|| heap_ops::report_section_redacted(&self.sess, section, None))
+                } else {
+                    ops(|| heap_ops::report_section(&self.sess, section))
+                }
             }
 
             // ── Histogram ─────────────────────────────────────────────────
@@ -287,7 +294,7 @@ impl HeapServerState {
                 {"method":"GET",  "path":"/",              "desc":"this document"},
                 {"method":"GET",  "path":"/status",        "desc":"always {\"status\":\"ready\"} (cache pre-loaded)"},
                 {"method":"GET",  "path":"/summary",       "desc":"top suspects + top classes"},
-                {"method":"GET",  "path":"/report",        "desc":"full report or ?section=leaks|top|threads|overview|triage|waste|..."},
+                {"method":"GET",  "path":"/report",        "desc":"full report or ?section=leaks|top|threads|overview|triage|waste|... (&redact=1 suppresses data values)"},
                 {"method":"GET",  "path":"/histogram",     "desc":"class histogram by retained size (?limit=N, default 50)"},
                 {"method":"POST", "path":"/query",         "desc":"OQL query (body = raw OQL text)"},
                 {"method":"GET",  "path":"/query",         "desc":"OQL query (?oql=SELECT+...)"},

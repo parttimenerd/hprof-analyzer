@@ -63,7 +63,7 @@ From `docs/notes/LEAKCANARY_INSPIRED_PROPOSALS.md`.
 
 | Feature | Notes |
 |---|---|
-| ~~**Redacted reports** (`heap report --redact`)~~ | **DONE** — `report::redact_report()` blanks data values (string contents, system-property values, constant-array values) while keeping class names, counts, retained sizes, dominator tree, and triage; `heap report --redact` (JSON or Markdown, any `--section`); `redacted_report: true` flag + a Markdown banner. Leak surface + the planted-sentinel guardrail test are in `docs/notes/DESIGN_REDACTED_REPORTS.md` and `src/report/redact_report.rs`. Distinct from `hprof-redact` (which zeros the raw dump binary). Not yet exposed on the HTTP/MCP transports (CLI only). |
+| ~~**Redacted reports** (`heap report --redact`)~~ | **DONE** — `report::redact_report()` blanks data values (string contents, system-property values, constant-array values) while keeping class names, counts, retained sizes, dominator tree, and triage; exposed on all transports: `heap report --redact` CLI, `GET /report?redact=1` HTTP, `get_report({redact:true})` MCP; `redacted_report: true` flag + a Markdown banner. Leak surface + the planted-sentinel guardrail test are in `docs/notes/DESIGN_REDACTED_REPORTS.md` and `src/report/redact_report.rs`. Distinct from `hprof-redact` (which zeros the raw dump binary). Remaining: HTML renderer has no redaction banner yet (nor for `redacted_input`). |
 
 ---
 
