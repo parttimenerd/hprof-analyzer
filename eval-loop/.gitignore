@@ -1,0 +1,4 @@
+# Local, secret, or generated — not committed
+opencode.json
+results/
+*.stderr

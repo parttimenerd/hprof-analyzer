@@ -1,0 +1,39 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "localproxy/gpt-5-mini",
+  "provider": {
+    "localproxy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Local Proxy",
+      "options": {
+        "baseURL": "http://localhost:6656/v1",
+        "apiKey": "${LOCALPROXY_API_KEY}"
+      },
+      "models": {
+        "gpt-5-mini": {
+          "name": "GPT-5 Mini",
+          "compatibility": { "maxTokensField": "max_completion_tokens" }
+        },
+        "gpt-6-astra": {
+          "name": "Codex Astra 6.1",
+          "compatibility": { "maxTokensField": "max_completion_tokens" }
+        },
+        "gpt-6-luna": {
+          "name": "GPT-6 Luna",
+          "compatibility": { "maxTokensField": "max_completion_tokens" }
+        }
+      }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "hprof": {
+        "type": "local",
+        "command": [
+          "/Users/i560383_1/code/experiments/hprof-analyzer/target/release/hprof-analyzer",
+          "mcp"
+        ]
+      }
+    }
+  }
+}
