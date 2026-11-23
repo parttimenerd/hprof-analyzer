@@ -6,6 +6,21 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **Leak suspects name the static-field GC-root owner** — a static cache or
+  collection (the most common real Java leak) is held by a static field, but
+  the dominator is often a transient `Thread` stack local, so the leak used to
+  be reported as `java.lang.Thread` with no hint of the real culprit. Suspects
+  now carry `owner_static_class` (and, with field-name capture, `owner_static_field`)
+  naming the class whose static field holds the leaking container — surfaced
+  across every transport: the Markdown leaks section ("Reachable from static
+  field `Class.field`"), `heap report --json`, the HTTP `/report` endpoint, and
+  the MCP `get_report` tool. Computed in pass2 (where the reference graph is
+  live) with no peak-RSS regression. Graph-mode analysis (`heap load
+  --with-graph`, MCP `with_graph:true`) now also captures per-edge field names.
+- **Eval harness for MCP/heap diagnostic quality (`eval-loop/`)** — a
+  blind-diagnosis loop that drives the MCP tools with an external model (no
+  ground truth) and compares the result to the `leak-demos/` scenarios, to find
+  cases where the tools fail to guide an analyst to the real culprit.
 - **REPL: user-defined views (`!define` / `!undefine`)** — save an OQL query as a
   named view with `!define big-strings SELECT * FROM java.lang.String s WHERE
   s.value.length > 1000 LIMIT 50`, then run it by name (`big-strings`, `!run
