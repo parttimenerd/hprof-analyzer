@@ -1650,7 +1650,7 @@ function IdeBtn({ cls }: { cls: string }) {
       aria-label="Jump to source in IDE"
       onClick={(e) => {
         e.stopPropagation();
-        fetch(`http://localhost:${port}/ide/${encodeURIComponent(cls)}`, { method: "POST" }).catch(() => {});
+        fetch(`http://localhost:${port}/ide/class/${encodeURIComponent(cls)}`, { method: "POST" }).catch(() => {});
       }}
       style={{ opacity: 0.7 }}
     >
