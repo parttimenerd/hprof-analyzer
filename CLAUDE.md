@@ -22,7 +22,7 @@ claude mcp add hprof -- hprof-analyzer mcp
 1. `get_session_info` — check if a dump is already loaded
 2. `load_dump({path: "/absolute/path/to/dump.hprof"})` — first load takes 5–15 min, repeat loads ~1 s
 3. `get_report({section: "triage"})` — severity-tagged signals, fastest diagnosis
-4. `get_report({section: "leaks"})` — root paths + dominator tree per suspect
+4. `get_report({section: "leaks"})` — root paths + dominator tree per suspect. When a suspect carries `owner_static_class`/`owner_static_field`, that static field is the real leak root (report it, not a transient `Thread` dominator).
 5. `query({oql: "top-retained-by-class"})` — confirm which class dominates memory
 
 **Graph traversal primitives (iterative exploration):**

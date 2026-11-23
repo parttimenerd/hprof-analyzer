@@ -644,7 +644,7 @@ enum HeapCmd {
         /// or all (default).
         #[arg(long, value_name = "SECTION", value_parser = [
             PossibleValue::new("triage").help("Severity-tagged signals; best first call for diagnosis"),
-            PossibleValue::new("leaks").help("Leak suspects with root paths and dominator tree"),
+            PossibleValue::new("leaks").help("Leak suspects with root paths, dominator tree, and the static-field owner (owner_static_class) when a static field holds the leak"),
             PossibleValue::new("top").help("Biggest objects and classes by retained size"),
             PossibleValue::new("overview").help("Heap totals, object count, identifier size"),
             PossibleValue::new("threads").help("Per-thread retained sizes and stack traces"),

@@ -124,7 +124,7 @@ pub struct GetReportParams {
     ///   "top-classes"  — top 20 biggest classes by retained size with holder breakdown (use limit to adjust)
     ///
     /// CORE SECTIONS:
-    ///   "leaks"    — leak suspects with root paths, dominated objects, dominator tree (capped at depth 3, 20 children/node)
+    ///   "leaks"    — leak suspects with root paths, dominated objects, dominator tree (capped at depth 3, 20 children/node). Each suspect may carry `owner_static_class` (and `owner_static_field`) naming the class whose STATIC FIELD holds the leaking container — the real durable root for a static cache/collection leak, even when the suspect's dominator is a transient `Thread`. Prefer this over the `Thread` label when present.
     ///   "top"      — LARGE: full biggest-objects + biggest-classes lists; prefer "top-objects" or "top-classes"
     ///   "threads"  — per-thread retained sizes + stack traces (sorted by retained desc, limited by limit param)
     ///   "overview" — heap totals, object count, identifier size
@@ -846,7 +846,7 @@ impl HprofMcpServer {
                           \n                    After reading triage: act on EVERY critical/warning item by its id:\
                           \n                    headline-retainer/threadlocal-leak → get_report(leaks); off-heap → get_report(indicators);\
                           \n                    gc-waste → query(heap-summary); component-retention-imbalance → get_report(components)\
-                          \n  \"leaks\"        — suspects with root_path, dominated objects, dominator_tree\
+                          \n  \"leaks\"        — suspects with root_path, dominated objects, dominator_tree, and owner_static_class/owner_static_field (the static field holding the leak, when any — the real root behind a Thread-dominated static cache)\
                           \n  \"retainers\"    — top stack frames/fields by retained size (who is keeping things alive)\
                           \n  \"dominators\"   — big-drop objects (retain >> largest child)\
                           \n\nOTHER SECTIONS:\
@@ -1745,7 +1745,7 @@ impl ServerHandler for HprofMcpServer {
                   off-heap → get_report(indicators) for DirectByteBuffer total\n\
                   gc-waste → query(heap-summary) to see what's accumulating\n\
                   component-retention-imbalance → get_report(components)\n\
-             3. get_report({\"section\":\"leaks\"})           — root paths, dominated objects, dominator_tree\n\
+             3. get_report({\"section\":\"leaks\"})           — root paths, dominated objects, dominator_tree. A suspect's `owner_static_class`/`owner_static_field` (when present) name the static field holding the leak — report THAT as the culprit, not a transient `Thread` dominator.\n\
              4. browse_dominators({object_index: ...})   — drill into accumulation point\n\
              5. get_report({\"section\":\"top-classes\"})     — which classes dominate memory\n\n\
              GRAPH TRAVERSAL PRIMITIVES (for iterative exploration):\n\

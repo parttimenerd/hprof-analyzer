@@ -523,6 +523,8 @@ _Objects and class groups retaining the most heap, ranked by retained size — t
 
 One `scala.runtime.LazyVals$` object (shallow 32 B) dominates this retained heap.
 
+**Reachable from static field `scala.runtime.LazyVals$`** — a static field is a GC root, so this will not be collected until the field is cleared.
+
 Retained heap accumulates at `java.lang.Object[]` (retained 2.5 MB).
 
 _Directly dominates 131,072 objects (showing top 1 classes by retained heap)._
