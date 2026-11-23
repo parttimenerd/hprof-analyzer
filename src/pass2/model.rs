@@ -480,6 +480,16 @@ pub struct Graph {
     /// Deduped field-name strings indexed by `fwd_field_name_idx`.
     /// Pool[0] is always "" (no name). Populated only when `--ref-paths` is set.
     pub field_name_pool: Option<Vec<String>>,
+    /// GAP 1: static-field GC-root ownership. Maps a pointee dense object index
+    /// → (owning class-histogram row, field-name-pool index). Built in pass2
+    /// while the forward CSR is live (it is freed before `build_model`), so the
+    /// leak-suspect builder can name the static field that holds a leaking
+    /// container (e.g. `com.example.Cache.CACHE`) — the durable root behind the
+    /// most common real leak, which otherwise looks dominated by a transient
+    /// Thread stack local. The field-name index is 0 ("no name") unless
+    /// field-name capture (graph/`--ref-paths`) was on. First static owner per
+    /// pointee wins. Empty when no Class static field references any object.
+    pub static_owners: std::collections::HashMap<u32, (u32, u16)>,
     /// Sum of `capacity` fields across all live `java/nio/DirectByteBuffer`
     /// instances. 0 when no such instances are found or the field cannot be
     /// resolved. Computed unconditionally during the pass2 field-decode scan.
@@ -2295,6 +2305,7 @@ mod obj_graph_tests {
             node_kv: None,
             fwd_field_name_idx: None,
             field_name_pool: None,
+            static_owners: std::collections::HashMap::new(),
             direct_byte_buffer_capacity_sum: 0,
             direct_byte_buffer_count: 0,
             direct_byte_buffer_cap_buckets: [0; 8],

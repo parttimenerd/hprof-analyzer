@@ -758,6 +758,20 @@ pub struct Suspect {
     /// older JSON loadable.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path_note: String,
+    /// When the suspect's accumulation point is held alive by a **static field**
+    /// of a class (a GC-root-via-static-field — the most common real leak), the
+    /// fully-qualified owning class name (e.g. `com.example.Cache`). This is the
+    /// durable root; it is surfaced even when the dominator chain terminates at a
+    /// transient `Thread` stack local that also happens to reference the object.
+    /// Empty when no static-field owner was found. Only for single suspects.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub owner_static_class: String,
+    /// The static field name within [`owner_static_class`] that holds the
+    /// accumulation (e.g. `CACHE`), when field-name data is available (graph /
+    /// `--ref-paths` mode). Empty when the owner class is known but the field
+    /// name is not. Meaningless unless `owner_static_class` is set.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub owner_static_field: String,
 }
 
 /// Aggregates for the "Leak Suspects" section.

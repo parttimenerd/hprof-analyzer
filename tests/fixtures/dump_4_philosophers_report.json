@@ -59432,6 +59432,7 @@
           "scala.runtime.LazyVals$",
           "java.lang.Object[]"
         ],
+        "owner_static_class": "scala.runtime.LazyVals$",
         "path": [
           {
             "depth": 0,

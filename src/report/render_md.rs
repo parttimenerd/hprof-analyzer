@@ -1732,6 +1732,21 @@ Investigate only if the instance count is unexpectedly high \
             if !s.root_type_label.is_empty() {
                 out.push_str(&format!("Held by a **{}** GC root.\n\n", s.root_type_label));
             }
+            // GAP 1: name the static-field owner when known — the durable root
+            // behind the common static-cache/collection leak (the dominating
+            // GC root above may be a transient Thread stack local).
+            if !s.owner_static_class.is_empty() {
+                let field = if s.owner_static_field.is_empty() {
+                    String::new()
+                } else {
+                    format!(".{}", s.owner_static_field)
+                };
+                out.push_str(&format!(
+                    "**Reachable from static field `{}{}`** — a static field is a GC root, so \
+                     this will not be collected until the field is cleared.\n\n",
+                    s.owner_static_class, field,
+                ));
+            }
             match (
                 &s.accumulation_class,
                 s.accumulation_obj_1based,

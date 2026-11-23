@@ -242,6 +242,62 @@ fn check_joint_node_thread(report: &Report) {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: static_cache_owner (GAP 1 — name the static-field GC-root owner)
+// ---------------------------------------------------------------------------
+
+fn opts_with_ref_paths() -> AnalyzeOptions {
+    let mut o = AnalyzeOptions::default();
+    // Capture per-edge field names so the static-field NAME (not just the
+    // owning class) is resolved.
+    o.ref_paths = true;
+    o
+}
+
+fn build_static_cache_owner() -> Vec<u8> {
+    let mut b = HeapBuilder::new();
+    heap_builder::build_static_cache_owner_scenario(
+        &mut b,
+        "com/example/LeakyService",
+        "CACHE",
+        40,
+        400,
+    );
+    b.build()
+}
+
+fn check_static_cache_owner(report: &Report) {
+    // The accumulation is dominated by a transient Thread stack local, so the
+    // suspect's pretty_class may be "java.lang.Thread" — but GAP 1 requires the
+    // suspect to NAME the durable static-field owner instead of leaving the
+    // analyst to guess it.
+    let s = report
+        .leaks
+        .suspects
+        .iter()
+        .find(|s| !s.owner_static_class.is_empty())
+        .unwrap_or_else(|| {
+            panic!(
+                "no suspect named a static-field owner (GAP 1 regression)\nsuspects: {:#?}",
+                report.leaks.suspects
+            )
+        });
+    assert!(
+        s.owner_static_class.contains("LeakyService"),
+        "owner_static_class = {:?}, expected it to name com.example.LeakyService",
+        s.owner_static_class,
+    );
+    // The static-field NAME is best-effort: it needs per-edge field-name capture
+    // (ref_paths) AND a named static edge in the graph. When resolved it must be
+    // the real field; empty is tolerated (the owning class is the guaranteed
+    // signal). Never a wrong name.
+    assert!(
+        s.owner_static_field.is_empty() || s.owner_static_field == "CACHE",
+        "owner_static_field = {:?}, expected \"CACHE\" or empty",
+        s.owner_static_field,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Scenario 4: Off-heap DirectByteBuffer (fires "off-heap" triage signal)
 // ---------------------------------------------------------------------------
 
@@ -1288,6 +1344,12 @@ const SCENARIOS: &[Scenario] = &[
         build: build_thread_as_transiter_no_triple_fire,
         check: check_thread_as_transiter_no_triple_fire,
     },
+    Scenario {
+        name: "static_cache_owner",
+        opts: opts_with_ref_paths,
+        build: build_static_cache_owner,
+        check: check_static_cache_owner,
+    },
 ];
 
 #[test]
@@ -1600,6 +1662,11 @@ fn scenario_thread_as_transiter_no_triple_fire() {
     run_scenario(&SCENARIOS[40]);
 }
 
+#[test]
+fn scenario_static_cache_owner() {
+    run_scenario(&SCENARIOS[41]);
+}
+
 /// Sanity check that the table and the explicit `#[test]` fns stay in sync
 /// (every table row has a dedicated test above) — catches "added a row,
 /// forgot the #[test]" at compile-adjacent time rather than silently never
@@ -1608,7 +1675,7 @@ fn scenario_thread_as_transiter_no_triple_fire() {
 fn all_scenarios_have_a_dedicated_test() {
     assert_eq!(
         SCENARIOS.len(),
-        41,
+        42,
         "update this test when adding scenarios"
     );
 }

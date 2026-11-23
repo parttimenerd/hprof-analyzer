@@ -59,6 +59,8 @@ mod tests {
             dominator_tree: None,
             merged_paths: None,
             path_note: String::new(),
+            owner_static_class: String::new(),
+            owner_static_field: String::new(),
         }
     }
 

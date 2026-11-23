@@ -581,6 +581,59 @@ pub fn build_joint_node_thread_scenario(
     ("Thread".to_string(), tree_class_name.replace('/', "."))
 }
 
+/// GAP 1 scenario: a large accumulation held by BOTH a transient
+/// `java/lang/Thread.target` (which dominates it, so it becomes the leak
+/// suspect) AND a `owner_class`'s static field `static_field` (the durable
+/// GC root — the real leak). Mirrors `01_StaticCacheLeak`: the report must
+/// name the static-field owner, not just "Thread".
+///
+/// Returns `(owner_class_dotted, static_field_name)` for the check to assert
+/// against `Suspect.owner_static_class` / `owner_static_field`.
+pub fn build_static_cache_owner_scenario(
+    b: &mut HeapBuilder,
+    owner_class: &str,
+    static_field: &str,
+    depth: usize,
+    payload_ints: usize,
+) -> (String, String) {
+    // A padded node class (child pointer + int padding to inflate shallow size).
+    let mut fields: Vec<(&str, u8)> = vec![("child", T_OBJECT)];
+    for i in 0..payload_ints {
+        fields.push((Box::leak(format!("pad{i}").into_boxed_str()), T_INT));
+    }
+    let node_class = b.class("scenarios/CachedEntry", &fields);
+
+    // Build a chain; `root_id` is the head (what both roots point at).
+    let mut child_id: u64 = 0;
+    let mut root_id = 0u64;
+    for level in 0..depth {
+        let obj_id = b.fresh_id();
+        let mut data = Vec::new();
+        obj_field(&mut data, child_id);
+        for i in 0..payload_ints {
+            int_field(&mut data, 0x5A5A_0000 + i as i32);
+        }
+        b.instance_at(obj_id, node_class, &data);
+        child_id = obj_id;
+        if level == depth - 1 {
+            root_id = obj_id;
+        }
+    }
+
+    // Transient Thread stack local that references the head — this becomes the
+    // dominator (and, before GAP 1, the misattributed suspect).
+    let thread_class = b.class("java/lang/Thread", &[("target", T_OBJECT)]);
+    let mut tdata = Vec::new();
+    obj_field(&mut tdata, root_id);
+    let thread_obj = b.instance(thread_class, &tdata);
+    b.thread_root(thread_obj);
+
+    // Durable static-field owner: `owner_class.static_field` → the same head.
+    b.class_with_static_root(owner_class, static_field, root_id, &[]);
+
+    (owner_class.replace('/', "."), static_field.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Scenario 4: Off-heap DirectByteBuffer (fires "off-heap" triage signal)
 // ---------------------------------------------------------------------------

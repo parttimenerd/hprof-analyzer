@@ -1470,6 +1470,32 @@ impl Pass2 {
         }
         fwd_offsets[0] = 0;
 
+        // GAP 1: while the forward CSR is live (it is freed before build_model),
+        // record static-field GC-root ownership. Each `java.lang.Class` object's
+        // forward edges are its static-field values; map each referenced object
+        // → (owning class-histogram row, field-name index) so the leak-suspect
+        // builder can name the static field holding a leaking container. Bounded
+        // by the number of static reference fields (small vs the heap). First
+        // owner per pointee wins; the field-name index is 0 unless field-name
+        // capture was on.
+        let static_owners: HashMap<u32, (u32, u16)> = {
+            let mut owners: HashMap<u32, (u32, u16)> = HashMap::new();
+            for (&class_obj_idx, &class_row) in class_obj_class_idx.iter() {
+                let co = class_obj_idx as usize;
+                if co + 1 >= fwd_offsets.len() {
+                    continue;
+                }
+                let start = fwd_offsets[co] as usize;
+                let end = fwd_offsets[co + 1] as usize;
+                for pos in start..end {
+                    let tgt = fwd_targets.get(pos);
+                    let name_idx = fwd_field_name_idx_opt.as_ref().map(|v| v[pos]).unwrap_or(0);
+                    owners.entry(tgt).or_insert((class_row, name_idx));
+                }
+            }
+            owners
+        };
+
         // Restore in_degree from compressed blob (if compressed above).
         if let Some(c) = in_degree_c {
             in_degree = c.restore()?;
@@ -1608,6 +1634,7 @@ impl Pass2 {
             jlc_idx,
             fwd_offsets,
             fwd_targets,
+            static_owners,
             synthetic_root_count,
             system_classloader_shallow,
             idom: Vec::new(),

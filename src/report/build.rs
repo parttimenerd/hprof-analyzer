@@ -4474,6 +4474,47 @@ pub(crate) fn build_leak_suspects(
                 )
             });
 
+            // GAP 1: name the static-field GC-root owner of a leaking container
+            // (the #1 real leak, otherwise misattributed to a transient
+            // `Thread`). `g.static_owners` (pointee → (class row, field-name
+            // idx)) was precomputed in pass2 while the forward CSR was live.
+            // Probe the suspect object, the accumulation point, and the descent
+            // `path` between them — the leaking collection is usually one of
+            // these — and take the first static owner found.
+            let (owner_static_class, owner_static_field) =
+                if s.is_single && !g.static_owners.is_empty() {
+                    let mut probes: Vec<u32> = Vec::with_capacity(path.len() + 2);
+                    probes.push(s.obj_idx);
+                    if let Some(ap) = accumulation {
+                        probes.push(ap as u32);
+                    }
+                    for st in &path {
+                        probes.push(st.object_index as u32);
+                    }
+                    let mut found = (String::new(), String::new());
+                    for p in probes {
+                        if let Some(&(class_row, name_idx)) = g.static_owners.get(&p) {
+                            let cls = if (class_row as usize) < g.class_names.len() {
+                                pretty_class_name(&g.class_names[class_row as usize])
+                            } else {
+                                continue;
+                            };
+                            let field = g
+                                .field_name_pool
+                                .as_ref()
+                                .and_then(|pool| pool.get(name_idx as usize))
+                                .filter(|s| !s.is_empty())
+                                .cloned()
+                                .unwrap_or_default();
+                            found = (cls, field);
+                            break;
+                        }
+                    }
+                    found
+                } else {
+                    (String::new(), String::new())
+                };
+
             Suspect {
                 is_single: s.is_single,
                 pretty_class,
@@ -4506,6 +4547,8 @@ pub(crate) fn build_leak_suspects(
                      dominator paths to GC roots are in `merged_paths`."
                         .to_string()
                 },
+                owner_static_class,
+                owner_static_field,
             }
         })
         .collect();

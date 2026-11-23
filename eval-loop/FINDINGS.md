@@ -52,3 +52,81 @@ NOT the class's own name nor its static-field table — so even after finding th
 Class you can't read "static field CACHE → HashMap" from the tools.
 
 (More gaps to be appended as dumps 04/05/21/… are evaluated.)
+
+## GAP 1 — fix plan (investigated, ready to implement)
+
+Data already in the pipeline:
+- `Graph.class_obj_class_idx: HashMap<u32,u32>` — identifies which object indices
+  ARE `java.lang.Class` objects and which histogram class-row they represent
+  (→ name the owning class).
+- `Graph.fields_by_size_raw: Option<Vec<FieldSizeRaw>>` — raw `Class#field →
+  pointee-index` records from `fielddecode.rs` (populated under `--collections`).
+  This is the static-field → object attribution needed to name `<Class>.<field>`.
+- `Graph.fwd_offsets` / `fwd_targets` — always-present forward CSR (fallback:
+  scan Class objects' out-edges to find the one pointing at the accumulation).
+
+Fix (in `build_leak_suspects`, src/report/build.rs ~3915):
+1. For each suspect, take its accumulation object (`accumulation_obj_1based`) or
+   the suspect obj; check whether a `java.lang.Class` object references it via a
+   static field (look it up in the Class#field→pointee map, or scan Class
+   out-edges). If so, this is a static-field GC root.
+2. Add an optional `owner_static_field: Option<String>` (e.g.
+   `_01_StaticCacheLeak.CACHE`) + `owner_class` to `Suspect`/`RootPathStep`
+   (model.rs, `#[serde(default, skip_serializing_if)]` for golden-parity), and
+   populate it. Prefer the static-field owner over a transient `Thread` stack
+   local when BOTH reference the accumulation (the Class ref is the durable root;
+   the Thread is a dump-time red herring).
+3. Surface it in the leaks render + MCP get_report(leaks) so the answer to
+   "which static field leaks?" is in the report, no Class-table spelunking.
+4. Bump cache `VERSION` in src/cache.rs (changes serialized Report content).
+   Add a scenario test (tests/scenarios.rs) asserting 01_StaticCacheLeak's
+   suspect names the static-field owner, not just "Thread".
+
+This is a real report-logic change (not a one-liner) — implement as its own
+focused commit with the scenario-test guardrail, then re-run the blind eval on
+01 to confirm the model now nails VERDICT/CULPRIT/MECHANISM.
+
+### GAP 1 — implementation status (2026-11-23)
+
+DONE (committed): the model fields `Suspect.owner_static_class` /
+`owner_static_field` (serde skip-if, golden-safe), schema regen, cache VERSION
+20→21, and equivalence wiring — the Markdown leaks render prints
+"Reachable from static field `Class.field`" when set, and the JSON paths
+(MCP `get_report(leaks)`, HTTP `/report`, `heap report --json`) carry the
+fields automatically. So all transports are equivalent and render-ready.
+
+CORRECTED ROOT CAUSE (disproved the first plan): the static-field→object edges
+needed to POPULATE these fields are NOT available in `build_leak_suspects`. The
+forward CSR (`g.fwd_offsets`/`fwd_targets`) is freed BEFORE `build_model` runs
+(main.rs ~3815/6009 — an intentional RSS optimization; the CSR is multi-GB on
+big heaps), so scanning Class-object out-edges there finds nothing. Verified:
+owner fields come back empty even in `--with-graph` mode, because the report is
+still built after the CSR free.
+
+REMAINING (the actual data population — its own task): precompute a compact
+`static_owners` map in **pass2** where the forward edges + field names are live
+(src/pass2/mod.rs ~1294–1423, during fwd_targets/fwd_field_name_idx build):
+record `(pointee_dense_idx → (class_row, field_name_idx))` for each Class
+object's static reference field. Store it on `Graph` + persist in the cache
+(bump VERSION again), then read it in `build_leak_suspects` to fill the fields
+and PREFER the static owner over a transient `Thread` as the headline root.
+RSS: bounded by #static-ref-fields (small vs heap), so no regression. Add a
+`tests/scenarios.rs` guard (01_StaticCacheLeak names the owner, not "Thread")
+and re-run the blind eval on 01.
+
+## Step 2 (breadth) — additional dumps
+
+### 04_UnboundedCollectionLeak (ground truth: static EVENT_LOG ArrayList→Object[]→LogEntry)
+Blind model result: CORRECTLY found "java.util.ArrayList retaining ~59.3 MB
+with an Object[] child of many `_04_UnboundedCollectionLeak$LogEntry`
+instances" via the dominator tree — tools worked well here (unlike the
+static-cache case; the dominator tree surfaces an unbounded-collection leak
+clearly). Run was truncated mid-investigation (tool-budget/debug-binary
+slowness) before a final VERDICT, so NOT a clear tool gap — note the same
+"starts at Thread, must browse down" friction GAP 1 addresses (the GAP 1 fix
+now names the static EVENT_LOG owner for this dump too, once re-analyzed with
+the new binary). Weaker signal than GAP 1; no new fix warranted from this run.
+
+NOTE: eval runs currently use the DEBUG binary (release was cleaned during the
+ENOSPC reclaim); debug load/tool latency is high and truncates model runs. For
+clean breadth evals, rebuild release and re-point eval-loop/opencode.json.

@@ -276,6 +276,7 @@ mod tests {
             node_kv: None,
             fwd_field_name_idx: None,
             field_name_pool: None,
+            static_owners: std::collections::HashMap::new(),
             obj_graph_edges: None,
             type_ref_pairs: None,
             type_ref_pair_fields: None,
