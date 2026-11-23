@@ -969,6 +969,21 @@ fn analyze_to_report_inner_with_cache(
     let compress = cvec::Codec::Deflate1;
     let mut no_in_sets = std::collections::HashMap::new();
     let mut no_exists_bools = std::collections::HashMap::new();
+    // GAP 1: in graph mode (`heap load --with-graph`, MCP with_graph:true) the
+    // forward CSR is already built + persisted, so also capture per-edge field
+    // names (bounded by the pass2 FIELD_NAME_EDGE_CAP for RSS). This lets the
+    // leak-suspect builder resolve the static-field NAME (e.g. `.CACHE`), not
+    // just the owning class, for `Suspect.owner_static_field`.
+    let effective_opts;
+    let opts = if mode == cache::CacheMode::Graph && !opts.obj_graph {
+        effective_opts = AnalyzeOptions {
+            obj_graph: true,
+            ..opts.clone()
+        };
+        &effective_opts
+    } else {
+        opts
+    };
     let (
         mut g,
         mut inbound,

@@ -130,3 +130,16 @@ the new binary). Weaker signal than GAP 1; no new fix warranted from this run.
 NOTE: eval runs currently use the DEBUG binary (release was cleaned during the
 ENOSPC reclaim); debug load/tool latency is high and truncates model runs. For
 clean breadth evals, rebuild release and re-point eval-loop/opencode.json.
+
+## GAP 1 follow-up: field NAME for statics (partial)
+
+Graph mode (`heap load --with-graph` / MCP with_graph:true) now forces
+`obj_graph=true` into pass2 (lib.rs, analyze_to_report_inner_with_cache) so
+per-edge field names ARE captured (bounded by FIELD_NAME_EDGE_CAP) — this gives
+instance-field root-path edges their names and was needed for owner_static_field.
+BUT owner_static_field is still empty for the static-cache case: a Class object's
+STATIC-field edges are emitted in fill_heap_2b WITHOUT a field-name-pool index
+(only instance-field edges get annotated), so static_owners records name_idx 0.
+Resolving the static field NAME requires annotating static-field edge names in
+the Class-dump decode (fill_heap_2b) — a deeper hot-path change, deferred. The
+owning CLASS (the primary, actionable signal) works across all transports.
