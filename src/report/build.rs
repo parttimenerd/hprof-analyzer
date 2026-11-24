@@ -4486,10 +4486,16 @@ pub(crate) fn build_leak_suspects(
                     let mut probes: Vec<u32> = Vec::with_capacity(path.len() + 2);
                     probes.push(s.obj_idx);
                     if let Some(ap) = accumulation {
-                        probes.push(ap as u32);
+                        // Only probe if index fits in u32 to avoid truncation bugs
+                        if let Ok(ap_u32) = u32::try_from(ap) {
+                            probes.push(ap_u32);
+                        }
                     }
                     for st in &path {
-                        probes.push(st.object_index as u32);
+                        // Only probe if index fits in u32 to avoid truncation bugs
+                        if let Ok(idx_u32) = u32::try_from(st.object_index) {
+                            probes.push(idx_u32);
+                        }
                     }
                     let mut found = (String::new(), String::new());
                     for p in probes {
