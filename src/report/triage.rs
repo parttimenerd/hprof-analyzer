@@ -670,6 +670,77 @@ fn has_dominant_culprit(r: &Report) -> bool {
     !r.primary_culprits.is_empty()
 }
 
+/// Does `name` look like a collection/map/array container — the shape a cache
+/// or index takes on the heap? Substring/prefix match on the common JDK and
+/// framework container types plus any array (`[`-prefixed JVM array descriptor).
+fn is_collection_shape(name: &str) -> bool {
+    name.starts_with('[')
+        || name.contains("HashMap")
+        || name.contains("TreeMap")
+        || name.contains("LinkedHashMap")
+        || name.contains("ConcurrentHashMap")
+        || name.contains("ConcurrentMap")
+        || name.contains("HashSet")
+        || name.contains("TreeSet")
+        || name.contains("ArrayList")
+        || name.contains("LinkedList")
+        || name.contains("ArrayDeque")
+        || name.contains("Vector")
+        || name.contains("Hashtable")
+        || name.contains("$Node")
+        || name.contains("$Entry")
+        // Common cache libraries (Caffeine/Guava/Ehcache) — their backing
+        // maps are the accumulation shape even when the suspect class is the
+        // cache wrapper itself.
+        || name.contains("Cache")
+        || name.contains("cache")
+}
+
+/// Issue-2 softener: is this dominant culprit a static-field-held container
+/// (an intentional cache/index) rather than an unambiguous leak? We cannot tell
+/// leak-vs-cache from a single snapshot — a bounded cache and an unbounded leak
+/// look identical at one instant — so when the dominant retainer is (a) reachable
+/// from a STATIC field (the GAP-1 `owner_static_*` data) and (b) a collection/map
+/// shape, the honest classification is "large, static-held, cache-shaped — verify
+/// whether it grows unbounded," at Warning rather than Critical. A dominant object
+/// that is NOT static-held, or not container-shaped, keeps its Critical signal.
+///
+/// Returns the owner string to surface when it fires (`Owner.field`, or just
+/// `Owner` when the field name was not captured), else `None`.
+fn intentional_cache_owner(r: &Report) -> Option<String> {
+    let c = r.primary_culprits.first()?;
+    let s = r.leaks.suspects.get(c.suspect_index)?;
+    // (a) must be reachable from a static field. The OWNING CLASS is the
+    // guaranteed GAP-1 signal; the field NAME is best-effort (needs per-edge
+    // capture), so key the softener on the class alone and append the field
+    // only when it was resolved.
+    if s.owner_static_class.is_empty() {
+        return None;
+    }
+    // (b) the culprit / suspect / accumulation / dominated shape must look like
+    // a container. Any one of these naming a collection shape is enough — the
+    // static field itself commonly holds a `Map` whose `$Node`s accumulate.
+    let accum = s.accumulation_class.as_deref().unwrap_or("");
+    let dominated_top = s
+        .dominated_by_class
+        .first()
+        .map(|h| h.pretty_class.as_str())
+        .unwrap_or("");
+    let shaped = is_collection_shape(&c.class_name)
+        || is_collection_shape(&s.pretty_class)
+        || is_collection_shape(accum)
+        || is_collection_shape(dominated_top)
+        || is_collection_shape(&s.owner_static_class);
+    if !shaped {
+        return None;
+    }
+    if s.owner_static_field.is_empty() {
+        Some(s.owner_static_class.clone())
+    } else {
+        Some(format!("{}.{}", s.owner_static_class, s.owner_static_field))
+    }
+}
+
 /// Headline retainer. Reads `primary_culprits` (preferred — the refined,
 /// resolved culprit class, not necessarily the same as the raw top-level
 /// suspect) with `leaks.suspects` / `top.biggest_objects` as fallbacks for
@@ -687,6 +758,31 @@ impl Rule for HeadlineRetainer {
                 "a class group"
             };
             let value_hint = map_entry_value_suffix(&c.class_name, r);
+            // Issue-2: a static-held, cache-shaped dominant retainer is reported
+            // as a Warning with a "verify unbounded growth" caveat — a bounded
+            // cache and an unbounded leak are indistinguishable in one snapshot,
+            // so a confident Critical "leak" would cry wolf on healthy caches.
+            if let Some(owner) = intentional_cache_owner(r) {
+                return Some(signal_cls(
+                    "headline-retainer",
+                    TriageSeverity::Warning,
+                    "Headline Retainer",
+                    format!(
+                        "`{}` ({}) retains {} ({:.1}% of reachable heap), held by static field `{}`. \
+                         A static cache/index of this shape may be intentional — this is a large \
+                         retained set, not necessarily a leak. Verify whether it grows unbounded \
+                         (compare against an earlier dump, or check for an eviction policy).{}",
+                        c.class_name,
+                        kind,
+                        format_bytes(c.retained),
+                        c.retained_pct,
+                        owner,
+                        value_hint,
+                    ),
+                    Some(("leak-suspects", "Leak Suspects")),
+                    &c.class_name,
+                ));
+            }
             return Some(signal_cls(
                 "headline-retainer",
                 TriageSeverity::Critical,
@@ -816,6 +912,25 @@ impl Rule for Concentration {
             // as "X holds Y%" (with no held_by) is redundant noise.
             if held_by.is_empty() {
                 return None;
+            }
+            // Issue-2: mirror HeadlineRetainer — a static-held, cache-shaped
+            // concentration is a Warning that does NOT assert "freeing this
+            // would reclaim the heap / this is a leak", since the retention may
+            // be an intentional bounded cache.
+            if intentional_cache_owner(r).is_some() {
+                return Some(signal_cls(
+                    "concentration",
+                    TriageSeverity::Warning,
+                    "Concentration",
+                    format!(
+                        "highly concentrated — `{}` ({}){} holds {:.1}% of the heap. \
+                         Concentration in a static cache/index is expected; confirm the \
+                         structure is bounded before treating it as a leak.",
+                        c.class_name, kind, held_by, c.retained_pct,
+                    ),
+                    Some(("leak-suspects", "Leak Suspects")),
+                    &c.class_name,
+                ));
             }
             return Some(signal_cls(
                 "concentration",
@@ -2297,9 +2412,31 @@ impl Rule for BigDropConcentration {
         } else {
             String::new()
         };
+        // Issue-2: when the big-drop node IS the static-held, cache-shaped
+        // dominant culprit that HeadlineRetainer/Concentration softened, keep
+        // this consistent — a Warning describing the structure, not a Critical
+        // that reads as a confirmed leak. The wording stays diagnostic (follow
+        // the chain) but no longer implies a problem by severity alone.
+        // Issue-2: when the dominant culprit is a static-held, cache-shaped
+        // retainer that HeadlineRetainer/Concentration softened, keep the
+        // big-drop consistent — Warning, not Critical. The big-drop node is
+        // usually the cache's OWN backing storage (e.g. `HashMap$Node[]` inside
+        // a static `HashMap`), so its class rarely equals the culprit class;
+        // soften whenever the softener fired AND this node is itself a
+        // collection shape (its backing array/nodes) OR matches the culprit.
+        let cache_owner = intentional_cache_owner(r);
+        let culprit_class = r.primary_culprits.first().map(|c| c.class_name.as_str());
+        let is_softened_cache = cache_owner.is_some()
+            && (culprit_class == Some(row.display_class.as_str())
+                || is_collection_shape(&row.display_class));
+        let severity = if is_softened_cache {
+            TriageSeverity::Warning
+        } else {
+            TriageSeverity::Critical
+        };
         Some(signal_cls(
             "big-drop-concentration",
-            TriageSeverity::Critical,
+            severity,
             "Dominator-Tree Big Drop",
             format!(
                 "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
@@ -4915,6 +5052,95 @@ mod tests {
         let s = Concentration.eval(&r).expect("always fires");
         assert!(s.detail.contains("highly concentrated"));
         assert!(s.detail.contains("held by `com.example.Holder#field`"));
+    }
+
+    /// Issue-2: a static-field-held, collection-shaped dominant retainer (a
+    /// healthy intentional cache) must be reported as WARNING, not Critical, and
+    /// name the static owner + the "verify unbounded growth" caveat — so a cold
+    /// agent does not read it as a confirmed leak.
+    #[test]
+    fn static_held_cache_downgrades_headline_and_concentration_to_warning() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 1000;
+        r.leaks.suspects = vec![Suspect {
+            is_single: true,
+            pretty_class: "java.util.HashMap".into(),
+            instance_count: 1,
+            retained: 974,
+            // GAP-1 data: reachable from a static field.
+            owner_static_class: "com.example.CatalogService".into(),
+            owner_static_field: "CATALOG".into(),
+            // Accumulation shape is a map node — the cache's backing storage.
+            accumulation_class: Some("java.util.HashMap$Node".into()),
+            ..Default::default()
+        }];
+        r.primary_culprits = vec![CulpritRef {
+            class_name: "java.util.HashMap".into(),
+            suspect_index: 0,
+            retained_pct: 97.4,
+            retained: 974,
+            basis: CulpritBasis::SingleObject,
+        }];
+
+        let h = HeadlineRetainer.eval(&r).expect("headline always fires");
+        assert_eq!(
+            h.severity,
+            TriageSeverity::Warning,
+            "static-held cache headline must be Warning, not Critical"
+        );
+        assert!(
+            h.detail.contains("CatalogService.CATALOG"),
+            "headline must name the static owner: {}",
+            h.detail
+        );
+        assert!(
+            h.detail.contains("not necessarily a leak"),
+            "headline must carry the cache caveat: {}",
+            h.detail
+        );
+
+        let c = Concentration.eval(&r).expect("concentration fires");
+        assert_eq!(
+            c.severity,
+            TriageSeverity::Warning,
+            "static-held cache concentration must be Warning"
+        );
+        assert!(
+            !c.detail.contains("would reclaim most of the heap"),
+            "softened concentration must not assert leak-style reclamation: {}",
+            c.detail
+        );
+    }
+
+    /// Regression guard: a dominant retainer that is NOT static-held keeps its
+    /// Critical severity — the softener must not swallow genuine single-object
+    /// dominance that lacks a static-cache shape.
+    #[test]
+    fn non_static_dominant_object_stays_critical() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 1000;
+        r.leaks.suspects = vec![Suspect {
+            is_single: true,
+            pretty_class: "com.example.LeakyBuffer".into(),
+            instance_count: 1,
+            retained: 900,
+            // No static owner → not a cache-shaped static holder.
+            ..Default::default()
+        }];
+        r.primary_culprits = vec![CulpritRef {
+            class_name: "com.example.LeakyBuffer".into(),
+            suspect_index: 0,
+            retained_pct: 90.0,
+            retained: 900,
+            basis: CulpritBasis::SingleObject,
+        }];
+        let h = HeadlineRetainer.eval(&r).expect("headline always fires");
+        assert_eq!(
+            h.severity,
+            TriageSeverity::Critical,
+            "non-static dominant object must remain Critical"
+        );
+        assert!(intentional_cache_owner(&r).is_none());
     }
 
     #[test]

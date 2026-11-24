@@ -124,6 +124,32 @@ fn assert_signal_fires(report: &Report, id: &str) {
     );
 }
 
+/// Assert a triage signal fired AND carries the expected severity. Used by the
+/// Issue-2 cache-softening check: a static-held, cache-shaped dominant retainer
+/// must be Warning, not Critical, so cold agents don't read it as a confirmed
+/// leak.
+fn assert_signal_severity(
+    report: &Report,
+    id: &str,
+    severity: hprof_analyzer::report::TriageSeverity,
+) {
+    let sig = report
+        .triage
+        .iter()
+        .find(|s| s.id == id)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected triage signal {id:?} to fire; got ids: {:?}",
+                report.triage.iter().map(|s| &s.id).collect::<Vec<_>>(),
+            )
+        });
+    assert_eq!(
+        sig.severity, severity,
+        "signal {id:?} severity = {:?}, expected {:?}; detail: {}",
+        sig.severity, severity, sig.detail,
+    );
+}
+
 /// Assert a triage signal with the given stable id did NOT fire
 /// (`must-not-fire`, the false-positive guard).
 #[allow(dead_code)]
@@ -295,6 +321,18 @@ fn check_static_cache_owner(report: &Report) {
         "owner_static_field = {:?}, expected \"CACHE\" or empty",
         s.owner_static_field,
     );
+    // Issue-2: this scenario is a static-field-held, collection-shaped dominant
+    // retainer — exactly the cache shape we cannot distinguish from a leak in a
+    // single snapshot. The headline/concentration verdicts must therefore be
+    // WARNING (with a "verify unbounded growth" caveat), not Critical, so a
+    // source-blind agent does not report a healthy cache as a confirmed leak.
+    use hprof_analyzer::report::TriageSeverity;
+    assert_signal_severity(report, "headline-retainer", TriageSeverity::Warning);
+    // concentration only fires when it has owner detail to add; when it does,
+    // it must also be softened. (It may be suppressed entirely, which is fine.)
+    if report.triage.iter().any(|s| s.id == "concentration") {
+        assert_signal_severity(report, "concentration", TriageSeverity::Warning);
+    }
 }
 
 // ---------------------------------------------------------------------------

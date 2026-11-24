@@ -6,6 +6,12 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Added
 
+- **`load_dump` front-loads the verdict** — the MCP `load_dump` response now
+  inlines the strongest triage signals (Critical/Warning, severity-ordered) in
+  addition to the top suspects and classes it already returned, so a
+  well-targeted leak/OOM question is frequently answerable with ZERO follow-up
+  tool calls. The full signal list (including info-level signals and section
+  links) is still one `get_report({"section":"triage"})` away.
 - **Leak suspects name the static-field GC-root owner** — a static cache or
   collection (the most common real Java leak) is held by a static field, but
   the dominator is often a transient `Thread` stack local, so the leak used to
@@ -40,6 +46,28 @@ All notable changes to hprof-analyzer are documented here.
   dump you're querying.
 
 ### Fixed
+
+- **MCP server no longer bleeds sessions across concurrent clients** — the
+  server held a single global session slot, so when several clients shared one
+  MCP server process (e.g. a multi-agent harness), a `load_dump` of a different
+  dump replaced the slot a client was still reasoning about between its own
+  calls — every subsequent read then resolved against the wrong dump. Loaded
+  dumps are now kept in a path-keyed registry that never evicts another dump's
+  entry; a `current` pointer tracks the most recently loaded dump (unchanged
+  single-dump workflow). A read carrying an `expected_epoch` for a dump that is
+  no longer `current` now fails with an explicit stale-session error (naming the
+  fix: re-select your dump via `load_dump`, instant from the registry) instead
+  of silently returning the wrong dump. `get_session_info` lists all loaded
+  dumps when more than one is held.
+- **Triage no longer cries "leak" on a healthy static cache** — a single domain
+  object or map reachable from a static field that legitimately crosses the
+  dominance floor (an intentional cache/index) used to fire Critical
+  `headline-retainer`/`concentration`/`big-drop` signals, reading as a confirmed
+  leak. A bounded cache and an unbounded leak are indistinguishable in a single
+  snapshot, so when the dominant retainer is static-field-held AND
+  collection/map/array-shaped, those signals are now Warning (not Critical),
+  name the static owner, and advise verifying unbounded growth — rather than
+  asserting a leak the data cannot prove.
 
 - **HTML report: flame graph no longer crashes on cyclic class-level dominator
   pairs** — class-level aggregation can produce A→B and B→A pairs simultaneously
