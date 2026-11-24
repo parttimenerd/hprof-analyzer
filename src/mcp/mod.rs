@@ -290,10 +290,14 @@ pub struct BrowseDominatorsParams {
     /// Max children per node, sorted by retained size descending (default 10, max 50).
     pub width: Option<u8>,
     /// Optional session-epoch guard (H1). Every load_dump bumps a monotonically
-    /// increasing `session_epoch` that is stamped into every tool response. Pass
-    /// the epoch you saw when you collected `object_index`; if the dump has been
-    /// reloaded since, the call fails with a `stale session` error instead of
-    /// silently resolving the index against a different dump.
+    /// increasing `session_epoch` (reported in the load_dump summary and in
+    /// get_session_info). Pass the epoch you saw when you collected
+    /// `object_index`; if another load_dump has since moved the server's
+    /// CURRENT dump to a different one (e.g. a concurrent client sharing this
+    /// server), the call fails with a `stale session` error instead of silently
+    /// resolving the index against the wrong dump. Re-select your dump by
+    /// calling load_dump again (instant — every loaded dump is retained in the
+    /// server's session registry), then re-read its epoch.
     #[serde(default)]
     pub expected_epoch: Option<u64>,
 }
@@ -448,32 +452,62 @@ fn is_zero_usize(n: &usize) -> bool {
 
 // ── MCP server ────────────────────────────────────────────────────────────────
 
+/// One loaded dump retained in the session registry, paired with the epoch it
+/// was assigned when it became `current`. Keeping the epoch per-entry (not a
+/// single global counter the reads compare against) is what lets an agent that
+/// loaded dump A detect that `current` has since moved to a different dump:
+/// its `expected_epoch` no longer matches the current entry's epoch.
+#[derive(Clone)]
+struct LoadedSession {
+    sess: Arc<CachedSession>,
+    epoch: u64,
+}
+
 #[derive(Clone)]
 pub struct HprofMcpServer {
-    /// The loaded session, behind an `Arc` so an optional in-process HTTP
-    /// adapter (`mcp --http-port`) can share the exact same `CachedSession`
-    /// rather than loading a second copy. Each HTTP request clones the inner
-    /// `Arc` under a brief lock and routes against it, so MCP reloads are
-    /// reflected on the HTTP side too.
-    session: Arc<Mutex<Option<Arc<CachedSession>>>>,
-    /// Session epoch (H1): bumped on every SUCCESSFUL load_dump (including a
-    /// same-path reload). Stamped into every tool response as `session_epoch`
-    /// so an agent can detect that indices it collected earlier now refer to a
-    /// different dump; index-taking tools accept an optional `expected_epoch`
-    /// and fail with a `stale session` error on mismatch.
+    /// Path-keyed registry of every dump loaded in this server's lifetime,
+    /// behind an `Arc` so an optional in-process HTTP adapter (`mcp
+    /// --http-port`) can share the exact same `CachedSession` rather than
+    /// loading a second copy.
+    ///
+    /// SESSION-BLEED FIX: previously this was a single `Option<Arc<..>>` slot,
+    /// so a concurrent `load_dump` of a *different* dump (e.g. several agents
+    /// sharing one stdio server) replaced the slot another caller was still
+    /// reasoning about between its own calls — every subsequent read for either
+    /// caller then resolved against whichever dump was loaded last. A registry
+    /// NEVER evicts another path's entry, so each loaded dump stays readable;
+    /// the `current` pointer plus per-entry epochs let a caller notice (via
+    /// `expected_epoch`) when `current` has moved off the dump it loaded, and
+    /// re-select its dump instantly from the registry by calling `load_dump`
+    /// again.
+    ///
+    /// Keyed by canonicalized path (falling back to the raw `PathBuf` when
+    /// canonicalization fails) so the same dump referenced two ways maps to one
+    /// entry.
+    sessions: Arc<Mutex<std::collections::HashMap<PathBuf, LoadedSession>>>,
+    /// The dump the most recent successful `load_dump` selected. Reads that do
+    /// not name a path resolve against this entry, so the common single-dump
+    /// workflow is unchanged. `None` until the first successful load.
+    current: Arc<Mutex<Option<PathBuf>>>,
+    /// Monotonic epoch counter (H1): bumped on every SUCCESSFUL load_dump
+    /// (including a same-path reload) and stamped onto the selected entry and
+    /// into every tool response as `session_epoch`. An agent can detect that
+    /// indices it collected earlier now refer to a different dump; index-taking
+    /// tools accept an optional `expected_epoch` and fail with a `stale session`
+    /// error when it no longer matches the *current entry's* epoch.
     ///
     /// Plain atomic (not behind the FIFO gate): all stateful handlers acquire
     /// the gate before reading it, so they observe it consistently with the
-    /// session; load_dump bumps it while still holding the gate. Atomic also
+    /// registry; load_dump bumps it while still holding the gate. Atomic also
     /// lets the two stateless tools (get_oql_docs, list_views) stamp it.
     epoch: Arc<std::sync::atomic::AtomicU64>,
     /// FIFO gate serializing stateful tool handlers in request-arrival order.
     ///
     /// rmcp spawns one tokio task per incoming request, so handlers run
-    /// concurrently with no ordering guarantee. The session mutex protects
+    /// concurrently with no ordering guarantee. The registry mutex protects
     /// consistency but is only held at the very end of `load_dump`, so a
-    /// `get_session_info` arriving mid-load would acquire it, see `None`, and
-    /// wrongly report `loaded:false` while a load is seconds from finishing.
+    /// `get_session_info` arriving mid-load would acquire it, see no `current`,
+    /// and wrongly report `loaded:false` while a load is seconds from finishing.
     /// This gate is held for the *entire* duration of each stateful handler
     /// (including `load_dump`'s slow `spawn_blocking` region), so a later read
     /// queues behind an in-flight write and answers after it resolves.
@@ -486,38 +520,66 @@ pub struct HprofMcpServer {
     tool_router: ToolRouter<HprofMcpServer>,
 }
 
+/// Canonicalize a dump path for use as a registry key, falling back to the raw
+/// path when the file cannot be canonicalized (it may not exist yet, or be a
+/// symlink target the OS declines). Two spellings of the same existing dump
+/// then map to one entry.
+fn registry_key(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 impl HprofMcpServer {
     pub fn new() -> Self {
         Self {
-            session: Arc::new(Mutex::new(None)),
+            sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            current: Arc::new(Mutex::new(None)),
             epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             gate: Arc::new(Mutex::new(())),
             tool_router: Self::tool_router(),
         }
     }
 
-    /// Current session epoch (0 = no dump loaded in this session yet).
-    fn epoch(&self) -> u64 {
-        self.epoch.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
-    /// H1: when the caller passed `expected_epoch`, verify the session has not
-    /// been switched to a different dump since. Must be called while the FIFO
-    /// gate is held (same epoch-visibility contract as the handlers themselves).
-    fn check_expected_epoch(&self, expected: Option<u64>) -> Result<(), McpError> {
-        if let Some(x) = expected {
-            let e = self.epoch();
-            if e != x {
+    /// Resolve the session a read handler should operate on: the dump named by
+    /// the `current` pointer. Returns an OWNED `Arc<CachedSession>` (plus the
+    /// current entry's epoch) so the caller does not hold the registry lock
+    /// across the potentially-slow `heap_ops` call.
+    ///
+    /// Must be called while the FIFO gate is held (so `current`/registry are
+    /// observed consistently with any in-flight `load_dump`).
+    ///
+    /// When `expected_epoch` is supplied (H1), it is checked against the current
+    /// entry's epoch: a mismatch means `current` has moved to a different dump
+    /// since the caller loaded its own — the session-bleed signal — and yields a
+    /// `stale session` error instead of silently reading the wrong dump.
+    async fn resolve_session(
+        &self,
+        expected_epoch: Option<u64>,
+    ) -> Result<Arc<CachedSession>, McpError> {
+        let current = self.current.lock().await;
+        let key = current.as_ref().ok_or_else(|| {
+            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
+        })?;
+        let sessions = self.sessions.lock().await;
+        let entry = sessions.get(key).ok_or_else(|| {
+            // Should not happen (current always points at a live entry), but
+            // treat a missing entry as "no dump" rather than panicking.
+            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
+        })?;
+        if let Some(x) = expected_epoch {
+            if entry.epoch != x {
                 return Err(McpError::invalid_params(
                     format!(
-                        "stale session: dump changed (epoch {e} ≠ expected {x}); \
-                         re-query indices from the current dump"
+                        "stale session: current dump changed (epoch {} ≠ expected {x}); \
+                         another load_dump selected a different dump. Re-select your dump \
+                         by calling load_dump again (instant — it is retained in this \
+                         server's session registry), then re-query indices from it.",
+                        entry.epoch
                     ),
                     None,
                 ));
             }
         }
-        Ok(())
+        Ok(Arc::clone(&entry.sess))
     }
 }
 
@@ -560,7 +622,8 @@ impl HprofMcpServer {
     #[tool(
         description = "hprof-analyzer: Load a Java heap dump (.hprof file) and cache analysis results. \
                        IMPORTANT: wait for this to complete before calling any other tool — it may take 5–15 min on first load, ~1 s on repeat loads. \
-                       After loading, call get_report({section:\"triage\"}) for severity-tagged diagnosis, then get_report({section:\"leaks\"}) to investigate. \
+                       The response ALREADY INCLUDES the strongest triage verdicts (Critical/Warning signals), the top leak suspects, and the top classes — for many questions this is enough to answer directly with NO further calls. \
+                       Only call get_report({section:\"triage\"}) when you need the full signal list (incl. info-level) or section links, or get_report({section:\"leaks\"}) for root paths / dominator tree when drilling into a suspect. \
                        After loading, jsonify() and array subscript in OQL queries will return actual object data \
                        (requires native file system access; not available in the web version). \
                        Set collections=true (or full_analysis=true) up front if you expect to need collection-waste \
@@ -631,7 +694,8 @@ impl HprofMcpServer {
             obj_graph: p.with_graph,
             ..AnalyzeOptions::default()
         };
-        let session_ref = Arc::clone(&self.session);
+        // Registry key computed before `path` is moved into the blocking task.
+        let key = registry_key(&path);
         let result = tokio::task::spawn_blocking(move || {
             crate::analyze_with_cache(&path, &opts, mode, |_| {})
         })
@@ -786,6 +850,58 @@ impl HprofMcpServer {
             s
         };
 
+        // Front-load the strongest triage verdicts into the load_dump response
+        // so a well-targeted question is often answerable with ZERO follow-up
+        // calls. Only Critical/Warning signals are inlined (Info signals are
+        // orientation noise); the full list — including Info and section links —
+        // is still available via get_report({"section":"triage"}). Capped so a
+        // noisy heap can't balloon the response. Severity order (Critical first)
+        // so the most important verdict leads.
+        let triage_text: String = {
+            use crate::report::TriageSeverity;
+            let mut sigs: Vec<&crate::report::TriageSignal> = result
+                .report
+                .triage
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.severity,
+                        TriageSeverity::Critical | TriageSeverity::Warning
+                    )
+                })
+                .collect();
+            // Stable sort: Critical before Warning, otherwise keep rule order.
+            sigs.sort_by_key(|s| match s.severity {
+                TriageSeverity::Critical => 0,
+                TriageSeverity::Warning => 1,
+                TriageSeverity::Info => 2,
+            });
+            const MAX_INLINE_SIGNALS: usize = 6;
+            let shown = sigs.len().min(MAX_INLINE_SIGNALS);
+            if sigs.is_empty() {
+                "\n## Memory Triage\n  ✓ No critical or warning signals — \
+                 no dominant retainer or obvious leak indicator detected.\n"
+                    .to_string()
+            } else {
+                let mut s = String::from("\n## Memory Triage (strongest signals)\n");
+                for sig in sigs.iter().take(MAX_INLINE_SIGNALS) {
+                    let marker = match sig.severity {
+                        TriageSeverity::Critical => "🔴 CRITICAL",
+                        TriageSeverity::Warning => "🟡 WARNING",
+                        TriageSeverity::Info => "· info",
+                    };
+                    s.push_str(&format!("  {} — {}: {}\n", marker, sig.title, sig.detail));
+                }
+                if sigs.len() > shown {
+                    s.push_str(&format!(
+                        "  … and {} more — get_report({{\"section\":\"triage\"}}) for the full list.\n",
+                        sigs.len() - shown
+                    ));
+                }
+                s
+            }
+        };
+
         // D4: spell out the index space the same way the range errors do —
         // the entry count covers ordinary objects AND classes/other entries,
         // so agents never equate "Objects: N" with the valid index range.
@@ -805,15 +921,16 @@ impl HprofMcpServer {
              index range 0..{n_minus_1})\
              {truncated_note}\
              {redacted_note}\
-             {cache_mismatch_note}\n\
+             {cache_mismatch_note}\
+             {triage_text}\n\
              ## Top Leak Suspects ({n_suspects} detected)\n\
              {suspects}\n\
              ## Top Classes by Retained Size (histogram — not suspects)\n\
              These are the largest classes by retained heap; they may or may not be the leak root.\n\
              {classes}\
              {oql_hints}\n\
-             If the above answers the question, stop here.\n\
-             For leak/OOM investigation: get_report({{\"section\":\"triage\"}}) → then follow each critical/warning signal.",
+             The strongest triage signals are inlined above — if they answer the question, stop here.\n\
+             For the full signal list (incl. info-level) and section links: get_report({{\"section\":\"triage\"}}).",
             path = p.path,
             heap = result.report.overview.total_shallow / 1_000_000,
             objs = ordinary_objects,
@@ -822,13 +939,30 @@ impl HprofMcpServer {
             truncated_note = truncated_note,
             redacted_note = redacted_note,
             cache_mismatch_note = cache_mismatch_note,
+            triage_text = triage_text,
             n_suspects = result.report.leaks.suspects.len(),
             suspects = suspects_text,
             classes = top_classes_text,
             oql_hints = oql_hints,
         );
-        *session_ref.lock().await = Some(Arc::new(result));
+        // Insert into the path-keyed registry and select it as current. A
+        // reload of a path already present REPLACES its entry (fresh analysis
+        // result) but never evicts OTHER paths — that non-eviction is the
+        // session-bleed fix. Bump the epoch and stamp it on this entry so a
+        // caller holding an older epoch for a different (still-retained) dump
+        // detects the `current` move on its next index-taking call.
         let new_epoch = self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        {
+            let mut sessions = self.sessions.lock().await;
+            sessions.insert(
+                key.clone(),
+                LoadedSession {
+                    sess: Arc::new(result),
+                    epoch: new_epoch,
+                },
+            );
+        }
+        *self.current.lock().await = Some(key);
         let summary = format!("{summary}\nsession_epoch: {new_epoch}");
         Ok(CallToolResult::success(vec![ContentBlock::text(summary)]))
     }
@@ -873,15 +1007,12 @@ impl HprofMcpServer {
         Parameters(p): Parameters<GetReportParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
+        let sess = self.resolve_session(None).await?;
         let section = p.section.as_deref().unwrap_or("triage");
         let result = if p.redact.unwrap_or(false) {
-            crate::heap_ops::report_section_redacted(sess, section, p.limit)
+            crate::heap_ops::report_section_redacted(&sess, section, p.limit)
         } else {
-            crate::heap_ops::report_section_with_limit(sess, section, p.limit)
+            crate::heap_ops::report_section_with_limit(&sess, section, p.limit)
         }
         .map_err(ops_to_mcp)?;
         let hint = format!(
@@ -906,12 +1037,9 @@ impl HprofMcpServer {
         Parameters(p): Parameters<GetHistogramParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
+        let sess = self.resolve_session(None).await?;
         let limit = p.limit.unwrap_or(50).min(500) as usize;
-        let result = crate::heap_ops::histogram(sess, limit).map_err(ops_to_mcp)?;
+        let result = crate::heap_ops::histogram(&sess, limit).map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -930,11 +1058,8 @@ impl HprofMcpServer {
         Parameters(p): Parameters<ExplainQueryParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
-        let result = crate::heap_ops::explain(sess, &p.oql).map_err(ops_to_mcp)?;
+        let sess = self.resolve_session(None).await?;
+        let result = crate::heap_ops::explain(&sess, &p.oql).map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -959,16 +1084,7 @@ impl HprofMcpServer {
         Parameters(p): Parameters<QueryParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let dump_path = {
-            let guard = self.session.lock().await;
-            guard
-                .as_ref()
-                .ok_or_else(|| {
-                    McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-                })?
-                .dump_path
-                .clone()
-        };
+        let dump_path = self.resolve_session(None).await?.dump_path.clone();
 
         // Resolve view name → OQL. Accept bare names, "/run name", or raw OQL.
         let (oql, view_name) = resolve_view_or_oql(&p.oql);
@@ -1080,14 +1196,10 @@ impl HprofMcpServer {
         Parameters(p): Parameters<BrowseDominatorsParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
-        self.check_expected_epoch(p.expected_epoch)?;
+        let sess = self.resolve_session(p.expected_epoch).await?;
         let depth = p.depth.unwrap_or(3).min(8);
         let width = p.width.unwrap_or(10).min(50) as usize;
-        let result = crate::heap_ops::browse(sess, p.object_index.map(|v| v.get()), depth, width)
+        let result = crate::heap_ops::browse(&sess, p.object_index.map(|v| v.get()), depth, width)
             .map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1113,12 +1225,8 @@ impl HprofMcpServer {
         Parameters(p): Parameters<InspectObjectParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
-        self.check_expected_epoch(p.expected_epoch)?;
-        let result = crate::heap_ops::inspect(sess, p.object_index.get()).map_err(ops_to_mcp)?;
+        let sess = self.resolve_session(p.expected_epoch).await?;
+        let result = crate::heap_ops::inspect(&sess, p.object_index.get()).map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
@@ -1146,13 +1254,9 @@ impl HprofMcpServer {
         Parameters(p): Parameters<FindIncomingReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
-        self.check_expected_epoch(p.expected_epoch)?;
+        let sess = self.resolve_session(p.expected_epoch).await?;
         let limit = p.limit.unwrap_or(50).min(200);
-        let result = crate::heap_ops::find_incoming(sess, p.object_index.get(), limit)
+        let result = crate::heap_ops::find_incoming(&sess, p.object_index.get(), limit)
             .map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1177,13 +1281,10 @@ impl HprofMcpServer {
         Parameters(p): Parameters<FindIncomingRefsByClassParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
+        let sess = self.resolve_session(None).await?;
 
         let limit = p.limit.unwrap_or(20);
-        let result = crate::heap_ops::find_incoming_by_class(sess, &p.class_name, limit)
+        let result = crate::heap_ops::find_incoming_by_class(&sess, &p.class_name, limit)
             .map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
@@ -1203,14 +1304,27 @@ impl HprofMcpServer {
         // Queue behind any in-flight load_dump so a mid-load status poll answers
         // after the load resolves instead of wrongly reporting loaded:false.
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let result = match guard.as_ref() {
+        // Resolve the `current` entry from the path-keyed registry. Also expose
+        // how many dumps this server currently holds (and their paths), so a
+        // caller sharing the server with others can SEE that `current` may not
+        // be the dump it loaded — the visible symptom of the session-bleed the
+        // registry now contains rather than silently serves wrong.
+        let current = self.current.lock().await.clone();
+        let sessions = self.sessions.lock().await;
+        let loaded_paths: Vec<String> = sessions
+            .values()
+            .map(|e| e.sess.dump_path.display().to_string())
+            .collect();
+        let loaded_count = sessions.len();
+        let current_entry = current.as_ref().and_then(|k| sessions.get(k));
+        let result = match current_entry {
             None => serde_json::json!({
                 "loaded": false,
                 "message": "No dump loaded. Call load_dump with the path to a .hprof file.",
                 "_next": "load_dump({\"path\": \"/absolute/path/to/dump.hprof\"})"
             }),
-            Some(sess) => {
+            Some(entry) => {
+                let sess = &entry.sess;
                 let r = &sess.report;
                 // Check if the on-disk file has changed since we loaded it.
                 // dump_hash bakes mtime+size into the cache directory name, so we
@@ -1227,6 +1341,7 @@ impl HprofMcpServer {
                 let mut v = serde_json::json!({
                     "loaded": true,
                     "path": sess.dump_path.display().to_string(),
+                    "session_epoch": entry.epoch,
                     "total_heap_bytes": r.overview.total_shallow,
                     "total_objects": r.overview.total_objects,
                     "leak_suspects": r.leaks.suspects.len(),
@@ -1235,6 +1350,20 @@ impl HprofMcpServer {
                     "redacted_input": r.redacted_input,
                     "_next": "get_report({\"section\":\"triage\"}) — severity-tagged signals; fastest diagnosis"
                 });
+                // When this server holds more than one dump, surface the full
+                // list so the caller can confirm `current` is the dump it meant
+                // — concurrent callers each load_dump their own, which moves
+                // `current`. Re-call load_dump with your path to re-select it
+                // (instant; the entry is retained).
+                if loaded_count > 1 {
+                    v["loaded_dumps"] = serde_json::json!(loaded_paths);
+                    v["loaded_dumps_note"] = serde_json::json!(
+                        "This MCP server holds more than one dump (another client may \
+                         share it). `path` above is the CURRENTLY selected dump. If it is \
+                         not the one you loaded, call load_dump with your path to re-select \
+                         it (instant — it is retained)."
+                    );
+                }
                 if stale {
                     v["stale"] = serde_json::json!(true);
                     v["stale_message"] = serde_json::json!(
@@ -1498,14 +1627,10 @@ impl HprofMcpServer {
         Parameters(p): Parameters<GetDominatorPathParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
-        self.check_expected_epoch(p.expected_epoch)?;
+        let sess = self.resolve_session(p.expected_epoch).await?;
 
         let result =
-            crate::heap_ops::dominator_path(sess, p.object_index.get()).map_err(ops_to_mcp)?;
+            crate::heap_ops::dominator_path(&sess, p.object_index.get()).map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1530,14 +1655,10 @@ impl HprofMcpServer {
         Parameters(p): Parameters<GetOutboundReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
-        self.check_expected_epoch(p.expected_epoch)?;
+        let sess = self.resolve_session(p.expected_epoch).await?;
 
         let limit = p.limit.unwrap_or(50);
-        let result = crate::heap_ops::outbound_references(sess, p.object_index.get(), limit)
+        let result = crate::heap_ops::outbound_references(&sess, p.object_index.get(), limit)
             .map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
@@ -1562,12 +1683,9 @@ impl HprofMcpServer {
         Parameters(p): Parameters<GetFieldNameParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
+        let sess = self.resolve_session(None).await?;
         let result =
-            crate::heap_ops::field_name(sess, p.src_object_index.get(), p.edge_index.get())
+            crate::heap_ops::field_name(&sess, p.src_object_index.get(), p.edge_index.get())
                 .map_err(ops_to_mcp)?;
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1598,15 +1716,11 @@ impl HprofMcpServer {
         Parameters(p): Parameters<GetRetainedSetParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
-        self.check_expected_epoch(p.expected_epoch)?;
+        let sess = self.resolve_session(p.expected_epoch).await?;
 
         let limit = p.limit.unwrap_or(50);
         let result = crate::heap_ops::retained_set(
-            sess,
+            &sess,
             p.object_index.get(),
             limit,
             p.class_filter.as_deref(),
@@ -1638,13 +1752,10 @@ impl HprofMcpServer {
         Parameters(p): Parameters<GetGcRootsParams>,
     ) -> Result<CallToolResult, McpError> {
         let _gate = self.gate.lock().await;
-        let guard = self.session.lock().await;
-        let sess = guard.as_ref().ok_or_else(|| {
-            McpError::invalid_params("No dump loaded. Call load_dump first.", None)
-        })?;
+        let sess = self.resolve_session(None).await?;
 
         let limit = p.limit.unwrap_or(500);
-        let result = crate::heap_ops::gc_roots(sess, limit).map_err(ops_to_mcp)?;
+        let result = crate::heap_ops::gc_roots(&sess, limit).map_err(ops_to_mcp)?;
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1738,13 +1849,14 @@ impl ServerHandler for HprofMcpServer {
              - object_index values: @objectId from query and 'index' from browse_dominators are 0-based (use directly).\n\
              - obj_index_1based in get_report (dominator_tree + root_path) is 1-BASED — subtract 1 for browse_dominators/inspect_object!\n\n\
              ANSWERING \"find the leak\" or \"why is there an OOM\":\n\
-             1. load_dump({path})                        — load the file\n\
-             2. get_report({\"section\":\"triage\"})         — ⭐ severity-tagged signals; fastest diagnosis\n\
-                AFTER READING TRIAGE: act on every critical/warning item by its id:\n\
+             1. load_dump({path})                        — loads the file AND returns the strongest triage signals (Critical/Warning), top suspects, and top classes inline. For many questions this alone is the answer — read it before calling anything else.\n\
+             2. get_report({\"section\":\"triage\"})         — ONLY if you need the full signal list (incl. info-level) or section links beyond what load_dump already inlined\n\
+                ACT on every critical/warning item by its id:\n\
                   headline-retainer/threadlocal-leak → get_report(leaks)\n\
                   off-heap → get_report(indicators) for DirectByteBuffer total\n\
                   gc-waste → query(heap-summary) to see what's accumulating\n\
                   component-retention-imbalance → get_report(components)\n\
+                  NOTE: a WARNING headline/concentration naming a static cache/index means the retained set is large but may be an intentional bounded cache — confirm unbounded growth before calling it a leak.\n\
              3. get_report({\"section\":\"leaks\"})           — root paths, dominated objects, dominator_tree. A suspect's `owner_static_class`/`owner_static_field` (when present) name the static field holding the leak — report THAT as the culprit, not a transient `Thread` dominator.\n\
              4. browse_dominators({object_index: ...})   — drill into accumulation point\n\
              5. get_report({\"section\":\"top-classes\"})     — which classes dominate memory\n\n\
@@ -2323,7 +2435,21 @@ pub fn run_mcp_server_with_http(
             .enable_all()
             .build()?;
         rt.block_on(async {
-            *server.session.lock().await = Some(shared);
+            // Seed the registry + current pointer with the preloaded dump at
+            // epoch 1 (first load), mirroring what a load_dump call would do.
+            let key = registry_key(&path);
+            let epoch = server
+                .epoch
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            server.sessions.lock().await.insert(
+                key.clone(),
+                LoadedSession {
+                    sess: shared,
+                    epoch,
+                },
+            );
+            *server.current.lock().await = Some(key);
         });
     } else if http_port.is_some() {
         anyhow::bail!("mcp --http-port requires a preloaded dump (--dump)");
@@ -2359,6 +2485,94 @@ mod tests {
     fn load_session() -> Option<crate::cache::CachedSession> {
         let path = philosophers_path()?;
         crate::analyze_with_cache(&path, &AnalyzeOptions::default(), CacheMode::Full, |_| {}).ok()
+    }
+
+    /// Session-bleed regression: two dumps loaded into the same server must BOTH
+    /// stay resolvable, and a read carrying the first dump's epoch after the
+    /// second became `current` must fail with a stale-session error rather than
+    /// silently returning the wrong (second) dump. This is the exact failure the
+    /// path-keyed registry fixes: previously a single slot was clobbered.
+    #[tokio::test]
+    async fn concurrent_loads_do_not_clobber_and_stale_epoch_is_detected() {
+        let Some(sess) = load_session() else {
+            return; // fixture absent — skip
+        };
+        let server = HprofMcpServer::new();
+        // Simulate two distinct dumps by inserting the same CachedSession under
+        // two different registry keys with two epochs (what two load_dump calls
+        // for two paths would produce). We assert the REGISTRY semantics, which
+        // are independent of the dumps' contents.
+        let key_a = PathBuf::from("/dumps/a.hprof");
+        let key_b = PathBuf::from("/dumps/b.hprof");
+        let shared = Arc::new(sess);
+
+        // Load A (epoch 1), select it.
+        let epoch_a = server
+            .epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        server.sessions.lock().await.insert(
+            key_a.clone(),
+            LoadedSession {
+                sess: Arc::clone(&shared),
+                epoch: epoch_a,
+            },
+        );
+        *server.current.lock().await = Some(key_a.clone());
+
+        // A read with A's epoch succeeds.
+        assert!(server.resolve_session(Some(epoch_a)).await.is_ok());
+
+        // Load B (epoch 2), select it — mimics a concurrent client clobbering
+        // `current` in the OLD single-slot design.
+        let epoch_b = server
+            .epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        server.sessions.lock().await.insert(
+            key_b.clone(),
+            LoadedSession {
+                sess: Arc::clone(&shared),
+                epoch: epoch_b,
+            },
+        );
+        *server.current.lock().await = Some(key_b.clone());
+
+        // A reader still holding A's epoch is now told the session is stale
+        // instead of silently reading B.
+        // A reader still holding A's epoch is now told the session is stale
+        // instead of silently reading B. (Use a match, not expect_err: the Ok
+        // value Arc<CachedSession> is not Debug.)
+        let err = match server.resolve_session(Some(epoch_a)).await {
+            Err(e) => e,
+            Ok(_) => panic!("stale epoch must be rejected after current moved to B"),
+        };
+        assert!(
+            err.to_string().contains("stale session"),
+            "expected a stale-session error, got: {err}"
+        );
+
+        // CRUCIAL: A was NOT evicted — re-selecting it restores correct reads.
+        *server.current.lock().await = Some(key_a.clone());
+        assert!(
+            server.resolve_session(Some(epoch_a)).await.is_ok(),
+            "dump A must still be resolvable after B was loaded (no clobber)"
+        );
+
+        // And the registry holds both dumps.
+        assert_eq!(server.sessions.lock().await.len(), 2);
+    }
+
+    /// A bare read (no expected_epoch) resolves against whatever `current` points
+    /// at — the single-dump workflow is unchanged, and a no-dump server errors.
+    #[tokio::test]
+    async fn resolve_session_requires_a_current_dump() {
+        let server = HprofMcpServer::new();
+        let err = match server.resolve_session(None).await {
+            Err(e) => e,
+            Ok(_) => panic!("no dump loaded must error"),
+        };
+        assert!(err.to_string().contains("No dump loaded"));
     }
 
     #[test]
