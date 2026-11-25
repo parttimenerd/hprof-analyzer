@@ -696,6 +696,26 @@ fn is_collection_shape(name: &str) -> bool {
         || name.contains("cache")
 }
 
+/// Token-efficiency: surface the static-field GC-root owner (the GAP-1
+/// `owner_static_*` data) INLINE in the headline signal, so a reader does not
+/// have to spend a second `get_report(leaks)` call just to recover the owner
+/// name. Returns `, held by static field \`Owner.field\`` (or bare `Owner`
+/// when the field name was not captured), or an empty string when no static
+/// owner was resolved. Only meaningful for single suspects.
+fn static_owner_suffix(s: &crate::report::model::Suspect) -> String {
+    if s.owner_static_class.is_empty() {
+        return String::new();
+    }
+    if s.owner_static_field.is_empty() {
+        format!(", held by static field in `{}`", s.owner_static_class)
+    } else {
+        format!(
+            ", held by static field `{}.{}`",
+            s.owner_static_class, s.owner_static_field
+        )
+    }
+}
+
 /// Issue-2 softener: is this dominant culprit a static-field-held container
 /// (an intentional cache/index) rather than an unambiguous leak? We cannot tell
 /// leak-vs-cache from a single snapshot — a bounded cache and an unbounded leak
@@ -788,11 +808,12 @@ impl Rule for HeadlineRetainer {
                 TriageSeverity::Critical,
                 "Headline Retainer",
                 format!(
-                    "`{}` ({}) retains {} ({:.1}% of reachable heap).{}",
+                    "`{}` ({}) retains {} ({:.1}% of reachable heap){}.{}",
                     c.class_name,
                     kind,
                     format_bytes(c.retained),
                     c.retained_pct,
+                    static_owner_suffix(s),
                     value_hint,
                 ),
                 Some(("leak-suspects", "Leak Suspects")),
@@ -5141,6 +5162,46 @@ mod tests {
             "non-static dominant object must remain Critical"
         );
         assert!(intentional_cache_owner(&r).is_none());
+    }
+
+    /// Token-efficiency: a static-held dominant retainer whose shape is NOT a
+    /// cache/collection (so the cache-softener does NOT fire) must stay Critical
+    /// but STILL name its static owner inline — so a reader does not need a
+    /// second get_report(leaks) call just to recover the owner. This mirrors the
+    /// real dump_04 shape (Thread dominator, static ArrayList owner) where the
+    /// headline class is `java.lang.Thread` but the owner is the actionable name.
+    #[test]
+    fn static_held_non_cache_headline_names_owner_inline() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 1000;
+        r.leaks.suspects = vec![Suspect {
+            is_single: true,
+            pretty_class: "java.lang.Thread".into(),
+            instance_count: 1,
+            retained: 955,
+            owner_static_class: "com.example.EventLog".into(),
+            owner_static_field: "ENTRIES".into(),
+            // Non-collection accumulation shape → softener must NOT fire.
+            accumulation_class: Some("com.example.Event".into()),
+            ..Default::default()
+        }];
+        r.primary_culprits = vec![CulpritRef {
+            class_name: "java.lang.Thread".into(),
+            suspect_index: 0,
+            retained_pct: 95.5,
+            retained: 955,
+            basis: CulpritBasis::SingleObject,
+        }];
+        // Softener does not fire (not cache-shaped), so this stays Critical...
+        assert!(intentional_cache_owner(&r).is_none());
+        let h = HeadlineRetainer.eval(&r).expect("headline always fires");
+        assert_eq!(h.severity, TriageSeverity::Critical);
+        // ...but the owner is surfaced inline so no second call is needed.
+        assert!(
+            h.detail.contains("EventLog.ENTRIES"),
+            "Critical headline must still name the static owner inline: {}",
+            h.detail
+        );
     }
 
     #[test]

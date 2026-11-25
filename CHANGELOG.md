@@ -11,7 +11,13 @@ All notable changes to hprof-analyzer are documented here.
   addition to the top suspects and classes it already returned, so a
   well-targeted leak/OOM question is frequently answerable with ZERO follow-up
   tool calls. The full signal list (including info-level signals and section
-  links) is still one `get_report({"section":"triage"})` away.
+  links) is still one `get_report({"section":"triage"})` away. The inlined
+  headline also names the static-field owner inline (e.g. "held by static field
+  `Service.CACHE`") for every static-held leak — so the common case no longer
+  needs a second `get_report({"section":"leaks"})` call just to recover the
+  owner. (Measured with naive Haiku agents across the `leak-demos/` scenarios:
+  static-cache/unbounded-collection/healthy-cache dumps drop from 2 tool calls
+  to 1.)
 - **Leak suspects name the static-field GC-root owner** — a static cache or
   collection (the most common real Java leak) is held by a static field, but
   the dominator is often a transient `Thread` stack local, so the leak used to

@@ -143,3 +143,34 @@ STATIC-field edges are emitted in fill_heap_2b WITHOUT a field-name-pool index
 Resolving the static field NAME requires annotating static-field edge names in
 the Class-dump decode (fill_heap_2b) — a deeper hot-path change, deferred. The
 owning CLASS (the primary, actionable signal) works across all transports.
+
+## Token-efficiency run (2026-11-25, fixed release binary, 6 Haiku agents)
+
+Naive source-blind Haiku agents, one per dump, tasked only "diagnose, fewest
+calls, report efficiency metrics". All six verdicts CORRECT (incl. dump 23 now
+HEALTHY — the former false-positive, fixed by the cache-shape triage softening).
+
+| Dump            | Verdict  | Calls | load_dump sufficed alone? |
+|-----------------|----------|-------|---------------------------|
+| 01 StaticCache  | LEAK ✓   | 2     | no — 2nd call only for static owner name |
+| 04 Unbounded    | LEAK ✓   | 2     | no — 2nd call only for static owner name |
+| 05 ThreadLocal  | LEAK ✓   | 2     | no — 2nd call for root_path chain |
+| 18 Oversized    | WASTE ✓  | 3     | mostly (1 wasted inspect_object) |
+| 23 Healthy      | HEALTHY ✓| 2     | mostly (2nd call "prudent, not necessary") |
+| 29 Collision    | PERF ✓   | 1     | YES |
+
+DOMINANT TOKEN SINK: the mandatory 2nd `get_report(leaks)` call (~8 KB, up to
+1900 lines, mostly the deep dominator_tree) purely to recover the static-field
+OWNER name that load_dump's inlined headline omitted. load_dump already had the
+owner (GAP-1 `owner_static_class`) but only printed it in the Warning (softened)
+branch, not the Critical branch.
+
+FIX APPLIED: `static_owner_suffix()` appends ", held by static field
+`Owner.field`" to the Critical headline-retainer signal whenever the suspect has
+a static owner — so load_dump's inline verdict names the real culprit for ALL
+static-held leaks. Expected effect: 01/04/23 drop from 2 calls to 1.
+VERSION bumped 22→23 (triage text changed).
+
+SECONDARY: get_report(leaks) dominator_tree is verbose (agents "skim" the
+dominated[] arrays). Candidate future trim: a compact/own `leaks` mode that
+drops the deep tree when the owner+root_path already answer the question.
