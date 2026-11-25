@@ -384,6 +384,36 @@ SELECT toString(s) FROM java.lang.String s WHERE @usedHeapSize > 1000
 
 ---
 
+## WITH (CTEs)
+
+`WITH <name> AS (<subquery>)` binds a name you can use as a `FROM` target in the
+main query — a common table expression. Each reference runs its own copy of the
+body (results are correct; the body is not materialized once and shared):
+
+```sql
+WITH big AS (
+  SELECT @objectId FROM java.lang.String WHERE @usedHeapSize > 10000
+)
+SELECT @objectId AS id, @usedHeapSize AS bytes
+FROM big ORDER BY bytes DESC LIMIT 10
+```
+
+A CTE body must select whole objects or `@objectId` — the reference is a
+semi-join keyed on object identity, so project the outer attributes you want in
+the **main** query, not in the CTE body.
+
+Rules:
+
+- CTE names must be unique within the `WITH` clause.
+- A CTE is self-contained: it cannot reference another CTE (that would nest
+  subqueries beyond one level), and recursive CTEs are rejected.
+- `FROM <name> [alias]` may keep an explicit alias (`FROM big b`); otherwise the
+  CTE name doubles as the alias.
+- Each CTE body is a single `SELECT` — a `UNION` tail inside a CTE body is not
+  allowed (same restriction as inline `FROM`-subqueries).
+
+---
+
 ## Array indexing and slicing
 
 `value[i]` returns the element at index `i` (0-based). `value[i:j]` returns a
