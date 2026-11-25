@@ -703,17 +703,26 @@ fn is_collection_shape(name: &str) -> bool {
 /// when the field name was not captured), or an empty string when no static
 /// owner was resolved. Only meaningful for single suspects.
 fn static_owner_suffix(s: &crate::report::model::Suspect) -> String {
-    if s.owner_static_class.is_empty() {
-        return String::new();
+    if !s.owner_static_class.is_empty() {
+        return if s.owner_static_field.is_empty() {
+            format!(", held by static field in `{}`", s.owner_static_class)
+        } else {
+            format!(
+                ", held by static field `{}.{}`",
+                s.owner_static_class, s.owner_static_field
+            )
+        };
     }
-    if s.owner_static_field.is_empty() {
-        format!(", held by static field in `{}`", s.owner_static_class)
-    } else {
-        format!(
-            ", held by static field `{}.{}`",
-            s.owner_static_class, s.owner_static_field
-        )
+    // Parallel for thread-local-held leaks (no static owner): name the
+    // ThreadLocal value class so pooled-thread / ThreadLocal leaks are
+    // actionable from the headline without tracing the ThreadLocalMap chain.
+    if !s.owner_thread_local_class.is_empty() {
+        return format!(
+            ", held via a ThreadLocal (value `{}`) — not cleared when the thread is reused",
+            s.owner_thread_local_class
+        );
     }
+    String::new()
 }
 
 /// Issue-2 softener: is this dominant culprit a static-field-held container
@@ -1360,27 +1369,59 @@ impl Rule for ProxyLambdaBloat {
     }
 }
 
-/// Off-heap (DirectByteBuffer). Reads `leak_indicators.direct_byte_buffer_capacity_sum`.
+/// Off-heap (DirectByteBuffer). Reads `leak_indicators.direct_byte_buffer_capacity_sum`
+/// and `nio_buffer_owners`. Subtracts the JVM's own boot-image mapped buffer
+/// (owned by `jdk.internal.jimage.ImageReader$SharedImageReader`) before the
+/// floor check: that ~130 MB buffer is a fixed JDK base cost present in nearly
+/// every dump, and left in it tripped this warning on healthy heaps and
+/// repeatedly lured agents into calling it "the leak".
 struct OffHeap;
 impl Rule for OffHeap {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
         let cap = r.leak_indicators.direct_byte_buffer_capacity_sum;
-        if cap < DBB_FLOOR_BYTES {
+        // Capacity of buffers whose retention path runs through the JDK
+        // boot-image reader — benign, fixed, not app-owned.
+        let bootimg: u64 = r
+            .leak_indicators
+            .nio_buffer_owners
+            .iter()
+            .filter(|o| {
+                o.root_path
+                    .iter()
+                    .any(|st| st.display_class.starts_with("jdk.internal.jimage."))
+            })
+            .map(|o| o.capacity)
+            .sum();
+        // App-attributable off-heap is what's left after the boot image.
+        let app_cap = cap.saturating_sub(bootimg);
+        if app_cap < DBB_FLOOR_BYTES {
             return None;
         }
+        let bootimg_note = if bootimg > 0 {
+            format!(
+                " ({} of the {} total is the JVM boot-image buffer owned by \
+                 jdk.internal.jimage.ImageReader — a fixed JDK cost, not a leak; \
+                 the figure below excludes it.)",
+                format_bytes(bootimg),
+                format_bytes(cap),
+            )
+        } else {
+            String::new()
+        };
         Some(signal(
             "off-heap",
             TriageSeverity::Warning,
             "Off-Heap (DirectByteBuffer)",
             format!(
-                "{} of native memory is held by live DirectByteBuffers — not reflected in the \
-                 on-heap totals, but counts against process RSS and can trigger OS-level OOM. \
-                 If RSS grows beyond heap + DirectByteBuffer total, native heap fragmentation may \
-                 be the cause: repeatedly allocating and freeing differently-sized buffers leaves \
-                 gaps the allocator cannot reuse for larger requests. Diagnose with \
+                "{} of app-attributable native memory is held by live DirectByteBuffers{} — not \
+                 reflected in the on-heap totals, but counts against process RSS and can trigger \
+                 OS-level OOM. If RSS grows beyond heap + DirectByteBuffer total, native heap \
+                 fragmentation may be the cause: repeatedly allocating and freeing differently-sized \
+                 buffers leaves gaps the allocator cannot reuse for larger requests. Diagnose with \
                  `jcmd <pid> VM.native_memory detail`, or use jemalloc heap profiling \
                  (`MALLOC_CONF=prof:true`) or async-profiler's malloc mode.",
-                format_bytes(cap),
+                format_bytes(app_cap),
+                bootimg_note,
             ),
             Some(("off-heap-nio", "Off-Heap NIO")),
         ))
@@ -5201,6 +5242,106 @@ mod tests {
             h.detail.contains("EventLog.ENTRIES"),
             "Critical headline must still name the static owner inline: {}",
             h.detail
+        );
+    }
+
+    /// Thread-local owner attribution: a Thread-dominated suspect held via a
+    /// ThreadLocal (no static owner) must name the ThreadLocal value class inline
+    /// in the headline — the parallel of the static-field owner, so pooled-thread
+    /// leaks are actionable without tracing the ThreadLocalMap chain by hand.
+    #[test]
+    fn thread_local_held_headline_names_value_class_inline() {
+        let mut r = base_report();
+        r.leaks.total_shallow = 1000;
+        r.leaks.suspects = vec![Suspect {
+            is_single: true,
+            pretty_class: "java.lang.Thread".into(),
+            instance_count: 1,
+            retained: 955,
+            // No static owner; held via a ThreadLocal value instead.
+            owner_thread_local_class: "com.example.FakeSession".into(),
+            accumulation_class: Some("com.example.Entity".into()),
+            ..Default::default()
+        }];
+        r.primary_culprits = vec![CulpritRef {
+            class_name: "java.lang.Thread".into(),
+            suspect_index: 0,
+            retained_pct: 95.5,
+            retained: 955,
+            basis: CulpritBasis::SingleObject,
+        }];
+        let h = HeadlineRetainer.eval(&r).expect("headline always fires");
+        assert_eq!(h.severity, TriageSeverity::Critical);
+        assert!(
+            h.detail.contains("ThreadLocal") && h.detail.contains("FakeSession"),
+            "headline must name the ThreadLocal value class inline: {}",
+            h.detail
+        );
+    }
+
+    /// Off-heap: the JDK boot-image DirectByteBuffer (owned by
+    /// jdk.internal.jimage.ImageReader) is subtracted before the floor check, so
+    /// a heap whose only large off-heap buffer is the boot image does NOT fire
+    /// the off-heap warning (it used to cry wolf on every dump).
+    #[test]
+    fn off_heap_excludes_jdk_boot_image_buffer() {
+        use crate::report::model::{NioBufferOwner, RootPathStep};
+        let mut r = base_report();
+        // One ~130 MB buffer, entirely owned by the JDK boot-image reader.
+        r.leak_indicators.direct_byte_buffer_capacity_sum = 140_000_000;
+        r.leak_indicators.nio_buffer_owners = vec![NioBufferOwner {
+            capacity: 140_000_000,
+            obj_index_1based: 2,
+            object_index: 1,
+            display_class: "java.nio.DirectByteBuffer".into(),
+            retained: 64,
+            root_path: vec![
+                RootPathStep {
+                    obj_index_1based: 2,
+                    object_index: 1,
+                    display_class: "java.nio.DirectByteBuffer".into(),
+                    retained: 64,
+                    root_type_label: None,
+                    field_edge: None,
+                },
+                RootPathStep {
+                    obj_index_1based: 3,
+                    object_index: 2,
+                    display_class: "jdk.internal.jimage.ImageReader$SharedImageReader".into(),
+                    retained: 816,
+                    root_type_label: None,
+                    field_edge: None,
+                },
+            ],
+        }];
+        assert!(
+            OffHeap.eval(&r).is_none(),
+            "a boot-image-only off-heap total must not fire the off-heap warning"
+        );
+
+        // Add a genuine 100 MB app-owned buffer → now it fires, and the message
+        // excludes the boot image from the headline figure.
+        r.leak_indicators.direct_byte_buffer_capacity_sum += 100_000_000;
+        r.leak_indicators.nio_buffer_owners.push(NioBufferOwner {
+            capacity: 100_000_000,
+            obj_index_1based: 10,
+            object_index: 9,
+            display_class: "java.nio.DirectByteBuffer".into(),
+            retained: 64,
+            root_path: vec![RootPathStep {
+                obj_index_1based: 11,
+                object_index: 10,
+                display_class: "com.example.BufferPool".into(),
+                retained: 100_000_000,
+                root_type_label: None,
+                field_edge: None,
+            }],
+        });
+        let sig = OffHeap.eval(&r).expect("app-owned off-heap must fire");
+        assert!(
+            sig.detail.contains("ImageReader") && sig.detail.contains("app-attributable"),
+            "signal must note the excluded boot image and report app-attributable bytes: {}",
+            sig.detail
         );
     }
 

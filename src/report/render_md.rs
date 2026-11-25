@@ -1746,6 +1746,13 @@ Investigate only if the instance count is unexpectedly high \
                      this will not be collected until the field is cleared.\n\n",
                     s.owner_static_class, field,
                 ));
+            } else if !s.owner_thread_local_class.is_empty() {
+                out.push_str(&format!(
+                    "**Held via a ThreadLocal (value `{}`)** — the value is not cleared when the \
+                     thread is returned to its pool, so it survives for the thread's lifetime. \
+                     Call `ThreadLocal.remove()` (or clear the value) when done.\n\n",
+                    s.owner_thread_local_class,
+                ));
             }
             match (
                 &s.accumulation_class,

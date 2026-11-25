@@ -65,6 +65,23 @@ All notable changes to hprof-analyzer are documented here.
 
 ### Fixed
 
+- **Thread-local leaks now name their holder** — leak suspects held through a
+  Java `ThreadLocal` (the value stored in a `ThreadLocalMap$Entry`) now carry
+  `owner_thread_local_class` — the class of the thread-local value — the
+  parallel of `owner_static_class` for pooled-thread / ThreadLocal leaks where
+  there is no static-field owner and the dominator is a `Thread`. Surfaced inline
+  in the headline triage signal and the Markdown leaks section, so a pooled
+  `ThreadLocal` leak is actionable without hand-tracing the `ThreadLocalMap`
+  chain. (Genuine `ThreadLocal` values only; scoped-value / lambda-closure
+  retention is not decoded as a `ThreadLocal` and is intentionally not labelled.)
+- **Off-heap signal excludes the JVM boot-image buffer** — the "off-heap
+  (DirectByteBuffer)" triage warning summed the ~130 MB boot-image mapped buffer
+  owned by `jdk.internal.jimage.ImageReader$SharedImageReader` — a fixed JDK cost
+  present in nearly every dump — which tripped the warning on healthy heaps and
+  repeatedly lured agents into calling it "the leak". That buffer is now
+  subtracted before the floor check (detected via the buffer's dominator
+  `root_path`), and when present it is annotated as a known-benign fixed cost;
+  the reported figure is app-attributable off-heap only.
 - **MCP server no longer bleeds sessions across concurrent clients** — the
   server held a single global session slot, so when several clients shared one
   MCP server process (e.g. a multi-agent harness), a `load_dump` of a different

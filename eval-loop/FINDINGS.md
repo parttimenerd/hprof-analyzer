@@ -255,3 +255,21 @@ two open gaps both target tool_uses on the hard cases:
   1. thread-local/closure owner attribution (would cut 17 from ~7 MCP calls to ~2)
   2. de-emphasize the benign JDK boot-image DirectByteBuffer off-heap signal
      (stops agents chasing it on faint-signal heaps like 37)
+
+## Both gaps FIXED (build8, VERSION 24)
+
+GAP 1 (thread-local owner): Suspect.owner_thread_local_class names the ThreadLocal
+value class, built from g.tl_entry_records (captured unconditionally in the
+field-decode scan), probed like static_owners. VERIFIED on dump 05 (genuine
+ThreadLocal leak) → owner_thread_local_class="java.util.ArrayList" (the 63 MB
+leaking value). Dump 17 correctly does NOT fire: its retention is
+Thread.scopedValueBindings → lambda closure, NOT a ThreadLocalMap$Entry, so the
+heap exposes no ThreadLocal value to attribute (honest limitation, not a miss —
+dump 17's actual TL entries are tiny JDK internals).
+
+GAP 2 (off-heap boot image): OffHeap triage rule subtracts buffers whose
+root_path runs through jdk.internal.jimage.* before the 64 MiB floor check, and
+annotates the excluded boot-image capacity. VERIFIED on dump 37 → the off-heap
+warning is now SUPPRESSED (boot image was the only large buffer), ending the
+recurring false "OOM risk" attraction. A genuine app-owned DirectByteBuffer still
+fires, with the boot image excluded from the headline figure.

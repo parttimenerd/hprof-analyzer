@@ -856,6 +856,7 @@ mod tests {
             path_note: String::new(),
             owner_static_class: String::new(),
             owner_static_field: String::new(),
+            owner_thread_local_class: String::new(),
         }
     }
 

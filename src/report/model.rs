@@ -772,6 +772,15 @@ pub struct Suspect {
     /// name is not. Meaningless unless `owner_static_class` is set.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub owner_static_field: String,
+    /// When the suspect's accumulation point is held alive through a Java
+    /// `ThreadLocal` (the value stored in a `ThreadLocalMap$Entry`), the class
+    /// of that thread-local value — the parallel of [`owner_static_class`] for
+    /// thread-local / pooled-thread leaks, where there is NO static-field owner
+    /// and the dominator is a `Thread`. Names the durable holder an analyst would
+    /// otherwise have to trace by hand through the ThreadLocalMap chain. Empty
+    /// when the suspect is not held via a ThreadLocal. Only for single suspects.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub owner_thread_local_class: String,
 }
 
 /// Aggregates for the "Leak Suspects" section.

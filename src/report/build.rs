@@ -4295,6 +4295,24 @@ pub(crate) fn build_leak_suspects(
         Some(to_model(&arena, 0))
     };
 
+    // GAP (thread-local owner): map each ThreadLocal value's dense index → its
+    // class name, from `g.tl_entry_records` (captured unconditionally during the
+    // field-decode scan). The parallel of `static_owners` for thread-local /
+    // pooled-thread leaks, where there is NO static-field owner and the dominator
+    // is a `Thread`. Probed per single suspect below to name the durable holder
+    // an analyst would otherwise trace by hand through the ThreadLocalMap chain.
+    // Empty on dumps with no live ThreadLocal entries, so costs nothing there.
+    let tl_value_class: std::collections::HashMap<u32, String> = {
+        let mut m = std::collections::HashMap::new();
+        for &(_is_stale, val_idx) in &g.tl_entry_records {
+            if val_idx != u32::MAX {
+                m.entry(val_idx)
+                    .or_insert_with(|| class_display(g, val_idx as usize));
+            }
+        }
+        m
+    };
+
     // Materialise into the model, resolving the accumulation point for singles
     // via MAT's findAccumulationPoint (big-drop-ratio descent) and the holding
     // GC-root type.
@@ -4521,6 +4539,34 @@ pub(crate) fn build_leak_suspects(
                     (String::new(), String::new())
                 };
 
+            // Thread-local owner (parallel to the static-field owner above): when
+            // no static owner was found, check whether the suspect / accumulation
+            // point / a descent-path node is itself a ThreadLocal value — i.e. the
+            // container is held alive through a `ThreadLocal` on a (possibly
+            // pooled) `Thread`. Names the thread-local value class so the holder
+            // is actionable without hand-tracing the ThreadLocalMap chain.
+            let owner_thread_local_class =
+                if s.is_single && owner_static_class.is_empty() && !tl_value_class.is_empty() {
+                    let mut probes: Vec<u32> = Vec::with_capacity(path.len() + 2);
+                    probes.push(s.obj_idx);
+                    if let Some(ap) = accumulation {
+                        if let Ok(ap_u32) = u32::try_from(ap) {
+                            probes.push(ap_u32);
+                        }
+                    }
+                    for st in &path {
+                        if let Ok(idx_u32) = u32::try_from(st.object_index) {
+                            probes.push(idx_u32);
+                        }
+                    }
+                    probes
+                        .iter()
+                        .find_map(|p| tl_value_class.get(p).cloned())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+
             Suspect {
                 is_single: s.is_single,
                 pretty_class,
@@ -4555,6 +4601,7 @@ pub(crate) fn build_leak_suspects(
                 },
                 owner_static_class,
                 owner_static_field,
+                owner_thread_local_class,
             }
         })
         .collect();
