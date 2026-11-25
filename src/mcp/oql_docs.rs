@@ -58,9 +58,17 @@ WHERE classof(x) IN (SELECT @objectAddress FROM java.lang.Class WHERE ...)
 
 Comparison operators: `=`, `!=`, `<`, `<=`, `>`, `>=`
 Logical operators: `AND`, `OR`, `NOT`
-Subquery: `IN (<subquery>)` — inner query must project `@objectAddress`
+More predicates:
+- `<expr> IS NULL` / `IS NOT NULL`
+- `<s> LIKE "pat"` / `NOT LIKE` — SQL globs (`%`, `_`) and regex both accepted
+- `<e> BETWEEN lo AND hi` / `NOT BETWEEN` (inclusive)
+- `<attr> INSTANCEOF <class>`
+- `<e> IN (v1, v2, …)` / `NOT IN (…)` — literal list
+- `<attr> IN (<subquery>)` — inner query must project `@objectAddress`
+- `EXISTS (<subquery>)` / `NOT EXISTS (…)`
+- boolean literal `true` / `false`
 
-## UNION
+## UNION / INTERSECT / EXCEPT
 
 Combine results from multiple FROM clauses:
 
@@ -70,7 +78,9 @@ UNION SELECT @objectAddress, @usedHeapSize AS bytes FROM char[]
 ORDER BY bytes DESC LIMIT 20
 ```
 
-`ORDER BY` and `LIMIT` after the last UNION apply to the merged result.
+`UNION` removes duplicate rows; `UNION ALL` keeps them. `INTERSECT` keeps rows
+in both branches; `EXCEPT` keeps rows in the first but not the second. A trailing
+`ORDER BY` / `LIMIT` / `OFFSET` applies to the merged result.
 
 ## GROUP BY / aggregates
 
@@ -132,7 +142,7 @@ SELECT CAST(@objectId AS STRING) FROM java.lang.Thread
 SELECT CAST(@usedHeapSize AS FLOAT) / 1024.0 AS kb FROM java.lang.String
 ```
 
-Supported target types: `STRING`, `INT`, `LONG`, `FLOAT`, `BOOL`.
+Supported target types: `STRING`, `INT`, `FLOAT`, `BOOL`.
 
 ## VALUES inline table (no dump scan needed)
 
@@ -205,11 +215,14 @@ Virtual table columns:
 | `lower(s)` | Convert string to lowercase |
 | `length(s)` | String length in characters |
 | `trim(s)` | Remove leading/trailing whitespace |
-| `substring(s, start, len)` | Extract substring |
+| `ltrim(s)` / `rtrim(s)` | Trim only the left / right side |
+| `substring(s, start [, len])` | Extract substring (alias `substr`) |
 | `concat(a, b)` | Concatenate two strings |
 | `replace(s, from, to)` | Replace all occurrences |
+| `toHex(e)` | Hex string of a numeric value (e.g. `toHex(@objectAddress)`) |
 
-These work on string columns including `toString(x)` and field values.
+These work on string columns including `toString(x)` and field values. Each
+string function is also callable as a method: `s.upper()`, `s.substring(0,3)`.
 
 ## Arithmetic
 
@@ -226,8 +239,14 @@ SELECT @usedHeapSize / 1024 AS kb, @usedHeapSize / 1024 / 1024 AS mb FROM java.l
 SELECT @objectId, ROW_NUMBER() OVER () AS rn FROM java.lang.String LIMIT 5
 SELECT @objectId, RANK() OVER (ORDER BY @usedHeapSize DESC) AS rank FROM java.lang.String
 SELECT @objectId, DENSE_RANK() OVER (ORDER BY @usedHeapSize DESC) AS drank FROM java.lang.String
+-- rank WITHIN each class, and compare to the previous row
+SELECT classof(x), RANK() OVER (PARTITION BY classof(x) ORDER BY @retainedHeapSize DESC) AS r
+FROM INSTANCEOF java.lang.Object x
+SELECT @usedHeapSize, LAG(@usedHeapSize, 1, 0) OVER (ORDER BY @usedHeapSize) AS prev FROM java.lang.String
 ```
 
+Functions: `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `LAG(e[,off[,default]])`,
+`LEAD(e[,off[,default]])`. `OVER (…)` takes optional `PARTITION BY` and `ORDER BY`.
 Window functions are evaluated after all filtering/grouping but before ORDER BY/LIMIT.
 
 ## WITH (CTEs)
@@ -272,6 +291,16 @@ const ATTRIBUTES: &str = r#"# OQL Attributes and Functions
 | `@length` | integer | Array element count (arrays only; null for non-arrays) |
 | `@inbounds` | objects | Incoming references (OQL queries build edges on demand; `with_graph=true` on load_dump enables them in inspect_object) |
 | `@outbounds` | objects | Outgoing references (same as @inbounds) |
+| `@category` | string | Classification bucket (application / framework / jdk / custom) |
+| `@superclass` | class | The instance's superclass |
+| `@collectionSize` | integer | Element count of a recognized collection |
+| `@fillRatio` | float | Fill ratio of a map/collection (used ÷ capacity) |
+| `@dominatorClass` / `@dominatorDepth` | class / int | Immediate dominator's class / depth in the dominator tree (full pipeline) |
+| `@valueArray` / `@referenceArray` | objects | The backing primitive / reference array of a collection |
+| `@root` | bool | Is this object a GC root? |
+| `@GCRootInfo` (alias `@info`) / `@GCRoots` | string / objects | GC-root descriptor for this object / the GC roots reaching it |
+
+Aliases: `@index` → `@objectId`, `@class` → `@displayName`.
 
 **Index types summary:**
 - `@objectId` from OQL: **0-based** → use directly with `browse_dominators({object_index: N})`
@@ -292,18 +321,28 @@ accounting. Use it only for relative per-class comparisons.
 |----------|-------------|
 | `classof(x)` | Class object for the instance `x` |
 | `toString(x)` | String value (for java.lang.String instances only) |
+| `toHex(e)` | Hex string of a numeric value |
 | `jsonify(x)` / `jsonify(x, depth)` | Expand object `x` to a JSON tree. `depth` controls levels of references followed (default 3). Requires `offsets.bin` built by `heap load`/`load_dump`. **Not available in the web version** (requires native file I/O). |
+| `path(a, b)` | Bounded forward-reachability walk from `a` to `b` |
+| `dominators(x)` | Dominator-tree children of `x` (row-expanding; must be the only select item) |
+| `dominatorof(x)` / `pathToRoot(x)` | Immediate dominator / full path to a GC root (full pipeline) |
+| `CAST(e AS INT\|FLOAT\|STRING\|BOOL)` | Convert a value's type |
+| `CASE WHEN p THEN a [WHEN …] [ELSE z] END` | Conditional value |
+| `COALESCE(a, b, …)` / `NULLIF(a, b)` | First non-null / null-if-equal |
 
 ## Aggregate functions
 
 | Function | Description |
 |----------|-------------|
-| `COUNT(*)` | Number of rows / objects |
+| `COUNT(*)` / `COUNT(DISTINCT e)` | Row count / distinct-value count |
 | `SUM(expr)` | Sum of numeric expression |
-| `MIN(expr)` | Minimum value |
-| `MAX(expr)` | Maximum value |
+| `AVG(expr)` | Mean of numeric expression |
+| `MIN(expr)` / `MAX(expr)` | Minimum / maximum value |
 | `MEDIAN(expr)` | Median value (50th percentile) |
 | `PERCENTILE(expr, p)` | p-th percentile (0–100) |
+
+Any aggregate may carry `FILTER (WHERE <predicate>)` to count/sum only matching
+rows, e.g. `COUNT(*) FILTER (WHERE @usedHeapSize > 1024)`.
 
 ## @viz directive
 

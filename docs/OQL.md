@@ -163,15 +163,18 @@ Type `!help` for a compact overview, or `!help <topic>` for a deep-dive:
 
 ```
 SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
-  FROM [OBJECTS] <class | "regex" | INSTANCEOF class | ( subquery ) | (VALUES …) AS t(cols) | ENTRIES class> [alias]
+  FROM [OBJECTS [OF CLASS]] <class | "regex" | INSTANCEOF class | ( subquery ) | (VALUES …) AS t(cols) | ENTRIES class> [alias]
   [JOIN <source> [AS alias] ON <expr> = <expr>]
   [WHERE <predicate>]
   [GROUP BY <expr> [, <expr>]]
   [HAVING <predicate>]
-  [ORDER BY <expr> [ASC|DESC]]
-  [LIMIT <n>]
-[UNION <select> ...]
+  [ORDER BY <expr> [ASC|DESC] [, …]]
+  [LIMIT <n>] [OFFSET <n>]
+[UNION [ALL] <select> ...] | [INTERSECT <select>] | [EXCEPT <select>]
 ```
+
+A `WITH <name> AS (<select>) [, …]` clause may precede the first `SELECT`
+(see [WITH (CTEs)](#with-ctes)).
 
 ### SELECT list
 
@@ -179,13 +182,22 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 - A bare alias (`s`) — projects the object, same as `*`.
 - An attribute: `@objectId`, `@objectAddress`, `@usedHeapSize`,
   `@retainedHeapSize`¹, `@displayName`, `@length`, `@inbounds`¹, `@outbounds`¹,
-  `@category`, `@superclass`, `@collectionSize`,
-  `@dominatorClass`¹, `@dominatorDepth`¹.
+  `@category`, `@superclass`, `@collectionSize`, `@fillRatio`,
+  `@dominatorClass`¹, `@dominatorDepth`¹, `@valueArray`, `@referenceArray`,
+  `@root` (bool: is this object a GC root?), `@GCRootInfo` (alias `@info`),
+  `@GCRoots`, `@name`. Aliases: `@index` → `@objectId`, `@class` → `@displayName`.
 - A field path: `s.fieldName`, `s.a.b`.
-- A function: `classof(x)`, `toString(x)`, `path(a, b)`, `dominators(x)`¹,
-  `dominatorof(x)`¹, `pathToRoot(x)`¹.
+- A function: `classof(x)`, `toString(x)`, `toHex(e)`, `jsonify(x[, depth])`,
+  `path(a, b)`, `dominators(x)`¹, `dominatorof(x)`¹, `pathToRoot(x)`¹.
+- A string function (also callable as a method, `s.upper()`): `upper`, `lower`,
+  `trim`, `ltrim`, `rtrim`, `length`, `substring(s, start[, len])` (alias
+  `substr`), `concat`, `replace(s, from, to)`.
 - An aggregate: `COUNT(*)`, `SUM(e)`, `MIN(e)`, `MAX(e)`, `AVG(e)`,
-  `MEDIAN(e)`, `PERCENTILE(e, <int>)`.
+  `MEDIAN(e)`, `PERCENTILE(e, <int>)`, `COUNT(DISTINCT e)`. Any aggregate may
+  carry a `FILTER (WHERE <predicate>)` clause that restricts it to matching rows,
+  e.g. `COUNT(*) FILTER (WHERE @usedHeapSize > 1024)`.
+- A window function: `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `LAG(e[,off[,default]])`,
+  `LEAD(e[,off[,default]])` followed by `OVER (…)` — see [Window functions](#window-functions).
 - `<expr> AS <name>` — rename the output column.
 
 ¹ Requires the **full analysis pipeline** — see the caveat below.
@@ -238,9 +250,15 @@ Bare `JOIN` means `INNER JOIN`. `LEFT JOIN` keeps outer rows that have no match 
 ### Predicates (WHERE)
 
 - Comparisons: `=`, `!=`, `<`, `<=`, `>`, `>=`.
+- `<expr> IS NULL` / `<expr> IS NOT NULL` — test a reference/field for null
+  (e.g. `WHERE s.value IS NOT NULL`).
 - `LIKE "pattern"` / `NOT LIKE "pattern"` — RHS must be a string literal. Accepts
   both **SQL globs** (`%` = any sequence, `_` = any single character) and
   **regex** patterns interchangeably: `LIKE "%error%"` and `LIKE ".*error.*"` both work.
+- `<expr> BETWEEN <lo> AND <hi>` / `NOT BETWEEN` — inclusive range (see
+  [COALESCE, NULLIF, BETWEEN](#coalesce-nullif-between)).
+- `EXISTS ( SELECT … )` / `NOT EXISTS ( … )` — correlated existence test (see
+  [EXISTS subquery](#exists-subquery)).
 - `<attr> INSTANCEOF <class>`.
 - `<attr> IN ( SELECT @objectAddress FROM … )` — membership against a subquery
   that selects a single address-valued column.
@@ -248,16 +266,21 @@ Bare `JOIN` means `INNER JOIN`. `LEFT JOIN` keeps outer rows that have no match 
 - `<attr> NOT IN ( SELECT @objectAddress FROM … )` — exclusion; equivalent to
   `NOT (<attr> IN (…))`.
 - `<expr> NOT IN (<v1>, <v2>, …)` — literal-list exclusion (desugars to `!=` AND-chain).
+- Boolean literals `true` / `false` are valid predicates (e.g. `WHERE true`).
 - Combine with `AND`, `OR`, `NOT`, parentheses.
 
 ### Ordering, limiting, union
 
-- `ORDER BY <expr> [ASC|DESC]` sorts the full result before `LIMIT`. Sort keys
-  may be projected or unprojected expressions; unprojected keys are evaluated
-  internally for sorting and are not appended to output columns.
-- `LIMIT n` caps rows. In a `UNION`, a trailing `LIMIT` caps the combined result.
-- `UNION` concatenates branches. Aggregates are **not** allowed inside a UNION
-  branch.
+- `ORDER BY <expr> [ASC|DESC]` sorts the full result before `LIMIT`. Multiple
+  comma-separated sort keys are allowed. Sort keys may be projected or
+  unprojected expressions; unprojected keys are evaluated internally for sorting
+  and are not appended to output columns.
+- `LIMIT n` caps rows. `OFFSET m` skips the first `m` rows (apply after
+  `ORDER BY`); `LIMIT n OFFSET m` paginates. In a `UNION`, a trailing
+  `LIMIT`/`OFFSET` applies to the combined result.
+- `UNION` concatenates branches and removes duplicate rows; `UNION ALL` keeps
+  duplicates (cheaper — no dedup pass). Aggregates are **not** allowed inside a
+  UNION branch.
 
 ### Not supported
 
@@ -303,6 +326,49 @@ LIMIT 30
 Only `COUNT(*)` and `COUNT(toString(s))` are supported as aggregates in a
 `toString`-query — `SUM`, `AVG`, `MIN`, `MAX` over an attribute that is only
 available at decode time are rejected with an actionable error.
+
+---
+
+## Window functions
+
+Window functions compute a value across a set of rows related to the current
+row, without collapsing them the way `GROUP BY` does. Each is followed by an
+`OVER (…)` clause giving an optional `PARTITION BY` (reset per group) and an
+optional `ORDER BY` (ranking/offset order):
+
+```
+<window-fn> OVER ([PARTITION BY <expr> [, …]] [ORDER BY <expr> [ASC|DESC] [, …]])
+```
+
+Supported window functions:
+
+| Function | Result |
+|----------|--------|
+| `ROW_NUMBER()` | 1-based sequential number within the partition |
+| `RANK()` | rank with gaps after ties |
+| `DENSE_RANK()` | rank without gaps |
+| `LAG(e [, offset [, default]])` | value of `e` `offset` rows before (default 1); `default` when out of range |
+| `LEAD(e [, offset [, default]])` | value of `e` `offset` rows after (default 1) |
+
+```sql
+-- Number each String by size, largest first
+SELECT @objectId AS id, @usedHeapSize AS bytes,
+       ROW_NUMBER() OVER (ORDER BY @usedHeapSize DESC) AS n
+FROM java.lang.String LIMIT 10
+
+-- Rank instances WITHIN each class by retained size
+SELECT classof(x) AS class, @retainedHeapSize AS ret,
+       RANK() OVER (PARTITION BY classof(x) ORDER BY @retainedHeapSize DESC) AS r
+FROM INSTANCEOF java.lang.Object x
+
+-- Compare each size to the previous row's size
+SELECT @usedHeapSize AS bytes,
+       LAG(@usedHeapSize, 1, 0) OVER (ORDER BY @usedHeapSize) AS prev
+FROM java.lang.String LIMIT 10
+```
+
+A trailing `ORDER BY` / `LIMIT` on the whole query still applies to the final
+result after the window function is evaluated.
 
 ---
 
@@ -1069,7 +1135,6 @@ These features are available in `hprof-analyzer` but not in Eclipse MAT's OQL:
 | `-- @viz <type> …` visualization directive | `-- @viz histogram label=class value=bytes` |
 | `GROUP BY` / `HAVING` | `GROUP BY classof(x) HAVING COUNT(*) > 100` |
 | Arithmetic expressions in SELECT and WHERE | `@usedHeapSize * 8 AS bits` |
-| System properties snapshot (`@systemProperties`) | `SELECT @systemProperties` |
 | Reachable-only filter (default) / raw scan (`all=true` / `--all`) | `--all` bypasses GC-reachability; useful when a dump has many unreachable objects |
 | Interactive REPL with Tab completion and history | `hprof-analyzer query heap.hprof --repl` |
 | Report embedding (`--query` / `--query-file`) | fold OQL results into HTML/MD/JSON report |
