@@ -17,7 +17,19 @@ All notable changes to hprof-analyzer are documented here.
   needs a second `get_report({"section":"leaks"})` call just to recover the
   owner. (Measured with naive Haiku agents across the `leak-demos/` scenarios:
   static-cache/unbounded-collection/healthy-cache dumps drop from 2 tool calls
-  to 1.)
+  to 1.) For the headline suspect it also inlines a compact accumulation chain —
+  the accumulation point (class, retained, object_index), what piles up there
+  (class × instance count), and a short holder→…→accumulation path with
+  field-edge names — so indirect/listener/deep-chain leaks are also actionable
+  without a follow-up `leaks` call.
+- **Smaller MCP tool/schema descriptions** — the per-session tool descriptions,
+  parameter doc-comments, and server instructions were trimmed (~13.9k → ~10.5k
+  tokens): the OQL `query` param no longer inlines the full view list and OQL
+  tutorial (call `list_views` / `get_oql_docs({topic:"examples"})` for those),
+  the `get_report` section menu is a flat list (all 29 sections retained), and
+  the server instructions keep only the non-obvious cues (1-call workflow, the
+  0-based vs 1-based index rule, the static-cache caveat, avoid `top`/`all`).
+  No capability removed — only duplication of the dedicated discovery tools.
 - **Leak suspects name the static-field GC-root owner** — a static cache or
   collection (the most common real Java leak) is held by a static field, but
   the dominator is often a transient `Thread` stack local, so the leak used to

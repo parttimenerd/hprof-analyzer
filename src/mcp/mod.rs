@@ -117,35 +117,12 @@ fn parse_category_specs(specs: &[String]) -> Result<Vec<crate::classify::Categor
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetReportParams {
-    /// Which section to return.
-    ///
-    /// FOCUSED VIEWS (prefer these for simple questions — small, targeted output):
-    ///   "top-objects"  — top 20 biggest individual objects by retained size (use limit to adjust)
-    ///   "top-classes"  — top 20 biggest classes by retained size with holder breakdown (use limit to adjust)
-    ///
-    /// CORE SECTIONS:
-    ///   "leaks"    — leak suspects with root paths, dominated objects, dominator tree (capped at depth 3, 20 children/node). Each suspect may carry `owner_static_class` (and `owner_static_field`) naming the class whose STATIC FIELD holds the leaking container — the real durable root for a static cache/collection leak, even when the suspect's dominator is a transient `Thread`. Prefer this over the `Thread` label when present.
-    ///   "top"      — LARGE: full biggest-objects + biggest-classes lists; prefer "top-objects" or "top-classes"
-    ///   "threads"  — per-thread retained sizes + stack traces (sorted by retained desc, limited by limit param)
-    ///   "overview" — heap totals, object count, identifier size
-    ///
-    /// ANALYSIS SECTIONS:
-    ///   "triage", "waste", "indicators", "retainers", "arrays", "collections",
-    ///   "references", "dominators", "components", "alloc_sites", "thread_locals",
-    ///   "framework", "field_stats", "categories"
-    ///
-    /// QUICK-ACCESS SECTIONS (synthesized from existing data, no new model fields):
-    ///   "gc-roots"       — GC root counts + retained bytes by root type
-    ///   "classloaders"   — classloader count + loader_rollup + duplicate_classes
-    ///   "strings"        — string/char[] count/shallow + duplicate waste stats
-    ///   "packages"       — biggest_packages tree (which package dominates memory)
-    ///   "culprits"       — primary_culprits: top-N synthesized likely culprit objects
-    ///   "self-referential" — classes with many instances of themselves (list/trie node leaks)
-    ///   "static-collections" — collection classes with instances/shallow/retained/ratio; high ratio = accumulation
-    ///   "resources"      — file/stream/JDBC handle classes by instance count; high count = unclosed leak
-    ///
-    /// Default "triage" (severity-tagged signals — the fastest diagnosis).
-    /// "all" (everything merged) is very large; avoid in LLM workflows.
+    /// Which section to return (default "triage"). See this tool's description
+    /// for the full section list. Most-used: triage, leaks, top-objects,
+    /// top-classes, overview, threads. The "leaks" section's suspects carry
+    /// `owner_static_class`/`owner_static_field` — the static field holding a
+    /// leaking container, the real root behind a `Thread`-dominated static
+    /// cache; prefer that over the `Thread` label. Avoid "top"/"all" (very large).
     pub section: Option<String>,
     /// Max rows for "top-objects" and "threads" (default 20, max 100).
     /// For "top-classes" default is 10 (holders data makes each row large).
@@ -179,98 +156,16 @@ pub struct ExplainQueryParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct QueryParams {
     /// OQL query string OR a built-in view name (no SQL needed).
-    ///
-    /// VIEW NAMES — use these directly instead of writing OQL:
-    ///   "top-classes-by-count"    — top 30 classes by instance count
-    ///   "top-classes-by-size"     — top 30 classes by shallow size
-    ///   "largest-objects"         — 20 largest individual objects
-    ///   "heap-summary"            — class count + bytes, top 50
-    ///   "duplicate-strings"       — duplicate string values (memory waste)
-    ///   "largest-strings"         — 20 largest String objects
-    ///   "string-count"            — total string count and size
-    ///   "all-threads"             — all Thread objects
-    ///   "thread-count"            — thread count
-    ///   "thread-pool-waiters"     — threads with retained size, sorted desc (*)
-    ///   "large-arrays"            — primitive arrays > 64 KB
-    ///   "large-collections"       — collections with > 1000 elements
-    ///   "empty-collections"       — empty collections (overhead waste)
-    ///   "class-loaders"           — all ClassLoader instances
-    ///   "classes-per-loader"      — loader instances grouped by loader class (true per-loader CLASS counts live in get_report({section:"classloaders"}) — OQL cannot see the CLASS_DUMP loader id)
-    ///   "top-retained-by-class"   — top 30 classes by RETAINED size (*)
-    ///   "largest-retained-objects"— 20 objects with most retained bytes (*)
-    ///   "leak-suspects"           — objects retaining > 10 MB (large heaps; for small heaps use get_report({section:"leaks"}) instead)
-    ///   "retained-threads"        — threads by retained size (*)
-    ///   "retained-summary"        — shallow vs retained by class (*)
-    ///   "object-count-total"      — total object count
-    ///   "xml-dom-documents"       — accumulated Xerces DOM Document objects (*)
-    ///   "fjp-task-queue"          — ForkJoinTask subtypes accumulating
-    ///   "classloader-instances"   — live ClassLoader instances with retained sizes (*)
-    ///   "big-decimal-instances"   — BigDecimal accumulation by type
-    ///   "http-sessions"           — HTTP Session objects by retained size (*)
-    ///   "static-collections"      — Collection subclasses grouped by type: count/shallow/retained (*)
-    ///   "unclosed-resources"      — Closeable subclasses by instance count (spots unclosed handles)
-    ///  (*) = needs full analysis; always available after load_dump
-    ///
-    /// OQL EXAMPLES (for custom queries):
-    ///   "SELECT @objectId AS idx, @retainedHeapSize AS ret FROM java.lang.String ORDER BY ret DESC LIMIT 10"
-    ///   "SELECT classof(x) AS class, COUNT(*) AS n FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY n DESC LIMIT 20"
-    ///
-    /// OQL LANGUAGE FEATURES:
-    ///
-    /// BASIC SELECT:
-    ///   SELECT @objectId, @usedHeapSize, @displayName FROM java.lang.Thread
-    ///   SELECT * FROM INSTANCEOF java.util.List                 -- match subclasses too
-    ///   SELECT @objectId FROM java.lang.String s WHERE s.value[0] > 65  -- array subscript in WHERE
-    ///
-    /// CAST & TYPE CHECKS:
-    ///   SELECT CAST(@objectId AS STRING) FROM java.lang.Thread  -- cast to STRING, INT, LONG, FLOAT, BOOL
-    ///   SELECT @displayName FROM java.lang.Object x WHERE x IS NOT NULL
-    ///
-    /// STRING FUNCTIONS:
-    ///   SELECT upper(s.value), lower(s.value), length(s.value) FROM java.lang.String s
-    ///   SELECT trim(s.value), substring(s.value, 0, 10) FROM java.lang.String s
-    ///   SELECT concat(s.value, '!') FROM java.lang.String s WHERE s.value LIKE '%error%'
-    ///
-    /// AGGREGATES & GROUP BY:
-    ///   SELECT classof(x), COUNT(*), SUM(@usedHeapSize) FROM INSTANCEOF java.lang.Object x GROUP BY classof(x)
-    ///   SELECT @displayName, COUNT(*) AS n FROM INSTANCEOF java.lang.Object GROUP BY @displayName ORDER BY n DESC
-    ///   SELECT classof(x), COUNT(DISTINCT @usedHeapSize) FROM INSTANCEOF java.lang.Object x GROUP BY classof(x)
-    ///   SELECT MIN(@usedHeapSize), MAX(@usedHeapSize), AVG(@usedHeapSize) FROM java.lang.String
-    ///   SELECT PERCENTILE(@usedHeapSize, 50) AS p50 FROM java.lang.String
-    ///
-    /// VALUES INLINE TABLE (no dump scan needed):
-    ///   SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)
-    ///   SELECT id * 2 FROM VALUES (10), (20), (30) AS t(id) ORDER BY id DESC
-    ///
-    /// JOIN (combining a heap scan with inline data):
-    ///   SELECT t.name, v.label
-    ///     FROM java.lang.Thread t
-    ///     INNER JOIN VALUES ('main', 'primary'), ('worker', 'pool') AS v(name, label)
-    ///     ON t.name = v.name
-    ///   SELECT t.name, v.label
-    ///     FROM java.lang.Thread t
-    ///     LEFT JOIN VALUES ('main', 'primary') AS v(name, label)
-    ///     ON t.name = v.name     -- unmatched rows get NULL for v.label
-    ///
-    /// WINDOW FUNCTIONS (ORDER BY + LIMIT apply globally):
-    ///   SELECT @objectId, ROW_NUMBER() OVER () AS rn FROM java.lang.String LIMIT 5
-    ///   SELECT @objectId, RANK() OVER (ORDER BY @usedHeapSize DESC) AS rank FROM java.lang.String
-    ///
-    /// ARITHMETIC & MODULO:
-    ///   SELECT @usedHeapSize % 1024 AS remainder FROM java.lang.String
-    ///   SELECT @usedHeapSize / 1024.0 AS kb FROM java.lang.String
-    ///
-    /// UNION / INTERSECT / EXCEPT:
-    ///   SELECT @objectId FROM java.lang.Thread UNION SELECT @objectId FROM java.lang.Runnable
-    ///   SELECT @objectId FROM java.lang.Thread INTERSECT SELECT @objectId FROM java.lang.Runnable
-    ///
-    /// SUBQUERIES:
-    ///   SELECT @objectId FROM java.lang.Thread WHERE @objectId IN (SELECT @objectId FROM java.lang.Thread WHERE name = 'main')
-    ///   SELECT @objectId FROM (SELECT @objectId, name FROM java.lang.Thread) t WHERE t.name = 'main'
-    ///
-    /// WITH (CTEs):
-    ///   WITH big AS (SELECT @objectId FROM java.lang.String WHERE @usedHeapSize > 100)
-    ///   SELECT @objectId FROM big
+    /// Pass a view name to run a canned query — call `list_views` for the full
+    /// list (e.g. top-retained-by-class, largest-objects, duplicate-strings,
+    /// leak-suspects, static-collections, unclosed-resources). For custom OQL,
+    /// call `get_oql_docs({topic:"examples"})` for ready-to-run patterns and the
+    /// full language reference (SELECT/WHERE/GROUP BY, INSTANCEOF, CAST, string
+    /// fns, aggregates, JOIN/UNION/subqueries/CTEs, window fns).
+    /// Always SELECT @objectId to get indices for follow-up calls; object refs in
+    /// results appear as {"class":..,"index":N} (use index 0-based directly);
+    /// @retainedHeapSize is everything an object keeps alive.
+    /// Example: SELECT @objectId AS idx, @retainedHeapSize AS ret FROM java.lang.String ORDER BY ret DESC LIMIT 10
     pub oql: String,
     /// Include GC-unreachable objects in results. By default, only GC-reachable
     /// objects are returned (Eclipse MAT parity). Set to true to include all
@@ -448,6 +343,85 @@ struct DomNode {
 
 fn is_zero_usize(n: &usize) -> bool {
     *n == 0
+}
+
+/// Render a compact accumulation chain for a leak suspect, to inline under the
+/// headline suspect in the `load_dump` response. Token-efficiency: this is the
+/// detail an eval found agents otherwise spend a second `get_report(leaks)`
+/// call (~2 KB) to recover — the holder → … → accumulation-point chain (with
+/// field-edge names when captured), what piles up there (class × instance
+/// count), and the accumulation object_index for drill-down. Returns an empty
+/// string when the suspect has no resolved accumulation point (e.g. class-group
+/// suspects or a descent that hit the depth cap), so healthy dumps and
+/// un-pinpointed suspects add zero bytes.
+fn accumulation_chain_text(s: &crate::report::Suspect) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+
+    // The accumulation point: where retained heap actually piles up.
+    let accum_class = match s.accumulation_class.as_deref() {
+        Some(c) if !c.is_empty() => c,
+        _ => return out, // no pinpointed accumulation → nothing compact to add
+    };
+    let accum_idx = s.accumulation_obj_1based.map(|v| v.saturating_sub(1));
+
+    // What accumulates there: the dominant by-class row (class × count).
+    let piled = s.dominated_by_class.first();
+
+    // A short holder→…→accumulation chain from root_path, with field-edge names
+    // when captured. Keep it to the first few hops so this stays compact.
+    let chain: String = match &s.root_path {
+        Some(path) if !path.is_empty() => {
+            let hops: Vec<String> = path
+                .iter()
+                .take(4)
+                .map(|st| {
+                    let short = short_class(&st.display_class);
+                    match st.field_edge.as_deref() {
+                        Some(f) if !f.is_empty() => format!("{short}.{f}"),
+                        _ => short,
+                    }
+                })
+                .collect();
+            hops.join(" → ")
+        }
+        _ => String::new(),
+    };
+
+    out.push_str(&format!(
+        "     ↳ accumulation point: `{}`",
+        short_class(accum_class)
+    ));
+    if let Some(r) = s.accumulation_retained {
+        let _ = write!(out, " (retains {} MB)", r / 1_000_000);
+    }
+    if let Some(idx) = accum_idx {
+        let _ = write!(out, " [object_index {idx}]");
+    }
+    out.push('\n');
+
+    if let Some(row) = piled {
+        let _ = writeln!(
+            out,
+            "     ↳ accumulating: {} × `{}`",
+            row.instances,
+            short_class(&row.pretty_class)
+        );
+    }
+    if !chain.is_empty() {
+        let _ = writeln!(out, "     ↳ held via: {chain}");
+    }
+    out
+}
+
+/// Last path-segment of a dotted/binary class name, keeping array markers —
+/// e.g. `java.util.HashMap$Node` → `HashMap$Node`, `[B` stays `[B`. Keeps the
+/// inlined chain readable without dropping the disambiguating `$Inner` suffix.
+fn short_class(name: &str) -> String {
+    match name.rsplit(['.', '/']).next() {
+        Some(tail) if !tail.is_empty() => tail.to_string(),
+        _ => name.to_string(),
+    }
 }
 
 // ── MCP server ────────────────────────────────────────────────────────────────
@@ -754,22 +728,25 @@ impl HprofMcpServer {
         let suspects_text: String = if result.report.leaks.suspects.is_empty() {
             "  (none detected)\n".to_string()
         } else {
-            result
-                .report
-                .leaks
-                .suspects
-                .iter()
-                .take(5)
-                .enumerate()
-                .map(|(i, s)| {
-                    format!(
-                        "  {}. {} — retained {} MB\n",
-                        i + 1,
-                        s.pretty_class,
-                        s.retained / 1_000_000
-                    )
-                })
-                .collect()
+            let mut out = String::new();
+            for (i, s) in result.report.leaks.suspects.iter().take(5).enumerate() {
+                out.push_str(&format!(
+                    "  {}. {} — retained {} MB\n",
+                    i + 1,
+                    s.pretty_class,
+                    s.retained / 1_000_000
+                ));
+                // For the HEADLINE suspect only, inline a compact accumulation
+                // chain so indirect/chain/deep leaks are actionable from this
+                // one response — holder (static owner) → … → accumulation point
+                // → what piles up there (class × count) + its object_index for
+                // drill-down. Eval showed agents otherwise spend a second
+                // get_report(leaks) call (~2 KB) purely to recover this.
+                if i == 0 {
+                    out.push_str(&accumulation_chain_text(s));
+                }
+            }
+            out
         };
 
         let top_classes_text: String = result
@@ -968,40 +945,14 @@ impl HprofMcpServer {
     }
 
     /// Return a section of the full analysis report as JSON.
-    #[tool(description = "Return a report section. \
-                          \n\n⚠ INDEX NOTE: obj_index_1based in leaks JSON (dominator_tree + root_path) is 1-BASED — subtract 1 before passing to browse_dominators/inspect_object. browse_dominators 'index' and query @objectId are 0-based (use directly).\
-                          \n\nFOR SIMPLE QUESTIONS (just 1-2 calls after load_dump):\
-                          \n  \"top-classes\"  — top N classes by retained size (use for 'what's using the most memory?')\
-                          \n  \"top-objects\"  — top N biggest individual objects by retained size\
-                          \n  \"overview\"     — heap totals, object count, identifier size\
-                          \n  \"threads\"      — per-thread retained sizes + stack traces\
-                          \n\nFOR LEAK INVESTIGATION (start here when asked to find a leak or OOM):\
-                          \n  \"triage\"       — ⭐ severity-tagged signals (critical/warning/info); BEST first call for diagnosis\
-                          \n                    After reading triage: act on EVERY critical/warning item by its id:\
-                          \n                    headline-retainer/threadlocal-leak → get_report(leaks); off-heap → get_report(indicators);\
-                          \n                    gc-waste → query(heap-summary); component-retention-imbalance → get_report(components)\
-                          \n  \"leaks\"        — suspects with root_path, dominated objects, dominator_tree, and owner_static_class/owner_static_field (the static field holding the leak, when any — the real root behind a Thread-dominated static cache)\
-                          \n  \"retainers\"    — top stack frames/fields by retained size (who is keeping things alive)\
-                          \n  \"dominators\"   — big-drop objects (retain >> largest child)\
-                          \n\nOTHER SECTIONS:\
-                          \n  \"waste\"        — reclaimable memory: duplicate strings, empty collections\
-                          \n  \"indicators\"   — anon classes, ThreadLocal null keys, DirectByteBuffer total\
-                          \n  \"arrays\"       — array length distribution\
-                          \n  \"collections\"  — fill ratios, map load factors\
-                          \n  \"references\"   — Soft/Weak/Phantom reference counts\
-                          \n  \"components\"   — retained heap per class loader\
-                          \n  \"gc-roots\"     — GC root counts + retained bytes by root type\
-                          \n  \"classloaders\" — classloader count + loader rollup + duplicate classes\
-                          \n  \"strings\"      — String/char[] counts + duplicate waste stats\
-                          \n  \"packages\"     — biggest_packages tree (which package dominates memory)\
-                          \n  \"culprits\"     — top-N synthesized likely culprit objects\
-                          \n  \"self-referential\" — classes with many self-referential instances (list/trie node leaks)\
-                          \n  \"static-collections\" — collection classes (ArrayList/HashMap/…) with instances/shallow/retained/ratio; high ratio reveals accumulation\
-                          \n  \"resources\"    — file/stream/JDBC handle classes with instance counts; high counts reveal unclosed-resource leaks\
-                          \n  \"alloc_sites\", \"thread_locals\", \"framework\", \"field_stats\", \"categories\"\
-                          \n  \"top\"          — LARGE (full biggest-objects + biggest-classes); prefer \"top-objects\"/\"top-classes\"\
-                          \n  \"all\"          — everything merged (very large — avoid in LLM workflows)\
-                          \n\nDEFAULT: omitting `section` returns \"triage\" (changed from \"all\" in 0.3.4 — use \"all\" explicitly for the full report).")]
+    #[tool(description = "Return one report section as JSON (default: triage). \
+                          INDEX NOTE: obj_index_1based in leaks (dominator_tree/root_path) is 1-based — subtract 1; query @objectId and browse_dominators 'index' are 0-based. \
+                          Sections: triage (severity-tagged signals; usually load_dump already inlines the key ones), \
+                          leaks (suspects + root_path + dominator_tree + owner_static_class/field), top-objects, top-classes, \
+                          overview, threads, retainers, dominators, waste, indicators, components, gc-roots, classloaders, \
+                          strings, packages, culprits, self-referential, static-collections, resources, arrays, collections, \
+                          references, alloc_sites, thread_locals, framework, field_stats, categories. \
+                          Avoid 'top' and 'all' (very large). Use the limit param to cap rows.")]
     async fn get_report(
         &self,
         Parameters(p): Parameters<GetReportParams>,
@@ -1068,17 +1019,12 @@ impl HprofMcpServer {
     /// Run an OQL query against the loaded dump. Returns {columns, rows, truncated, row_count}.
     /// Rows are arrays of plain JSON values (strings, numbers, null). Object references
     /// appear as {"class":"ClassName","index":N} — use the index with inspect_object or browse_dominators.
-    #[tool(description = "Run an OQL query OR a built-in view by name. \
-                       SHORTCUT: pass a view name like \"top-retained-by-class\" instead of writing OQL. \
-                       All 28 view names are listed in the oql parameter description — use them directly. \
-                       Returns {columns, rows, truncated, row_count, view_name?}. \
-                       Rows are plain JSON. Object references appear as {\"class\":\"ClassName\",\"index\":N} — use 'index' as object_index. \
-                       Always SELECT @objectId AS idx to get indices for browse_dominators/inspect_object. \
-                       Tip: SELECT jsonify(x) FROM ... expands objects to JSON trees (requires load_dump to have been called first, \
-                       which builds the needed offset index automatically). \
-                       Array subscript s[0]/s[0:3] also requires the offset index from load_dump. \
-                       If a query returns fewer rows than expected (e.g. 0 rows for a class that COUNT(*) finds), \
-                       try all=true to include GC-unreachable objects (raw heap scan).")]
+    #[tool(
+        description = "Run an OQL query, or a built-in view by name (call list_views for names; \
+                       see the oql param for syntax). Returns {columns, rows, truncated, row_count, view_name?}. \
+                       Object refs appear as {\"class\":..,\"index\":N} — use index (0-based) with browse_dominators/inspect_object. \
+                       If a query returns fewer rows than expected, pass all=true to include GC-unreachable objects."
+    )]
     async fn query(
         &self,
         Parameters(p): Parameters<QueryParams>,
@@ -1839,43 +1785,16 @@ impl ServerHandler for HprofMcpServer {
                 )
         )
         .with_instructions(
-            "USE THIS SERVER for any Java heap dump analysis task. Trigger keywords: \
-             .hprof file, OutOfMemoryError, OOM, Java memory leak, heap dump, jmap, \
-             Eclipse MAT, heap histogram, dominator tree, GC roots, retained heap, \
-             object retention, JVM memory analysis.\n\n\
-             IMPORTANT RULES:\n\
-             - Send ONE tool call at a time and wait for the response before sending the next.\n\
-             - load_dump BLOCKS for 5–15 min on first load (subsequent loads ~1 s from cache). Wait for it.\n\
-             - object_index values: @objectId from query and 'index' from browse_dominators are 0-based (use directly).\n\
-             - obj_index_1based in get_report (dominator_tree + root_path) is 1-BASED — subtract 1 for browse_dominators/inspect_object!\n\n\
-             ANSWERING \"find the leak\" or \"why is there an OOM\":\n\
-             1. load_dump({path})                        — loads the file AND returns the strongest triage signals (Critical/Warning), top suspects, and top classes inline. For many questions this alone is the answer — read it before calling anything else.\n\
-             2. get_report({\"section\":\"triage\"})         — ONLY if you need the full signal list (incl. info-level) or section links beyond what load_dump already inlined\n\
-                ACT on every critical/warning item by its id:\n\
-                  headline-retainer/threadlocal-leak → get_report(leaks)\n\
-                  off-heap → get_report(indicators) for DirectByteBuffer total\n\
-                  gc-waste → query(heap-summary) to see what's accumulating\n\
-                  component-retention-imbalance → get_report(components)\n\
-                  NOTE: a WARNING headline/concentration naming a static cache/index means the retained set is large but may be an intentional bounded cache — confirm unbounded growth before calling it a leak.\n\
-             3. get_report({\"section\":\"leaks\"})           — root paths, dominated objects, dominator_tree. A suspect's `owner_static_class`/`owner_static_field` (when present) name the static field holding the leak — report THAT as the culprit, not a transient `Thread` dominator.\n\
-             4. browse_dominators({object_index: ...})   — drill into accumulation point\n\
-             5. get_report({\"section\":\"top-classes\"})     — which classes dominate memory\n\n\
-             GRAPH TRAVERSAL PRIMITIVES (for iterative exploration):\n\
-             - get_dominator_path({object_index: N})     — walk idom[] from object to GC root (retention chain)\n\
-             - get_outbound_references({object_index: N})— forward edges: what does this object reference? (requires with_graph=true)\n\
-             - get_retained_set({object_index: N})       — DFS dominator subtree: what would be freed if this object were collected?\n\
-             Combine these with browse_dominators (downward tree walk) and find_incoming_references (backward edges) \n\
-             for complete graph exploration.\n\n\
-             ANSWERING SIMPLE QUESTIONS ('biggest objects', 'top classes', etc.):\n\
-             - get_report({\"section\":\"top-objects\"})      — top 20 biggest objects by retained size\n\
-             - get_report({\"section\":\"top-classes\"})      — top 20 classes by retained size\n\
-             - get_report({\"section\":\"top-objects\", \"limit\":5}) — adjust count with limit\n\
-             DO NOT use get_report({\"section\":\"top\"}) or get_report({\"section\":\"all\"}) — they return megabytes of data.\n\n\
-             QUERY TIPS:\n\
-             - Always SELECT @objectId to get indices for follow-up calls\n\
-             - Object references in results appear as {\"class\":\"ClassName\",\"index\":N} — use 'index' as object_index\n\
-             - @retainedHeapSize = everything kept alive by this object (most useful for leak detection)\n\
-             - Use INSTANCEOF to match subclasses; GROUP BY classof(x) to aggregate"
+            "Java heap-dump analysis (.hprof, OOM, memory leak, dominator tree, GC roots, MAT).\n\
+             WORKFLOW: call load_dump FIRST — it inlines the verdict (triage signals, top suspects, \
+             the leak's accumulation chain, and the static-field owner), so it alone usually answers \
+             'find the leak'. Only call get_report({section:...}) for more: 'leaks' (full root paths), \
+             'triage' (all signals incl. info), 'top-objects'/'top-classes'. Never request section \
+             'top' or 'all' (megabytes).\n\
+             INDEX RULE: @objectId (query) and 'index' (browse_dominators) are 0-based — use directly; \
+             obj_index_1based in get_report is 1-based — subtract 1.\n\
+             A WARNING (not Critical) headline naming a static cache/index means the retained set is \
+             large but may be an intentional bounded cache — confirm unbounded growth before calling it a leak."
                 .to_string(),
         )
     }
@@ -2057,7 +1976,9 @@ fn run_query_on_dump(
         Ok(q) => q,
         Err(report) => {
             return Ok(serde_json::json!({
-                "columns": [], "rows": [], "truncated": false, "error": strip_ansi(&report)
+                "columns": [], "rows": [], "truncated": false,
+                "error": strip_ansi(&report),
+                "_help": "For OQL syntax and ready-to-run patterns call get_oql_docs({topic:\"examples\"}); for a canned query call list_views."
             }));
         }
     };

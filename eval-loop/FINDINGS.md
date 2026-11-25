@@ -174,3 +174,84 @@ VERSION bumped 22→23 (triage text changed).
 SECONDARY: get_report(leaks) dominator_tree is verbose (agents "skim" the
 dominated[] arrays). Candidate future trim: a compact/own `leaks` mode that
 drops the deep tree when the owner+root_path already answer the question.
+
+## Harder-dump sequential round (2026-11-25, final binary)
+
+Sequential (one agent at a time), harder scenarios: 1 real-world fixture + 3
+indirect/deep leaks. All verdicts CORRECT.
+
+| Dump                  | Verdict   | Calls | Note |
+|-----------------------|-----------|-------|------|
+| dump_2_scala-doku(real)| HEALTHY ✓ | 4     | deep chain flagged WARNING not Critical — no false positive on real diffuse heap |
+| 02 ListenerLeak       | LEAK ✓    | 2     | indirect: static EventBus → 12,453 lambda listeners |
+| 25 DeepObjectChain    | LEAK ✓    | 3     | 50k-node linked list; wanted field-name `next` inline |
+| 33 AppEventPipeline   | LEAK ✓    | 3-4   | static ArrayDeque → 50k Events |
+
+GENERALIZABLE NEXT LEVER (3 of 4 agents, independently): load_dump's inline
+headline now names the static OWNER, but agents still spend a 2nd/3rd call
+(get_report leaks) to recover the ACCUMULATION CHAIN — holder → collection →
+accumulated-type with instance count — and the field edge names (`next`,
+`eventBus`) and the accumulation-point object index. Candidate trim: inline a
+COMPACT root-path/accumulation chain (3-4 hops, with field names + the accum
+object index + accumulated-instance count) in load_dump, so indirect/chain/
+deep leaks also resolve in 1 call. No false positives or wrong culprits in this
+round; no tool failed — the gap is purely "one more call for the chain detail".
+
+## Measured hard round (2026-11-25, build7: chain-inlining + trimmed descs + help-pointer)
+
+Sequential, token-measured (subagent_tokens / tool_uses from completion notices).
+
+### 17 PersistenceContextLeak — LEAK ✓ but 7 tool calls (HARDEST so far)
+Correct culprit (FakeSession.firstLevelCache HashMap, 30K entities) but expensive:
+needed load_dump → leaks → get_dominator_path → load_dump(with_graph=true) →
+find_incoming_references → inspect_object ×2. ROOT CAUSE OF COST: the leak is held
+via Thread.scopedValueBindings → Lambda closure → FakeSession.firstLevelCache —
+a THREAD-LOCAL/closure path, NOT a static field. So owner_static_class is
+(correctly) empty and the agent had NO owner shortcut → manual graph traversal.
+
+NEW GAP (distinct from the static-field cases): thread-local / scoped-value /
+closure-held leaks have no owner attribution. GAP-1 only names STATIC-field
+owners. Candidate: when the dominator is a Thread and the accumulator is held
+via a ThreadLocal/scoped-value/lambda-captured field, surface that holding field
+(e.g. "held via Thread-local `FakeSession.firstLevelCache`") the same way
+owner_static_* surfaces static fields — so thread-local leaks also resolve
+without 5 inspect_object calls.
+
+### 37 ThreadLocalPooledThread — PARTIAL MISS (61.4k tok, 5 calls)
+Small heap (9.7 MB on-heap, no dominant on-heap leak: headline String 29% below
+floor, concentration "diffuse"). Agent latched onto the 137.6 MB DirectByteBuffer
+and called it "OOM risk via sun.nio.ch.Util$BufferCache ThreadLocal" — but that
+buffer is largely the BENIGN JDK boot-image / NIO cache
+(jdk.internal.jimage.ImageReader), not the demo's intended subtle pooled-thread
+leak. Over-called a benign off-heap cache.
+
+RECURRING OFF-HEAP FALSE-ATTRACTION: the "off-heap: 137.6 MB DirectByteBuffer"
+WARNING appears on nearly EVERY dump (same JDK boot-image buffer) and repeatedly
+tempts agents toward it as "the leak", especially when the real on-heap signal is
+faint. Candidate fix: the off-heap signal should distinguish the known benign JDK
+boot-image/NIO buffer (jdk.internal.jimage.ImageReader$SharedImageReader, a fixed
+~base cost) from genuinely app-owned DirectByteBuffer growth — e.g. subtract/annotate
+the boot-image buffer so a healthy heap's off-heap line doesn't read as a leak.
+
+### 11 WeakHashMapLeak — LEAK ✓ (68.7k tok, 5 calls) — static owner inline worked
+### 32 AppSessionStore — NOT RUN (Haiku proxy hit €50/day limit mid-run; resets UTC midnight)
+
+## Measured token usage (build7, per-diagnosis subagent_tokens / tool_uses)
+
+| Dump                   | Verdict        | Correct | tool_uses | subagent_tokens |
+|------------------------|----------------|---------|-----------|-----------------|
+| 17 PersistenceContext  | LEAK           | ✓ hard  | 12        | 66.7k |
+| 37 ThreadLocalPooled   | OOM-risk       | partial | 5         | 61.4k |
+| 11 WeakHashMapLeak      | LEAK           | ✓       | 5         | 68.7k |
+
+Earlier round (6 agents, static/real dumps): correct 6/6, 1-4 calls, ~57-73k tok.
+
+READING: subagent_tokens is dominated by the agent's system prompt + reasoning,
+NOT our tool output — it sits ~57-73k regardless of 1 vs 12 calls, because each
+tool round re-sends the (now-trimmed) context. The lever that actually moves cost
+is TOOL_USES (round-trips): static-field leaks = 1-3 (owner+chain inline);
+thread-local/closure leaks = 5-12 (no owner shortcut → manual graph walk). So the
+two open gaps both target tool_uses on the hard cases:
+  1. thread-local/closure owner attribution (would cut 17 from ~7 MCP calls to ~2)
+  2. de-emphasize the benign JDK boot-image DirectByteBuffer off-heap signal
+     (stops agents chasing it on faint-signal heaps like 37)
