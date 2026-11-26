@@ -123966,14 +123966,6 @@
       "title": "One Leak or Many"
     },
     {
-      "anchor": "off-heap-nio",
-      "anchor_label": "Off-Heap NIO",
-      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not reflected in the on-heap totals, but counts against process RSS and can trigger OS-level OOM. If RSS grows beyond heap + DirectByteBuffer total, native heap fragmentation may be the cause: repeatedly allocating and freeing differently-sized buffers leaves gaps the allocator cannot reuse for larger requests. Diagnose with `jcmd <pid> VM.native_memory detail`, or use jemalloc heap profiling (`MALLOC_CONF=prof:true`) or async-profiler's malloc mode.",
-      "id": "off-heap",
-      "severity": "warning",
-      "title": "Off-Heap (DirectByteBuffer)"
-    },
-    {
       "anchor": "object-header-overhead",
       "anchor_label": "Object Header Overhead",
       "detail": "2.7 MB (23.3% of heap) consumed by JVM object headers alone (236,457 objects × 12 B each) — consider replacing wrapper objects with primitive arrays, off-heap buffers, or primitive-specialized collections.",
