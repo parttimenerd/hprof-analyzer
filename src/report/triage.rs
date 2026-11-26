@@ -5134,6 +5134,26 @@ mod tests {
             owner_static_field: "CATALOG".into(),
             // Accumulation shape is a map node — the cache's backing storage.
             accumulation_class: Some("java.util.HashMap$Node".into()),
+            // A root path with a distinct GC-root holder so Concentration has an
+            // owner detail to emit (otherwise it legitimately suppresses itself).
+            root_path: Some(vec![
+                RootPathStep {
+                    obj_index_1based: 1,
+                    object_index: 0,
+                    display_class: "java.util.HashMap".into(),
+                    retained: 974,
+                    root_type_label: None,
+                    field_edge: None,
+                },
+                RootPathStep {
+                    obj_index_1based: 2,
+                    object_index: 1,
+                    display_class: "java.lang.Thread".into(),
+                    retained: 974,
+                    root_type_label: Some("Thread".into()),
+                    field_edge: None,
+                },
+            ]),
             ..Default::default()
         }];
         r.primary_culprits = vec![CulpritRef {

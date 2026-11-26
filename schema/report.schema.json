@@ -3772,6 +3772,10 @@
           "description": "The static field name within [`owner_static_class`] that holds the\naccumulation (e.g. `CACHE`), when field-name data is available (graph /\n`--ref-paths` mode). Empty when the owner class is known but the field\nname is not. Meaningless unless `owner_static_class` is set.",
           "type": "string"
         },
+        "owner_thread_local_class": {
+          "description": "When the suspect's accumulation point is held alive through a Java\n`ThreadLocal` (the value stored in a `ThreadLocalMap$Entry`), the class\nof that thread-local value — the parallel of [`owner_static_class`] for\nthread-local / pooled-thread leaks, where there is NO static-field owner\nand the dominator is a `Thread`. Names the durable holder an analyst would\notherwise have to trace by hand through the ThreadLocalMap chain. Empty\nwhen the suspect is not held via a ThreadLocal. Only for single suspects.",
+          "type": "string"
+        },
         "path": {
           "description": "Descent from the suspect object to the accumulation point (MAT\n`findAccumulationPoint`, big-drop-ratio 0.7). Non-empty only for singles.",
           "items": {
