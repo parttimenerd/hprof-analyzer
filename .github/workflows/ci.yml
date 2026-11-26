@@ -48,9 +48,6 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --release --all-targets --features native -- -D warnings
 
-      - name: Build
-        run: cargo build --release --features native
-
       - name: Install web dependencies
         working-directory: web
         run: npm ci
@@ -59,8 +56,13 @@ jobs:
         working-directory: web
         run: npm run type-check
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
       - name: Test (unit + integration + parity)
-        run: cargo test --release --features native
+        run: cargo nextest run --release --features native
 
       - name: Smoke test — heap docs (no dump required)
         run: |
