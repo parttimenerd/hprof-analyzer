@@ -190,9 +190,19 @@ function findAncestorLabel<T>(
   return null;
 }
 
-function findDescendant<T>(node: T, getChildren: (n: T) => T[], target: T): boolean {
+function findDescendant<T>(
+  node: T,
+  getChildren: (n: T) => T[],
+  target: T,
+  seen: Set<T> = new Set(),
+): boolean {
+  // Cycle guard: class-level dominator aggregation can produce A→B→A pairs
+  // (different object instances collapsed to the same class), which without a
+  // visited set makes this DFS recurse forever and crash the browser tab.
+  if (seen.has(node)) return false;
+  seen.add(node);
   for (const c of getChildren(node)) {
-    if (c === target || findDescendant(c, getChildren, target)) return true;
+    if (c === target || findDescendant(c, getChildren, target, seen)) return true;
   }
   return false;
 }

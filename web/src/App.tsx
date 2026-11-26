@@ -6948,18 +6948,24 @@ function DominatorAnalysisSection({ data, selfReferentialClasses, typeRefGraph, 
             // Find roots: classes that appear as dominator but not as dominated child of another class
             const allDominated = new Set(filteredPairs.map(p => p.dominated_class));
             const roots: FNode[] = [];
-            // Class-level pairs can be cyclic (A dominates an instance of B, B dominates an instance of A
-            // in a different chain) so visited guards against infinite recursion.
-            const buildNode = (label: string, retainedOverride?: number, visited = new Set<string>()): FNode => {
-              if (visited.has(label)) return { label, retained: retainedOverride ?? retainedByClass.get(label) ?? 0, children: [] };
-              visited.add(label);
+            // Build each class node once (memoized) to avoid exponential duplication in diamond-shaped
+            // class-level dominator graphs (A→C, B→C causes C's subtree to be built for every path).
+            // The resulting shared FNode objects form a DAG; ZoomableTreemap's cycle guard handles that.
+            const nodeCache = new Map<string, FNode>();
+            const buildNode = (label: string, retainedOverride?: number): FNode => {
+              const cached = nodeCache.get(label);
+              if (cached) return cached;
+              // Placeholder to break cycles: insert before recursing so any back-edge returns the stub.
+              const stub: FNode = { label, retained: retainedOverride ?? retainedByClass.get(label) ?? 0, children: [] };
+              nodeCache.set(label, stub);
               const kids = childrenOf.get(label);
-              const children: FNode[] = kids
-                ? [...kids.entries()].map(([lbl, ret]) => buildNode(lbl, ret, new Set(visited))).sort((a, b) => b.retained - a.retained)
+              stub.children = kids
+                ? [...kids.entries()].map(([lbl, ret]) => buildNode(lbl, ret)).sort((a, b) => b.retained - a.retained)
                 : [];
-              return { label, retained: retainedOverride ?? retainedByClass.get(label) ?? 0, children,
-                pairCount: pairCountByClass.get(label),
-                shallow: shallowByClass.get(label) };
+              stub.retained = retainedOverride ?? retainedByClass.get(label) ?? 0;
+              stub.pairCount = pairCountByClass.get(label);
+              stub.shallow = shallowByClass.get(label);
+              return stub;
             };
             for (const [dom] of childrenOf) {
               if (!allDominated.has(dom)) roots.push(buildNode(dom));
